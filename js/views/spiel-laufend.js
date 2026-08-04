@@ -339,9 +339,12 @@ export function spielLaufendView() {
   }
 
   // Die Wurf-Chips scrollen horizontal, das Teilsatz-Ergebnis bleibt rechts fest daneben.
-  // Ohne Nachführung landet ein neu erfasster Wurf am rechten Rand außerhalb des sichtbaren
-  // Bereichs — also „hinter" dem Ergebnis. Deshalb den aktiven Teilsatz ans Ende scrollen,
-  // sodass der neueste (bzw. gerade korrigierte) Wurf immer sichtbar bleibt.
+  // Ohne Nachführung landet ein neu erfasster Wurf außerhalb des sichtbaren Bereichs.
+  // Wichtig: Die Zeile enthält NACH den erfassten Würfen noch leere Platzhalter-Chips für
+  // die restlichen Würfe. Einfach „ganz nach rechts" zu scrollen zeigt daher diese leeren
+  // Slots und schiebt den gerade eingetippten Wurf aus dem Bild (fällt nur am schmalen
+  // Handy-Display auf). Stattdessen genau den aktiven Chip in die sichtbare Leiste holen —
+  // und dabei ausschließlich die Leiste selbst horizontal scrollen, nie die Seite bewegen.
   function keepThrowVisible() {
     const blk = current();
     const cursor = editIdx !== null ? editIdx : blk.wuerfe.length - 1;
@@ -350,11 +353,17 @@ export function spielLaufendView() {
     if (!r) return;
     const row = root.querySelector(`.erf-chip-row[data-ts="${ranges.indexOf(r)}"]`);
     if (!row) return;
-    if (editIdx !== null) {
-      const chip = row.querySelector(`[data-chip="${editIdx}"]`);
-      if (chip) { chip.scrollIntoView({ inline: 'nearest', block: 'nearest' }); return; }
+    const chip = row.querySelector(`[data-chip="${cursor}"]`);
+    if (!chip) return;
+    const rowRect = row.getBoundingClientRect();
+    const chipRect = chip.getBoundingClientRect();
+    const pad = 8;
+    // Abstand des Chips vom linken/rechten sichtbaren Rand der Leiste -> nur bei Bedarf scrollen.
+    if (chipRect.left < rowRect.left + pad) {
+      row.scrollLeft += (chipRect.left - rowRect.left) - pad;
+    } else if (chipRect.right > rowRect.right - pad) {
+      row.scrollLeft += (chipRect.right - rowRect.right) + pad;
     }
-    row.scrollLeft = row.scrollWidth; // neuester Wurf ans sichtbare Ende
   }
 
   function template() {
