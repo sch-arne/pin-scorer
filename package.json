@@ -1,0 +1,10 @@
+{
+  "name": "pins-scorer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-first Kegel-Scorer (Vanilla ES-Module, kein Build-Step).",
+  "scripts": {
+    "test": "node --test"
+  }
+}

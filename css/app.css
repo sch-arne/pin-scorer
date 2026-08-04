@@ -1,0 +1,919 @@
+/* Pin-Scorer — mobile-first, dunkles Theme */
+
+:root {
+  --bg: #0f1115;
+  --surface: #1a1e27;
+  --surface-2: #232834;
+  --border: #2c3340;
+  --text: #eef1f6;
+  --text-dim: #9aa4b4;
+  --accent: #f5a623;      /* Kegel-Gold */
+  --accent-2: #ffc65a;
+  --radius: 16px;
+  --tap: 44px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+#app {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: max(env(safe-area-inset-top), 20px) 20px
+           max(env(safe-area-inset-bottom), 20px);
+}
+
+/* ---------- Menue ---------- */
+
+.app-header {
+  text-align: center;
+  padding: 24px 0 28px;
+}
+
+.brand {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: var(--text);
+}
+
+.brand::first-letter { color: var(--accent); }
+
+.tagline {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 0.95rem;
+}
+
+.tile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 132px;
+  padding: 18px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+  transition: transform 0.08s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.tile:not(.is-disabled):active {
+  transform: scale(0.97);
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
+@media (hover: hover) {
+  .tile:not(.is-disabled):hover {
+    border-color: var(--accent);
+    background: var(--surface-2);
+  }
+}
+
+.tile-icon { font-size: 1.9rem; line-height: 1; }
+.tile-label { font-size: 1.15rem; font-weight: 700; }
+.tile-desc { font-size: 0.82rem; color: var(--text-dim); line-height: 1.3; }
+
+.tile.is-disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+
+/* ---------- Unterseiten ---------- */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 24px;
+}
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.back-btn:active { background: var(--surface-2); }
+
+.page-title { margin: 0; font-size: 1.4rem; font-weight: 700; }
+
+/* Icon-Button (⚙, ✕ …) — quadratisch wie der Zurück-Button */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.icon-btn:active { background: var(--surface-2); }
+
+/* Kopf der laufenden Erfassung: ← | Pin-Scorer | ⚙ */
+.settings-btn { margin-left: auto; }
+.page-header .brand { font-size: 1.4rem; }
+
+/* Einstellungsmenü als Overlay-Sheet */
+.erf-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(0, 0, 0, 0.55);
+  overflow-y: auto;
+}
+.erf-settings-sheet {
+  width: 100%;
+  max-width: 460px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+.erf-settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.erf-settings-title { margin: 0; font-size: 1.25rem; font-weight: 800; }
+.erf-settings-sub {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim);
+}
+
+.placeholder {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text-dim);
+}
+
+.placeholder-icon { font-size: 3rem; margin: 0 0 12px; opacity: 0.7; }
+.placeholder-text { font-size: 1.1rem; font-weight: 600; color: var(--text); margin: 0 0 6px; }
+.placeholder-sub { font-size: 0.9rem; margin: 0; }
+
+/* ---------- Spielauswahl (Neues Spiel) ---------- */
+
+.game-list { display: flex; flex-direction: column; gap: 12px; }
+
+.game-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.game-card:active { background: var(--surface-2); border-color: var(--accent); }
+.game-icon { font-size: 1.8rem; line-height: 1; }
+.game-text { display: flex; flex-direction: column; gap: 3px; flex: 1; text-align: left; }
+.game-label { font-size: 1.1rem; font-weight: 700; }
+.game-desc { font-size: 0.82rem; color: var(--text-dim); }
+.game-chevron { font-size: 1.6rem; color: var(--text-dim); }
+
+/* Fortsetzen-Liste: Karte = klickbarer Hauptbereich + Löschen-Button */
+.section-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 0 0 10px;
+}
+.start-new { margin-top: 22px; }
+.resume-card { padding: 0; gap: 0; overflow: hidden; }
+.resume-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  padding: 16px;
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.resume-main:active { background: var(--surface-2); }
+.status-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.status-badge.is-laufend { background: rgba(245, 166, 35, 0.18); color: var(--accent-2); }
+.status-badge.is-setup { background: var(--surface-2); color: var(--text-dim); }
+.resume-del {
+  flex: none;
+  align-self: stretch;
+  padding: 0 16px;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+.resume-del:active { background: var(--surface-2); color: var(--accent); }
+
+/* ---------- Setup-Formular ---------- */
+
+.setup { display: flex; flex-direction: column; gap: 20px; padding-bottom: 24px; }
+
+.field { display: flex; flex-direction: column; gap: 10px; }
+
+.field-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.field-hint { margin: 0; font-size: 0.78rem; color: var(--text-dim); font-style: italic; }
+
+/* Bahnanzahl-Chips + 1.-Bahn-Auswahl fließen in einer Zeile (umbrechend) */
+.bahnen-row { align-items: center; }
+.bahnen-row .inline-num { margin-left: auto; }
+
+/* Inline-Zahlauswahl (z.B. 1. Bahn) — Label über dem Stepper */
+.inline-num { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.inline-num-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.inline-stepper { display: flex; align-items: center; gap: 6px; }
+.step-btn.sm { width: 34px; min-height: 34px; font-size: 1.2rem; border-radius: 9px; }
+.step-val.sm { width: 44px; flex: none; padding: 5px; font-size: 1rem; }
+
+/* Segmented (Presets) */
+.segmented { display: flex; gap: 8px; }
+.seg-btn {
+  flex: 1;
+  min-height: var(--tap);
+  padding: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.seg-btn.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1205;
+}
+
+/* Stepper */
+.stepper { display: flex; align-items: stretch; gap: 8px; }
+.step-btn {
+  width: 52px;
+  min-height: var(--tap);
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.step-btn:active { background: var(--surface-2); }
+.step-val {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+}
+.step-val::-webkit-outer-spin-button,
+.step-val::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.step-val { -moz-appearance: textfield; appearance: textfield; }
+
+/* Readout (Gesamtwurfzahl) */
+.field-readout {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.readout { font-size: 1.3rem; font-weight: 800; color: var(--accent); }
+.readout small { font-size: 0.8rem; font-weight: 500; color: var(--text-dim); }
+
+/* Teile */
+.parts { display: flex; flex-direction: column; gap: 8px; }
+.part-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.part-name { font-weight: 700; }
+.part-throws { font-size: 0.82rem; color: var(--text-dim); }
+.part-modus {
+  min-height: 40px;
+  padding: 6px 10px;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* Chips (Bahnen) */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  min-width: 48px;
+  min-height: var(--tap);
+  padding: 8px 14px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.chip.is-active { background: var(--accent); border-color: var(--accent); color: #1a1205; }
+
+.select-full {
+  min-height: var(--tap);
+  padding: 10px 12px;
+  font-size: 1rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.btn-primary {
+  min-height: 54px;
+  margin-top: 4px;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #1a1205;
+  background: var(--accent);
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+}
+.btn-primary:active { background: var(--accent-2); }
+
+/* ---------- Zusammenfassung ---------- */
+
+.summary {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.sum-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.sum-row:last-child { border-bottom: none; }
+.sum-row span { color: var(--text-dim); font-size: 0.9rem; }
+.sum-row strong { font-size: 1rem; }
+.sum-block { flex-direction: column; align-items: stretch; gap: 8px; }
+.sum-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.sum-list li { font-size: 0.92rem; }
+.sum-row strong small { font-weight: 500; font-size: 0.8rem; color: var(--text-dim); }
+
+/* ---------- Tabs ---------- */
+
+.tabs { display: flex; gap: 4px; margin-bottom: 22px; border-bottom: 1px solid var(--border); }
+.tab {
+  flex: 1;
+  min-height: 44px;
+  padding: 12px 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab.is-active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* ---------- Vorschau (Spieler / Satz / Bahn) ---------- */
+
+.preview-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.preview { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+.preview th,
+.preview td {
+  padding: 8px 10px;
+  text-align: center;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+}
+.preview thead th {
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.preview tbody th { background: var(--surface-2); color: var(--text); font-weight: 700; }
+.preview tr:last-child td,
+.preview tr:last-child th { border-bottom: none; }
+.preview th:last-child,
+.preview td:last-child { border-right: none; }
+.lane-pill {
+  display: inline-block;
+  min-width: 26px;
+  padding: 2px 8px;
+  background: var(--accent);
+  color: #1a1205;
+  border-radius: 8px;
+  font-weight: 700;
+}
+.lane-empty { color: var(--text-dim); opacity: 0.5; }
+
+/* ---------- Spieler-Tab ---------- */
+
+.field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.btn-mini {
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.btn-mini:active { background: var(--surface-2); }
+
+.players { display: flex; flex-direction: column; gap: 8px; }
+.player-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.player-idx {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.player-name {
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.player-lane {
+  padding: 8px 10px;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* ---------- Wurferfassung ---------- */
+
+.erf-info { margin-bottom: 16px; }
+.erf-info summary {
+  cursor: pointer;
+  padding: 10px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  list-style: none;
+}
+.erf-info summary::-webkit-details-marker { display: none; }
+.erf-info summary::before { content: 'ℹ '; }
+.erf-info[open] summary { margin-bottom: 10px; }
+
+/* Spieler-Tabs */
+.erf-ptabs { display: flex; gap: 4px; overflow-x: auto; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+.erf-ptab {
+  /* Bis zu 4 Bahnen füllen die Breite komplett (gap 4px × 3 = 12px);
+     ab der 5. Bahn überschreiten sie 100% → horizontaler Scroll. */
+  flex: 1 1 0;
+  min-width: calc((100% - 12px) / 4);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 10px 12px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.erf-ptab:hover { color: var(--text); }
+.erf-ptab.is-active { color: var(--text); border-bottom-color: var(--accent); }
+.erf-ptab.is-done { opacity: 0.8; }
+.ept-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ept-bahn { font-size: 0.72rem; color: var(--text-dim); }
+.ept-total { font-size: 1.15rem; font-weight: 800; color: var(--accent); }
+.ept-name { font-weight: 700; font-size: 0.95rem; color: var(--text); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Fußzeile: WW (Wurf-Nr.) · aktueller Wurf · GS (Gesamt Bahn) */
+.ept-bot { display: flex; align-items: baseline; gap: 6px; }
+.ept-bot .ept-wurf { flex: 1; text-align: left; }
+.ept-bot .ept-cur  { flex: 1; text-align: center; font-size: 1.2rem; font-weight: 800; color: var(--text); line-height: 1; }
+.ept-bot .ept-satzholz { flex: 1; text-align: right; }
+.ept-wurf { font-size: 0.72rem; color: var(--text-dim); }
+.ept-satzholz { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+.erf-ptab.is-live .ept-satzholz,
+.erf-ptab.is-live .ept-cur { color: var(--accent); }
+.erf-ptab.is-frei { cursor: default; opacity: 0.55; }
+.erf-ptab.is-frei:hover { color: var(--text-dim); }
+.ept-frei { color: var(--text-dim); font-weight: 600; font-style: italic; }
+.erf-ptab.is-wartet { border-bottom-color: var(--accent); }
+.ept-status { font-size: 0.72rem; font-weight: 700; color: var(--accent); white-space: nowrap; }
+.ept-warten { font-size: 0.9rem; line-height: 1; }
+.erf-player-warten { font-size: 0.8rem; font-weight: 700; color: var(--accent); margin-left: auto; }
+.erf-player-warten + .erf-player-total { margin-left: 12px; }
+
+/* Spieler-Kopf */
+.erf-player {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.erf-player-name { font-size: 1.2rem; font-weight: 800; }
+.erf-player-total { font-size: 1.3rem; font-weight: 800; color: var(--accent); }
+.erf-player-total small { font-size: 0.75rem; font-weight: 500; color: var(--text-dim); }
+
+/* Satz-Tabs */
+.erf-stabs { display: flex; gap: 8px; overflow-x: auto; margin-bottom: 14px; padding-bottom: 2px; }
+.erf-stab {
+  flex: 1 0 auto;
+  min-width: 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: center;
+}
+.erf-stab.is-active { border-color: var(--accent); background: var(--surface-2); }
+.erf-stab.is-done { opacity: 0.72; }
+.erf-stab.is-live .est-label { color: var(--accent); }
+.est-label { font-weight: 700; font-size: 0.9rem; }
+.est-bahn { font-size: 0.72rem; color: var(--text-dim); }
+.est-val { font-size: 1.05rem; font-weight: 800; }
+
+/* Aktiver Satz */
+.erf-satz {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.erf-satz-head { display: flex; align-items: center; gap: 10px; }
+.erf-bahn-badge {
+  padding: 4px 12px;
+  background: var(--accent);
+  color: #1a1205;
+  border-radius: 8px;
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+.erf-wurf-count { font-size: 0.9rem; font-weight: 700; color: var(--text-dim); }
+/* „⚙ Einstellung" ganz rechts in der Satz-Kopfzeile -> öffnet die Bahneinstellung */
+.erf-lane-btn {
+  margin-left: auto;
+  padding: 4px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.erf-lane-btn:active { background: var(--surface); }
+/* Bahneinstellung-Sheet */
+.erf-lane-sub { margin: 0 0 14px; color: var(--text-dim); font-size: 0.9rem; }
+.erf-lane-actions { display: flex; flex-direction: column; gap: 10px; }
+.erf-lane-actions .erf-btn { width: 100%; }
+
+/* Override-Sheet (Teilsatz-Summe) */
+.erf-ov-value {
+  font-size: 2.4rem;
+  font-weight: 800;
+  text-align: center;
+  color: var(--accent);
+  padding: 6px 0 14px;
+  letter-spacing: 1px;
+}
+.erf-ov-numpad { margin-bottom: 16px; }
+.erf-ov-numpad .erf-num.zero { grid-column: 2 / -1; } /* ⌫ links, 0 füllt die restlichen zwei Spalten */
+
+/* Kegel-Raute */
+.erf-kegel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.erf-kegel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ek-title { font-size: 0.85rem; font-weight: 700; color: var(--text-dim); }
+.ek-target { font-size: 1rem; font-weight: 800; color: var(--accent); }
+/* Modus-Umschalter gefallen/stehend */
+.ek-modes { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.ek-mode {
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.ek-mode + .ek-mode { border-left: 1px solid var(--border); }
+.ek-mode.is-active { background: var(--accent); color: #1a1205; }
+.erf-kegel-foot { text-align: center; font-size: 0.82rem; font-weight: 600; }
+.ek-ok { color: #6bd08a; }
+.ek-warn { color: var(--text-dim); }
+.erf-kegel-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(5, auto);
+  gap: 6px 8px;
+  max-width: 240px;
+  margin: 0 auto;
+  justify-items: center;
+}
+.erf-kegel-pin {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+.erf-kegel-pin:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.erf-kegel-pin.is-fallen {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1205;
+}
+/* Gefallener Kegel leuchtet (Lampe an); stehender bleibt neutral/aus */
+.erf-kegel-pin.is-lamp-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #1a1205;
+  box-shadow: 0 0 10px 1px rgba(245, 166, 35, 0.55);
+}
+.erf-kegel-pin.is-off { opacity: 0.4; cursor: default; }
+.erf-kegel-pin:disabled { opacity: 0.4; cursor: default; }
+/* Beim Abräumen: vor diesem Wurf schon gefallener Kegel -> "weg" (nicht wählbar) */
+.erf-kegel-pin.is-gone { opacity: 0.18; border-style: dashed; cursor: default; }
+.erf-kegel-pin.is-gone:hover { border-color: var(--border); color: var(--text-dim); }
+/* Abräum-Hinweis im Kegel-Kopf */
+.ek-abr { font-size: 0.72rem; font-weight: 700; color: var(--text-dim); }
+
+/* Wurf-Chips */
+.erf-chips { display: flex; flex-direction: column; gap: 8px; }
+.erf-chip-group { display: flex; flex-direction: column; gap: 4px; }
+.ecg-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim); }
+/* Wurfzeile: Chips scrollen horizontal, Ergebnis bleibt rechts fest daneben. */
+.erf-chip-line { display: flex; align-items: stretch; gap: 5px; }
+.erf-chip-row { display: flex; align-items: stretch; gap: 5px; flex: 1 1 auto; min-width: 0; overflow-x: auto; }
+.erf-chip-row > .erf-chip { flex: 0 0 auto; }
+
+/* Teilsatz-Ergebnis am Ende der Wurfzeile */
+.erf-chip-result {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 3px 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--accent);
+  cursor: pointer;
+  font-family: inherit;
+}
+.erf-chip-result.manual { border-color: var(--accent); }
+.erf-chip-result.mismatch { border-color: #e0603a; color: #e0603a; }
+.ecr-val { font-size: 1.15rem; font-weight: 800; line-height: 1.1; }
+.ecr-count { font-size: 0.6rem; color: var(--text-dim); line-height: 1; }
+.erf-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 30px;
+  padding: 3px 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+}
+.erf-chip.is-edit { border-color: var(--accent); background: var(--accent); color: #1a1205; }
+.erf-chip.is-empty { opacity: 0.4; cursor: default; }
+/* Abräumen: nach Korrektur unmöglich gewordener Wurf */
+.erf-chip.is-error { border-color: #e0603a; color: #e0603a; }
+.erf-chip.is-error .ec-nr { color: #e0603a; }
+.erf-chip.is-edit.is-error { background: var(--accent); color: #1a1205; border-color: #e0603a; }
+.erf-chip-err { font-size: 0.72rem; font-weight: 600; color: #e0603a; margin-top: 2px; }
+/* König blieb stehen (Kranz-Langdruck): ♔ neben der Wurf-Nr, kein Rahmen */
+.erf-chip.is-koenig .ec-nr { color: var(--accent); }
+/* Neuner (alle 9 auf einmal): ⭐ neben der Wurf-Nr, gleiche Art wie die Krone */
+.erf-chip.is-neuner .ec-nr { color: var(--accent); }
+.ec-nr { font-size: 0.6rem; color: var(--text-dim); line-height: 1; }
+.erf-chip.is-edit .ec-nr { color: #1a1205; }
+.ec-pins { font-size: 1rem; font-weight: 800; line-height: 1.2; }
+
+/* Numpad */
+.erf-num-hint { font-size: 0.78rem; color: var(--text-dim); text-align: center; margin-bottom: 6px; }
+.erf-num-hint strong { color: var(--accent); }
+.erf-numpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* Kranz-Langdruck möglich: dezenter Krone-Hinweis oben rechts auf der Taste */
+.erf-num.can-koenig { position: relative; touch-action: none; }
+.erf-num.can-koenig::after {
+  content: '♔';
+  position: absolute; top: 3px; right: 6px;
+  font-size: 0.7rem; color: var(--accent); opacity: 0.7;
+}
+.erf-num {
+  min-height: 56px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.erf-num:active { background: var(--accent); border-color: var(--accent); color: #1a1205; }
+.erf-num.zero { grid-column: 1 / -1; }
+.erf-num:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Aktionen */
+.erf-actions { display: flex; gap: 8px; }
+.erf-btn {
+  flex: 1;
+  min-height: 48px;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.erf-btn:active { background: var(--surface); }
+.erf-btn.done { background: var(--accent); border-color: var(--accent); color: #1a1205; }
+.erf-btn.is-on { border-color: var(--accent); color: var(--accent); }
+.erf-btn.danger { border-color: #e0603a; color: #e0603a; }
+
+/* Toast */
+.erf-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%) translateY(20px);
+  max-width: 90vw;
+  padding: 12px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 50;
+}
+.erf-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
