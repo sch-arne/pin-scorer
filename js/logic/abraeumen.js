@@ -63,11 +63,11 @@ export function abraeumStep(state, n, fallen, koenigFlag, modus) {
     standing = []; count = 0; koenig = false;
   } else {                             // Teil-Abräumen ohne Kegel-Angabe -> Menge unbekannt
     count -= n; exact = false;
-    // Kranz-Abräumen: bleibt nach dem Wurf genau EIN Kegel stehen und stand der König (5)
-    // vorher noch, gilt er als dieser eine -> Kranz (Lauf wird abgeräumt gewertet, Reset auf 9).
-    // Eine „8" aus dem vollen Bild ist damit direkt ein Kranz, ohne Langdruck. Ein echter
-    // Fehlwurf (König gefallen, Eckkegel steht) lässt sich über das Kegelbrett korrigieren.
-    koenig = kranz && koenig && count === 1;
+    // Bei reiner Zahl-Eingabe ist unbekannt, WELCHER Kegel noch steht — nicht zwingend der
+    // König (5). Deshalb konservativ: kein Kranz. Eine „8" aus dem vollen Bild bleibt damit
+    // ein gewöhnlicher Wurf mit einem stehenden Restkegel; ein echter Kranz entsteht nur per
+    // Langdruck (koenigFlag) oder über die konkrete Kegel-Auswahl im Brett (5 bleibt stehen).
+    koenig = false;
   }
 
   const next = { standing, count, exact, koenig, picked };

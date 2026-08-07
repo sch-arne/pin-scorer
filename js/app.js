@@ -1,6 +1,7 @@
 // Einstiegspunkt: registriert Views beim Router und startet ihn.
 
 import { register, start } from './router.js';
+import { keepAwake } from './wakelock.js';
 import { menuView } from './views/menu.js';
 import { neuesSpielView } from './views/neues-spiel.js';
 import { statistikenView } from './views/statistiken.js';
@@ -14,3 +15,6 @@ register('/setup/sportkegler-wk', setupWkView);
 register('/spiel-laufend', spielLaufendView);
 
 start({ mount: '#app', notFound: menuView });
+
+// Bildschirm wach halten, solange die App offen ist.
+keepAwake();

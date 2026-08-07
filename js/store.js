@@ -7,8 +7,18 @@
 // Aktuell: local-first ueber localStorage. Ein Spiel bleibt lokal, solange es mit
 // keiner Anlage verknuepft ist.
 
+import { DEFAULT_STANDARDBILDER } from './data/standardbilder-default.js';
+
 const KEY_GAMES = 'pins-scorer:games';
 const KEY_ACTIVE = 'pins-scorer:active-game';
+const KEY_STANDARDBILDER = 'pins-scorer:standardbilder';
+const KEY_SETTINGS = 'pins-scorer:settings';
+
+// App-Einstellungen: global, spieluebergreifend. Neue Optionen einfach hier als
+// Default ergaenzen — getSettings mischt sie ueber gespeicherte Werte.
+const DEFAULT_SETTINGS = {
+  vorschlaege: true, // Schnellauswahl-Pop-up (Standard-Kegelbilder) nach Zahleneingabe zeigen?
+};
 
 function read(key, fallback) {
   try {
@@ -69,6 +79,44 @@ export function getActiveGame() {
   return read(KEY_ACTIVE, null);
 }
 
+// Standard-Kegelbilder: globale, spielübergreifende Voreinstellung. Map von Holzzahl (1-8)
+// auf eine Liste von Bildern; jedes Bild ist ein sortiertes Array der GEFALLENEN Kegel-Nummern
+// (1-9). Wird beim Erfassen als Schnellauswahl-Pop-up nach dem Tippen einer Zahl angeboten
+// und in den Einstellungen gepflegt. Absichtlich getrennt von den Spielen -> bleibt erhalten.
+export function getStandardbilder() {
+  // Erststart (Key wurde noch nie geschrieben): Werksvoreinstellung seeden und
+  // persistieren. Ein absichtlich geleertes "{}" wurde geschrieben -> wird respektiert
+  // und NICHT erneut geseedet.
+  let present = true;
+  try {
+    present = localStorage.getItem(KEY_STANDARDBILDER) !== null;
+  } catch {
+    present = true; // kein Storage -> nicht seeden, nur Default in-memory liefern
+  }
+  if (!present) {
+    write(KEY_STANDARDBILDER, DEFAULT_STANDARDBILDER);
+    return DEFAULT_STANDARDBILDER;
+  }
+  const raw = read(KEY_STANDARDBILDER, {});
+  return raw && typeof raw === 'object' ? raw : {};
+}
+
+export function saveStandardbilder(map) {
+  return write(KEY_STANDARDBILDER, map);
+}
+
+// App-Einstellungen lesen (gespeicherte Werte ueber die Defaults gemischt, damit
+// neu hinzugekommene Optionen automatisch ihren Default bekommen).
+export function getSettings() {
+  const raw = read(KEY_SETTINGS, {});
+  return { ...DEFAULT_SETTINGS, ...(raw && typeof raw === 'object' ? raw : {}) };
+}
+
+// Einstellungen teilweise aktualisieren (Patch ueber den aktuellen Stand mergen).
+export function saveSettings(patch) {
+  return write(KEY_SETTINGS, { ...getSettings(), ...patch });
+}
+
 // Erfassungsstand (Wuerfe) eines Spiels ersetzen. Muss die ganze Struktur
 // speichern, damit ein Reload den Stand wiederherstellt.
 export function saveErfassung(gameId, erfassung) {
@@ -76,5 +124,15 @@ export function saveErfassung(gameId, erfassung) {
   if (!game) return null;
   game.erfassung = erfassung;
   if (game.status === 'setup') game.status = 'laufend';
+  return saveGame(game);
+}
+
+// Nur den Status eines Spiels setzen (z.B. 'beendet', sobald alle Spieler fertig sind, oder
+// zurueck auf 'laufend', wenn ein Satz wieder geoeffnet wird). Liest das Spiel frisch aus dem
+// Speicher (inkl. des zuletzt gespeicherten Erfassungsstands) -> ueberschreibt keine Wuerfe.
+export function setGameStatus(gameId, status) {
+  const game = getGame(gameId);
+  if (!game) return null;
+  game.status = status;
   return saveGame(game);
 }

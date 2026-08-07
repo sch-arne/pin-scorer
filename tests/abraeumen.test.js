@@ -62,13 +62,31 @@ test('Plausibilität: gefallener Kegel stand nicht mehr (exact)', () => {
   assert.match(scan.error[1], /Kegel 5, 8 standen nicht mehr/);
 });
 
-test('Kranz: eine 8 aus dem vollen Bild ist direkt Kranz (Reset auf 9)', () => {
-  // count-only 8 -> König gilt als der eine Reststehende -> Kranz, danach frischer Lauf
+test('Kranz: eine reine 8 (ohne Kegel-Angabe) ist KEIN Kranz, kein Reset', () => {
+  // count-only 8 -> genau 1 Restkegel, welcher ist unbekannt (nicht zwingend der König)
+  // -> kein Kranz-Zeichen, kein Reset auf 9.
+  const b = blk([8, 1], [null, null], [false, false]);
+  const scan = abraeumScan(b, KRANZ);
+  assert.equal(scan.kranzAt[0], false);
+  assert.equal(scan.koenigAfter[0], false);
+  assert.equal(scan.before[1].count, 1); // nur 1 Kegel steht noch, KEIN frischer 9er-Lauf
+  // Genau 1 Kegel steht -> eine 1 räumt ihn plausibel ab
+  assert.equal(scan.error[1], null);
+});
+
+test('Kranz: reine 8 dann 9 ist unmöglich (nur 1 Kegel stand)', () => {
+  // Ohne Kranz-Reset stehen nach der 8 nur noch 1 Kegel -> eine 9 ist unmöglich.
   const b = blk([8, 9], [null, null], [false, false]);
   const scan = abraeumScan(b, KRANZ);
+  assert.match(scan.error[1], /nur 1 Kegel stand/);
+});
+
+test('Kranz-Langdruck: eine 8 per Langdruck IST ein Kranz (Reset auf 9)', () => {
+  // koenigFlag=true -> König bleibt stehen, 8 Kranz-Kegel fallen -> Kranz, danach frischer Lauf.
+  const b = blk([8, 9], [null, null], [true, false]);
+  const scan = abraeumScan(b, KRANZ);
   assert.equal(scan.kranzAt[0], true);
-  // Nach dem Kranz-Reset stehen wieder alle 9 -> Wurf2 (9) ist plausibel, kein Fehler
-  assert.equal(scan.error[1], null);
+  assert.equal(scan.error[1], null); // nach Reset stehen wieder alle 9 -> 9 ist plausibel
 });
 
 test('Kranz-Langdruck: König bleibt stehen (koenig-Flag)', () => {

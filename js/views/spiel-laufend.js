@@ -11,9 +11,10 @@
 //   - Holz je Satz = Summe Teilsaetze; Spieler-Gesamt ueber alle Saetze
 //   - Satz-Status pending/live/done, Bahn je Satz aus bahnplan
 
-import { getActiveGame, getGame, saveErfassung } from '../store.js';
+import { getActiveGame, getGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings } from '../store.js';
 import { esc } from '../util.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
+import { computeGameStats } from '../logic/statistik.js';
 import {
   fullPins, isAbraeumMode, rangeOfThrow, defaultKegel,
   abraeumScan, abraeumStateBefore, volleKranz,
@@ -22,6 +23,8 @@ import { teilsatzStats, satzHolz, satzStatus } from '../logic/holz.js';
 import { computeBahnState as computeBahnStatePure } from '../logic/bahnwechsel.js';
 
 const MODUS_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen' };
+// Kurzform der Teilsatz-Beschreibung für die Wurfzeile (gleich lang -> gleiche Breite).
+const MODUS_ABK = { volle: 'Vo', abraeumen: 'Ab', 'kranz-abraeumen': 'Kr' };
 const BW_LABEL = { plus1: 'Reihum (+1)', minus1: 'Reihum (−1)', classic: 'Classic-Duo', bohle: 'Bohle-Duo', fest: 'Feste Bahn' };
 
 // Kegel-Anordnung als Raute (Nummerierung wie auf der Bahn), Position im 5x5-Raster.
@@ -37,6 +40,76 @@ const KEGEL_LAYOUT = [
   { n: 2, r: 4, c: 2 }, { n: 3, r: 4, c: 4 },
   { n: 1, r: 5, c: 3 },
 ];
+
+// Ziffernblock-Belegung des Pop-ups/Positions-Rasters (numpad-Reihenfolge, 12 Zellen).
+// Die 9 Ziffern tragen die Bilder; 'manual' liegt auf der 0, die beiden unteren Ecken bleiben leer.
+const PICK_CELLS = [7, 8, 9, 4, 5, 6, 1, 2, 3, 'undo', 'manual', 'settings'];
+// Reihenfolge, in der freie Felder automatisch vergeben werden (oben-links zuerst).
+const SB_SLOT_ORDER = [7, 8, 9, 4, 5, 6, 1, 2, 3];
+
+// Für die Abräum-Schnellauswahl: Spalte (Raster-c) und Reihe (Raster-r) je Kegel aus der
+// Rauten-Anordnung, plus die Pop-up-Felder spaltenweise (oben->unten). Damit lassen sich die
+// automatisch erzeugten Bilder räumlich passend verteilen: rechts stehende Kegel -> rechts.
+const PIN_COL = {}; const PIN_ROW = {};
+KEGEL_LAYOUT.forEach((p) => { PIN_COL[p.n] = p.c; PIN_ROW[p.n] = p.r; });
+// Pop-up-Felder je Spalte, oben -> unten (Numpad-Lage: 7/8/9 · 4/5/6 · 1/2/3).
+const PICK_COL_SLOTS = [[7, 4, 1], [8, 5, 2], [9, 6, 3]];
+
+// Automatisch erzeugte Abräum-Bilder auf die Pop-up-Felder legen, sortiert nach Kegel-Seite:
+// Bilder mit Kegeln weiter rechts wandern nach rechts, weiter links nach links (innerhalb einer
+// Spalte oben/unten nach vertikaler Lage). Läuft eine Spalte über, rutscht das Bild in die
+// nächste freie Spalte (von innen nach außen).
+function assignPickSlots(combos) {
+  const items = combos.map((pins) => {
+    const hx = pins.reduce((s, p) => s + PIN_COL[p], 0) / pins.length; // 1..5 (links..rechts)
+    const vy = pins.reduce((s, p) => s + PIN_ROW[p], 0) / pins.length; // 1..5 (oben..unten)
+    const col = hx < 2.5 ? 0 : hx > 3.5 ? 2 : 1;                       // 0=links,1=mitte,2=rechts
+    return { pins, col, vy };
+  });
+  items.sort((a, b) => a.col - b.col || a.vy - b.vy);
+  const free = PICK_COL_SLOTS.map((s) => s.slice());
+  const out = [];
+  items.forEach((it) => {
+    let slot = null;
+    for (const off of [0, -1, 1, -2, 2]) {          // Ziel-Spalte, dann nach außen ausweichen
+      const c = it.col + off;
+      if (c >= 0 && c <= 2 && free[c].length) { slot = free[c].shift(); break; }
+    }
+    out.push({ pins: it.pins, slot: slot == null ? SB_SLOT_ORDER[out.length] : slot });
+  });
+  return out;
+}
+
+// Standard-Bilder in die neue Form { pins:[…], slot:1-9 } bringen (und alte Form
+// [[pins],…] migrieren, indem freie Slots vergeben werden). Je Zahl max. ein Bild pro Slot.
+function normalizeStandardbilder(map) {
+  const out = {};
+  Object.keys(map || {}).forEach((k) => {
+    const n = parseInt(k, 10);
+    if (!(n >= 1 && n <= 8) || !Array.isArray(map[k])) return;
+    const used = new Set();
+    const items = [];
+    map[k].forEach((e) => {
+      const pins = Array.isArray(e) ? e : (e && Array.isArray(e.pins) ? e.pins : null);
+      if (!pins) return;
+      const clean = pins.filter((p) => p >= 1 && p <= 9);
+      if (clean.length !== n) return;
+      let slot = (!Array.isArray(e) && e.slot >= 1 && e.slot <= 9) ? e.slot : null;
+      if (slot != null && used.has(slot)) slot = null;
+      items.push({ pins: clean.slice().sort((a, b) => a - b), slot });
+      if (slot != null) used.add(slot);
+    });
+    items.forEach((it) => {
+      if (it.slot == null) {
+        const free = SB_SLOT_ORDER.find((s) => !used.has(s));
+        if (free != null) { it.slot = free; used.add(free); }
+      }
+    });
+    const kept = items.filter((it) => it.slot != null);
+    if (kept.length) out[n] = kept;
+  });
+  return out;
+}
 
 // ── Modell-Helfer ─────────────────────────────────────────────────────────
 
@@ -88,7 +161,7 @@ function normalizeErfassung(e, c) {
 
 export function spielLaufendView() {
   const root = document.createElement('div');
-  root.className = 'view view-page';
+  root.className = 'view view-page erf-screen';
 
   const gameId = getActiveGame();
   const game = getGame(gameId);
@@ -106,12 +179,20 @@ export function spielLaufendView() {
   const ranges = teilsatzRanges(c);
   const state = normalizeErfassung(game.erfassung, c);
   let editIdx = null; // lokaler Korrektur-Index (nicht persistiert)
-  let pinMode = 'gefallen'; // 'gefallen' | 'stehend' — welche Seite die Kegel-Raute erfasst
+  let flashTs = 0; // Zeitstempel des zuletzt erfassten Wurfs: die aktuelle Wurfzahl blitzt danach kurz auf (Klick-Feedback, bei JEDEM Wert). Zeitfenster statt Render-Reset, damit ein Folge-Render (z. B. das Kegel-Popup) den Blitz nicht verschluckt.
+  let pinMode = 'stehend'; // 'gefallen' | 'stehend' — welche Seite die Kegel-Raute erfasst (Default: Stehende)
   let lpSuppress = 0; // Zeitstempel: unterdrückt den Klick direkt nach einem Langdruck (König)
   let settingsOpen = false; // Einstellungsmenü (⚙) offen? — enthält u.a. die Spiel-Details
   let laneSettingsOpen = false; // Bahneinstellung (⚙ in der Satz-Kopfzeile) offen?
   let overrideTs = null; // Teilsatz-Index, dessen Summe-Sheet offen ist (null = zu)
   let overrideDraft = ''; // im Override-Sheet eingetippte Ziffern
+  let standardbilder = normalizeStandardbilder(getStandardbilder()); // globale Schnellauswahl-Bilder (Zahl -> Liste { pins, slot })
+  let pinPick = null; // offenes Schnellauswahl-Pop-up: { idx, n, combos } (null = zu)
+  let sbEditN = 1; // in den Einstellungen gerade bearbeitete Holzzahl (1-8)
+  let sbDraft = []; // im Einstellungs-Editor angetippte Kegel für das neue Bild
+  let settings = getSettings(); // globale App-Einstellungen (u.a. ob Vorschläge gezeigt werden)
+  let statsOpen = game.status === 'beendet'; // Statistik-Vollbild offen? (bei Reload eines beendeten Spiels direkt zeigen)
+  let finishSeen = statsOpen; // Spielende schon einmal automatisch gemeldet -> nicht bei jedem Render neu aufpoppen
 
   function persist() {
     if (saveErfassung(gameId, state) === null) toast('Speichern fehlgeschlagen — Speicher voll?');
@@ -201,40 +282,126 @@ export function spielLaufendView() {
       if (editIdx < blk.wuerfe.length) {
         const ctx = throwContext(blk, editIdx);
         const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
-        if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return; }
+        if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
         blk.wuerfe[editIdx] = pins;
         blk.kegel[editIdx] = koenigFlag ? null : defaultKegelFor(blk, editIdx, pins);
         blk.koenig[editIdx] = koenigFlag;
       }
       const idx = editIdx;
-      editIdx = null; persist(); render();
-      toast(koenigFlag ? `Wurf #${idx + 1} korrigiert · König steht` : `Wurf #${idx + 1} korrigiert`); return;
+      editIdx = null; flashTs = Date.now(); persist(); render();
+      toast(koenigFlag ? `Wurf #${idx + 1} korrigiert · König steht` : `Wurf #${idx + 1} korrigiert`); return true;
     }
-    if (blk.done) { toast('Satz ist fertig'); return; }
-    if (blk.wuerfe.length >= c.wuerfeProSatz) { toast('Satz voll — alle Würfe erfasst'); return; }
+    if (blk.done) { toast('Satz ist fertig'); return false; }
+    if (blk.wuerfe.length >= c.wuerfeProSatz) { toast('Satz voll — alle Würfe erfasst'); return false; }
     // In einen späteren Satz eintragen ist gesperrt, solange ein früherer noch offen ist.
     const front = frontSatz();
-    if (state.aktiverSatz > front) { toast(`Erst Satz ${front + 1} abschließen`); return; }
+    if (state.aktiverSatz > front) { toast(`Erst Satz ${front + 1} abschließen`); return false; }
     // Ein Spieler kann maximal auf EINEN Bahnwechsel warten: steht der Wechsel nach einem
     // fertigen Satz noch aus (physisch noch auf der alten Bahn), darf der nächste Satz noch
     // nicht bespielt werden. Sonst würde man einen zweiten Bahnwechsel „vorziehen".
     if (state.aktiverSatz > computeBahnState()[state.aktiverSpieler].pos) {
-      toast('Erst Bahnwechsel abwarten'); return;
+      toast('Erst Bahnwechsel abwarten'); return false;
     }
     const idx = blk.wuerfe.length;
     const ctx = throwContext(blk, idx);
     const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
-    if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return; }
+    if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
     blk.wuerfe.push(pins);
     blk.kegel.push(koenigFlag ? null : defaultKegelFor(blk, idx, pins));
     blk.koenig.push(koenigFlag);
+    // Sind mit diesem Wurf alle Teilsätze voll (alle Soll-Würfe des Satzes erfasst), wird der
+    // Satz automatisch beendet — kein manuelles Abschließen mehr nötig. Da die Würfe die
+    // Teilsätze der Reihe nach füllen, ist das genau erreicht, wenn wuerfeProSatz voll ist.
+    const autoDone = blk.wuerfe.length >= c.wuerfeProSatz;
+    if (autoDone) blk.done = true;
+    flashTs = Date.now(); persist(); render();
+    if (autoDone) toast('Satz automatisch beendet');
+    else if (koenigFlag) toast('König bleibt stehen');
+    return true;
+  }
+
+  // Alle k-elementigen Teilmengen von `arr` (aufsteigend, lexikografisch) als Kegel-Listen.
+  function subsets(arr, k) {
+    const res = [];
+    const pick = (start, acc) => {
+      if (acc.length === k) { res.push(acc.slice()); return; }
+      for (let i = start; i < arr.length; i++) { acc.push(arr[i]); pick(i + 1, acc); acc.pop(); }
+    };
+    pick(0, []);
+    return res;
+  }
+
+  // Verfügbare Schnellauswahl-Bilder für Zahl n im Kontext des Ziel-Wurfs.
+  //   Volle (oder Abräumen aufs VOLLE Bild, wenn wieder alle 9 stehen):
+  //             die hinterlegten Standard-Bilder mit genau n gefallenen Kegeln.
+  //   Abräumen auf Rest-Kegel: die Rest-Kegel stehen exakt fest -> die möglichen Bilder sind
+  //             ALLE Arten, n der stehenden Kegel fallen zu lassen. Diese werden automatisch
+  //             erzeugt (kein manuelles Hinterlegen nötig) und nach Kegel-Seite auf die 9
+  //             Pop-up-Felder verteilt. Mehr als 9 Möglichkeiten passen nicht ins Raster ->
+  //             kein Pop-up, dann wird die Raute wie gewohnt von Hand gewählt. Ist die
+  //             Restmenge unbekannt (count-only), gibt es keine Vorschläge -> Wurf direkt.
+  function combosFor(n, ctx) {
+    // Volle oder Abräumen aufs volle Bild (alle 9 stehen) -> hinterlegte Standard-Bilder.
+    if (!ctx.abraeum || (ctx.exact && ctx.universe.length >= 9)) {
+      const list = standardbilder[n];
+      if (!Array.isArray(list) || list.length === 0) return [];
+      return list.filter((it) => Array.isArray(it.pins) && it.pins.length === n);
+    }
+    if (!ctx.exact) return [];
+    const U = ctx.universe.slice().sort((a, b) => a - b);
+    const subs = subsets(U, n);
+    if (subs.length === 0 || subs.length > SB_SLOT_ORDER.length) return [];
+    return assignPickSlots(subs);
+  }
+
+  // Zahl am Ziffernblock getippt: Wurf normal setzen. Gibt es für diese Zahl hinterlegte
+  // Standard-Bilder (im aktuellen Kontext), danach das Schnellauswahl-Pop-up öffnen — sonst
+  // bleibt es beim direkten Setzen wie bisher.
+  function tapNumber(n) {
+    const blk = current();
+    const idx = editIdx !== null ? editIdx : blk.wuerfe.length;
+    const ctx = throwContext(blk, idx);
+    // Vorschläge in den Einstellungen deaktiviert -> nie ein Pop-up, Wurf wie gehabt direkt setzen.
+    const combos = settings.vorschlaege ? combosFor(n, ctx) : [];
+    if (!addWurf(n)) return;
+    if (!combos.length) return;
+    // Beim Abräumen auf REST-Kegel bleibt oft nur EIN mögliches Bild übrig — dann direkt setzen
+    // statt ein Pop-up mit nur einer Option zu zeigen. Aufs volle Bild (alle 9 stehen) wird
+    // dagegen wie in der Volle gearbeitet: Pop-up auch bei nur einem Standard-Bild.
+    if (ctx.abraeum && ctx.universe.length < 9 && combos.length === 1) { applyPinImage(idx, combos[0]); return; }
+    pinPick = { idx, n, combos };
+    render();
+  }
+
+  // Ein Standard-Bild für den Ziel-Wurf übernehmen: dessen Kegel exakt setzen.
+  function applyPinImage(idx, combo) {
+    const blk = current();
+    if (combo && idx < blk.wuerfe.length) {
+      blk.kegel[idx] = combo.pins.slice();
+      if (Array.isArray(blk.koenig)) blk.koenig[idx] = false;
+    }
     persist(); render();
-    if (koenigFlag) toast('König bleibt stehen');
+  }
+
+  // Ein Standard-Bild aus dem Pop-up gewählt.
+  function choosePinImage(ci) {
+    const p = pinPick;
+    pinPick = null;
+    if (!p) return;
+    applyPinImage(p.idx, p.combos[ci]);
   }
 
   function setPinMode(mode) {
     if (pinMode === mode) return;
     pinMode = mode;
+    render();
+  }
+
+  // Vorschläge (Schnellauswahl-Pop-up) global an-/ausschalten; sofort persistieren.
+  function toggleVorschlaege() {
+    settings = { ...settings, vorschlaege: !settings.vorschlaege };
+    saveSettings({ vorschlaege: settings.vorschlaege });
+    toast(settings.vorschlaege ? 'Vorschläge an' : 'Vorschläge aus');
     render();
   }
 
@@ -326,16 +493,135 @@ export function spielLaufendView() {
     toast(allDone ? 'Spiel wieder geöffnet' : 'Spiel beendet – Bahn frei');
   }
 
+  // Ein Spieler ist fertig, wenn alle seine Sätze beendet sind; das ganze Spiel ist beendet,
+  // sobald das für JEDEN Spieler gilt.
+  function allGamesDone() {
+    return state.bloecke.every((arr) => arr.length > 0 && arr.every((b) => b.done));
+  }
+
+  // Übergang ins Spielende erkennen und einmalig die Statistik zeigen. Wird zu Beginn jedes
+  // Renders geprüft (nachdem die Würfe/Done-Flags in `persist()` schon gespeichert sind):
+  //   - alle fertig & noch nicht gemeldet -> Statistik automatisch öffnen + Status 'beendet'.
+  //   - wieder ein Satz offen -> zurück auf 'laufend' (Statistik schließt sich).
+  function maybeFinish() {
+    const done = allGamesDone();
+    if (done && !finishSeen) {
+      finishSeen = true;
+      statsOpen = true;
+      setGameStatus(gameId, 'beendet');
+    } else if (!done && finishSeen) {
+      finishSeen = false;
+      statsOpen = false;
+      setGameStatus(gameId, 'laufend');
+    }
+  }
+
   function setOverride(i, val) {
     current().overrides[i] = val;
     persist(); render();
   }
 
+  // ── Standard-Bilder verwalten (Einstellungen) ──
+  function persistStandardbilder() {
+    if (!saveStandardbilder(standardbilder)) toast('Speichern fehlgeschlagen — Speicher voll?');
+  }
+  function setSbEditN(n) { sbEditN = n; sbDraft = []; render(); }
+  function toggleSbPin(p) {
+    const i = sbDraft.indexOf(p);
+    if (i >= 0) sbDraft.splice(i, 1);
+    else if (sbDraft.length < sbEditN) { sbDraft.push(p); sbDraft.sort((a, b) => a - b); }
+    else { toast(`Genau ${sbEditN} Kegel wählen`); return; }
+    render();
+  }
+  // Das aktuelle Draft-Bild auf ein freies Feld (Slot = Ziffer 1-9) des Positions-Rasters legen.
+  function placeSbImage(slot) {
+    if (sbDraft.length !== sbEditN) { toast(`Erst ${sbEditN} Kegel wählen`); return; }
+    const list = Array.isArray(standardbilder[sbEditN]) ? standardbilder[sbEditN].slice() : [];
+    if (list.some((it) => it.slot === slot)) { toast('Feld ist belegt'); return; }
+    if (list.some((it) => it.pins.join(',') === sbDraft.join(','))) { toast('Bild gibt es schon'); return; }
+    list.push({ pins: sbDraft.slice(), slot });
+    standardbilder[sbEditN] = list;
+    sbDraft = [];
+    persistStandardbilder(); render();
+    toast(`Bild auf Feld ${slot} gelegt`);
+  }
+  function deleteSbImage(n, slot) {
+    const list = standardbilder[n];
+    if (!Array.isArray(list)) return;
+    const i = list.findIndex((it) => it.slot === slot);
+    if (i < 0) return;
+    list.splice(i, 1);
+    if (list.length === 0) delete standardbilder[n];
+    persistStandardbilder(); render();
+    toast('Bild gelöscht');
+  }
+
   // ── Render ──
   function render() {
+    maybeFinish();
     root.innerHTML = template();
     wire();
     keepThrowVisible();
+    fitBoard();
+    positionPinPick();
+  }
+
+  // Kegel-Raute so groß machen, wie der freie Platz in der Satz-Box zulässt — damit alles
+  // (Raute + Chips + Ziffernblock) ohne Scrollen und ohne Überlappen auf einen Screen passt.
+  // Die Raute ist der einzige flexible Block; Chips/Ziffernblock behalten ihre feste Höhe.
+  // Deshalb genügt ein einziger Durchlauf: die Kegelgröße ändert die Box-Aufteilung nicht.
+  function fitBoard() {
+    const grid = root.querySelector('.erf-kegel-grid');
+    const kegel = root.querySelector('.erf-kegel');
+    if (!grid || !kegel) return;
+    // Beim allerersten Render ist root noch nicht im DOM (der Router hängt es erst danach ein) —
+    // dann sind Maße/Styles leer. Auf den nächsten Frame warten, bis das Layout steht.
+    if (!root.isConnected || kegel.clientHeight === 0) {
+      fitBoard._tries = (fitBoard._tries || 0) + 1;
+      if (fitBoard._tries < 30) requestAnimationFrame(fitBoard);
+      return;
+    }
+    fitBoard._tries = 0;
+    const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+    const head = kegel.querySelector('.erf-kegel-head');
+    const foot = kegel.querySelector('.erf-kegel-foot');   // enthält jetzt Ecken-Stats + Wurfergebnis in einer Zeile
+    const body = kegel.querySelector('.erf-kegel-body');
+    const modes = kegel.querySelector('.ek-modes');
+    const ks = getComputedStyle(kegel);
+    const gs = getComputedStyle(grid);
+    const padY = num(ks.paddingTop) + num(ks.paddingBottom);
+    const padX = num(ks.paddingLeft) + num(ks.paddingRight);
+    const kegelGap = num(ks.rowGap);                            // Abstand Kopf/Body/Fuß
+    const headH = head ? head.getBoundingClientRect().height : 0;
+    const footNat = foot ? foot.getBoundingClientRect().height : 0;  // volle (2-zeilige) Fußhöhe
+    // Kegel-Box stapelt Kopf · Body · Fuß -> so viele Lücken wie sichtbare Kinder − 1.
+    const gapsY = kegelGap * Math.max(0, [head, body, foot].filter(Boolean).length - 1);
+    const rowGap = num(gs.rowGap);
+    const colGap = num(gs.columnGap);
+    // Der hochkant-Umschalter liegt absolut links; damit die Raute mittig bleibt, muss links UND
+    // rechts jeweils seine Breite (+ kleiner Abstand) frei bleiben.
+    const modesW = modes ? modes.getBoundingClientRect().width : 0;
+    const sideGap = 6;
+    // Vom Fuß nur (Naturhöhe − LIFT_MAX) reservieren: die Raute darf um bis zu LIFT_MAX tiefer
+    // reichen; die obere Ecken-Zeile wird per margin-top wieder in die Raute überlappt, während
+    // Wurf + untere Ecken-Zahlen auf einer Ebene UNTER der Raute bleiben.
+    const LIFT_MAX = 16;
+    const footReserve = Math.max(0, footNat - LIFT_MAX);
+    // Freie Höhe/Breite für das 5×5-Raster innerhalb der (flexibel zugeteilten) Kegel-Box.
+    const availH = kegel.clientHeight - padY - headH - footReserve - gapsY;
+    const availW = kegel.clientWidth - padX - 2 * (modesW + sideGap);
+    const byH = (availH - 4 * rowGap) / 5;
+    const byW = (availW - 4 * colGap) / 5;
+    // Bei wenig Platz die Raute stärker stauchen (min 16px) statt den Wurf in die Kegel zu drücken.
+    const pin = Math.max(16, Math.min(40, Math.floor(Math.min(byH, byW))));
+    if (Number.isFinite(pin)) grid.style.setProperty('--pin', pin + 'px');
+    // Tatsächliche Überlappung: passt die (evtl. gestauchte) Raute in availH -> voller Lift
+    // (obere Zahlen tief in der Raute); überschießt sie, Lift zurücknehmen, damit der Wurf
+    // Kegel 1 nicht überlappt.
+    const diamondH = 5 * pin + 4 * rowGap;
+    const overshoot = Math.max(0, diamondH - availH);
+    const lift = Math.max(0, Math.min(LIFT_MAX, LIFT_MAX - overshoot));
+    kegel.style.setProperty('--foot-mt', (-lift) + 'px');
   }
 
   // Die Wurf-Chips scrollen horizontal, das Teilsatz-Ergebnis bleibt rechts fest daneben.
@@ -367,54 +653,94 @@ export function spielLaufendView() {
   }
 
   function template() {
-    const sp = state.aktiverSpieler;
-    const st = state.aktiverSatz;
     const blk = current();
     const status = satzStatus(blk);
-    const wurfN = blk.wuerfe.length;
     const bs = computeBahnState();
 
     return `
       <header class="page-header">
         <a class="back-btn" href="#/neues-spiel" aria-label="Zurück">←</a>
         <h1 class="page-title brand">Pin-Scorer</h1>
-        <button type="button" class="icon-btn settings-btn" data-act="settings" aria-label="Einstellungen">⚙</button>
+        ${allGamesDone() ? `<button type="button" class="icon-btn settings-btn" data-act="show-stats" aria-label="Statistik anzeigen">🏁</button>` : ''}
+        <button type="button" class="icon-btn${allGamesDone() ? '' : ' settings-btn'}" data-act="settings" aria-label="Einstellungen">⚙</button>
       </header>
 
       ${bahnTabs(bs)}
 
-      <div class="erf-player">
-        <span class="erf-player-name">${esc(playerName(sp))}</span>
-        ${bs[sp].waiting ? `<span class="erf-player-warten">⏳ wartet auf Bahnwechsel</span>` : ''}
-        <span class="erf-player-total">${playerTotal(sp)}</span>
-      </div>
-
       ${satzTabs()}
 
       <div class="erf-satz">
-        <div class="erf-satz-head">
-          <span class="erf-bahn-badge">Bahn ${laneOf(sp, st)}</span>
-          <span class="erf-wurf-count">${wurfN}/${c.wuerfeProSatz}</span>
-          <button type="button" class="erf-lane-btn" data-act="lane-settings" aria-label="Bahneinstellung">⚙ Einstellung</button>
-        </div>
-
         ${kegelBoard(blk)}
 
         ${wurfChips(blk, status === 'done')}
         ${numpad(blk, status)}
-
-        <div class="erf-actions">
-          ${editIdx !== null
-            ? `<button type="button" class="erf-btn danger" data-act="delete">🗑 Löschen</button>
-               <button type="button" class="erf-btn" data-act="cancel-edit">✕ Abbrechen</button>`
-            : `<button type="button" class="erf-btn" data-act="undo">↩ Zurück</button>`}
-        </div>
       </div>
 
       <div id="erf-toast" class="erf-toast"></div>
       ${settingsOpen ? settingsPanel() : ''}
       ${laneSettingsOpen ? laneSettingsPanel() : ''}
-      ${overrideTs !== null ? overridePanel() : ''}`;
+      ${overrideTs !== null ? overridePanel() : ''}
+      ${pinPick ? pinPickPanel() : ''}
+      ${statsOpen ? statsPanel() : ''}`;
+  }
+
+  // Statistik-Vollbild nach Spielende: Platzierung (bei mehreren Spielern) + je Spieler eine
+  // Karte mit Gesamt, Kennzahlen und Satz-für-Satz-Aufschlüsselung. Reine Auswertung kommt aus
+  // logic/statistik.js. Über „Weiter bearbeiten" schließt sich das Overlay (Sätze lassen sich
+  // aus der Bahneinstellung wieder öffnen), „Neues Spiel" führt zurück in die Spielauswahl.
+  function statsPanel() {
+    const { players, ranking } = computeGameStats(c, state.bloecke, ranges);
+    const multi = players.length > 1;
+    const medal = (r) => (r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : `${r}.`);
+
+    const rankingBox = multi ? `
+      <div class="stats-ranking">
+        ${ranking.map((p) => `
+          <div class="stats-rank-row${p.rang === 1 ? ' is-winner' : ''}">
+            <span class="stats-rank-pos">${medal(p.rang)}</span>
+            <span class="stats-rank-name">${esc(p.name)}</span>
+            <span class="stats-rank-total">${p.gesamt}</span>
+          </div>`).join('')}
+      </div>` : '';
+
+    const metric = (val, lbl) => `<div class="stats-metric"><span class="stats-metric-val">${val}</span><span class="stats-metric-lbl">${lbl}</span></div>`;
+    const cards = players.map((p) => {
+      const satzRows = p.saetze.map((s) => `
+        <div class="stats-satz-row"><span>Satz ${s.satz} · Bahn ${s.bahn}</span><strong>${s.holz}</strong></div>`).join('');
+      return `
+        <div class="stats-card">
+          <div class="stats-card-head">
+            <span class="stats-card-name">${multi ? `${medal(p.rang)} ` : ''}${esc(p.name)}</span>
+            <span class="stats-card-total">${p.gesamt}</span>
+          </div>
+          <div class="stats-metrics">
+            ${metric(p.schnittSatz.toFixed(1), 'Ø / Satz')}
+            ${metric(p.bester, 'bester Satz')}
+            ${metric(p.schnittWurf.toFixed(1), 'Ø / Wurf')}
+            ${metric(p.neuner, 'Alle Neune ☆')}
+            ${metric(p.fehl, 'Fehlwürfe')}
+            ${metric(p.wurfCount, 'Würfe')}
+          </div>
+          <div class="stats-saetze">${satzRows}</div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="erf-stats-screen" role="dialog" aria-modal="true" aria-label="Spiel-Statistik">
+        <header class="page-header">
+          <button type="button" class="back-btn" data-act="stats-close" aria-label="Zurück zur Erfassung">←</button>
+          <h1 class="page-title">🏁 Spiel beendet</h1>
+        </header>
+        <div class="stats-body">
+          <p class="stats-sub">Sportkegeln-Training${multi ? ` · ${players.length} Spieler` : ''}</p>
+          ${rankingBox}
+          ${cards}
+          <div class="stats-actions">
+            <button type="button" class="erf-btn" data-act="stats-close">↩ Weiter bearbeiten</button>
+            <a class="erf-btn done" href="#/neues-spiel">Neues Spiel</a>
+          </div>
+        </div>
+      </div>`;
   }
 
   // Einstellungsmenü (⚙): als Overlay-Sheet. Enthält aktuell die Spiel-Details
@@ -428,7 +754,18 @@ export function spielLaufendView() {
             <button type="button" class="icon-btn" data-act="settings-close" aria-label="Schließen">✕</button>
           </div>
           <div class="erf-settings-body">
-            <h3 class="erf-settings-sub">Spiel-Details</h3>
+            <div class="erf-setting-row">
+              <div class="erf-setting-text">
+                <span class="erf-setting-label">Vorschläge</span>
+                <span class="erf-setting-hint">Schnellauswahl der Standard-Kegelbilder nach dem Tippen einer Zahl</span>
+              </div>
+              <button type="button" class="erf-switch${settings.vorschlaege ? ' is-on' : ''}" role="switch" aria-checked="${settings.vorschlaege}" data-act="toggle-vorschlaege" aria-label="Vorschläge">
+                <span class="erf-switch-knob"></span>
+              </button>
+            </div>
+            <h3 class="erf-settings-sub">Standard-Kegelbilder</h3>
+            ${standardbilderEditor()}
+            <h3 class="erf-settings-sub" style="margin-top:20px;">Spiel-Details</h3>
             ${spielDetails()}
           </div>
         </div>
@@ -495,7 +832,7 @@ export function spielLaufendView() {
       const sp = belegung[bahn];
       if (sp == null) {
         tabs.push(`<div class="erf-ptab is-frei" aria-label="Bahn ${bahn}, frei">
-          <span class="ept-top"><span class="ept-bahn">Bahn ${bahn}</span></span>
+          <span class="ept-top"><span class="ept-bahn">B${bahn}</span></span>
           <span class="ept-name ept-frei">frei</span>
         </div>`);
         continue;
@@ -507,11 +844,12 @@ export function spielLaufendView() {
       const total = playerTotal(sp);
       const satzH = satzHolz(blk, ranges);
       const wurfN = blk.wuerfe.length;
-      // FUNK-Stil-Kopf: WW = Wurf-Nr · aktueller Wurf · GS = Gesamt Bahn; G = Gesamtergebnis.
+      // FUNK-Stil-Kopf, 2-zeilig: Zeile 1 = B{Bahn} · Name · Gesamtergebnis (gold);
+      // Zeile 2 = Wurf-Nr · aktueller Wurf · Gesamt Bahn.
       const lastThrow = wurfN ? blk.wuerfe[wurfN - 1] : '–';
       tabs.push(`<button type="button" role="tab" aria-selected="${sp === state.aktiverSpieler}" class="erf-ptab is-${status}${sp === state.aktiverSpieler ? ' is-active' : ''}" data-player="${sp}">
         <span class="ept-top">
-          <span class="ept-bahn">Bahn ${bahn}</span>
+          <span class="ept-bahn">B${bahn}</span>
           ${s.waiting ? `<span class="ept-warten" title="wartet auf Bahnwechsel">⏳</span>` : ''}
           <span class="ept-total" title="Gesamtergebnis">${total}</span>
         </span>
@@ -533,7 +871,6 @@ export function spielLaufendView() {
       const h = satzHolz(blk, ranges);
       return `<button type="button" role="tab" aria-selected="${st === state.aktiverSatz}" class="erf-stab is-${s}${st === state.aktiverSatz ? ' is-active' : ''}" data-satz="${st}">
         <span class="est-label">Satz ${st + 1}</span>
-        <span class="est-bahn">Bahn ${laneOf(sp, st)}</span>
         <span class="est-val">${s === 'pending' ? '–' : h}</span>
       </button>`;
     }).join('')}</div>`;
@@ -541,67 +878,186 @@ export function spielLaufendView() {
 
   // Kegel-Raute: welche Kegel im Ziel-Wurf gefallen/stehen (anklickbar).
   // Ziffernblock gibt N (Holz) vor -> Auswahl muss dazu passen.
+  // Umschalter oben rechts: nur die Kegel-Silhouette (transparent, umfärbbar) — stehend = aufrecht,
+  // gefallen = 90° nach rechts gedreht (liegend). Farbe je Zustand per CSS (gold/dunkel/weiß).
+  function pinSvg(extra) {
+    return `<svg class="ek-pin-svg${extra ? ' ' + extra : ''}" viewBox="0 0 100 120" aria-hidden="true">
+      <circle cx="50" cy="26" r="17"/>
+      <path d="M50 40 C40 40 36 48 35 58 C31 78 26 92 30 102 C34 114 44 118 50 118 C56 118 66 114 70 102 C74 92 69 78 65 58 C64 48 60 40 50 40 Z"/>
+    </svg>`;
+  }
+  function pinModeToggle() {
+    return `
+      <div class="ek-modes" role="group" aria-label="Kegel erfassen als">
+        <button type="button" aria-pressed="${pinMode === 'stehend'}" class="ek-mode${pinMode === 'stehend' ? ' is-active' : ''}" data-pinmode="stehend" aria-label="Stehende">${pinSvg()}</button>
+        <button type="button" aria-pressed="${pinMode === 'gefallen'}" class="ek-mode${pinMode === 'gefallen' ? ' is-active' : ''}" data-pinmode="gefallen" aria-label="Gefallene">${pinSvg('is-fallen')}</button>
+      </div>`;
+  }
+
+  // Kleine Kegel-Raute (Vorschau/Editor). `fallen` = Set/Array gefallener Kegel (leuchten gold).
+  // editable -> die Kegel sind Buttons (data-sbpin) zum An-/Abwählen im Einstellungs-Editor.
+  // `gone` = Kegel, die VOR diesem Wurf schon gefallen sind (Abräum-Vorschau): ausgegraut
+  // wie im großen Kegelbrett, damit man sieht, worauf noch gespielt wird.
+  function miniRaute(fallen, editable = false, gone = []) {
+    const F = new Set(fallen);
+    const G = new Set(gone);
+    const cells = KEGEL_LAYOUT.map((p) => {
+      const on = F.has(p.n);
+      const isGone = !on && G.has(p.n);
+      const tag = editable ? 'button' : 'span';
+      const attr = editable ? ` type="button" data-sbpin="${p.n}"` : '';
+      const cls = `mini-pin${on ? ' is-on' : ''}${isGone ? ' is-gone' : ''}`;
+      return `<${tag} class="${cls}"${attr} style="grid-column:${p.c};grid-row:${p.r};">${p.n}</${tag}>`;
+    }).join('');
+    return `<div class="mini-raute${editable ? ' is-editable' : ''}">${cells}</div>`;
+  }
+
+  // Einstellungs-Editor für die Standard-Kegelbilder (global, spielübergreifend).
+  // Positions-Raster im Numpad-Look: du bestimmst je Zahl, auf welchem Feld welches Bild sitzt.
+  // 'Manuell' liegt fest auf der 0, die beiden unteren Ecken bleiben leer.
+  function standardbilderEditor() {
+    const nums = [1, 2, 3, 4, 5, 6, 7, 8]
+      .map((n) => `<button type="button" class="sb-num${n === sbEditN ? ' is-active' : ''}" data-sbnum="${n}">${n}${Array.isArray(standardbilder[n]) && standardbilder[n].length ? `<span class="sb-num-badge">${standardbilder[n].length}</span>` : ''}</button>`)
+      .join('');
+    const list = Array.isArray(standardbilder[sbEditN]) ? standardbilder[sbEditN] : [];
+    const bySlot = {};
+    list.forEach((it) => { bySlot[it.slot] = it; });
+    const ready = sbDraft.length === sbEditN;
+    const cells = PICK_CELLS.map((cell) => {
+      if (cell === 'manual') return `<div class="sb-cell sb-manual">Manuell</div>`;
+      if (cell === 'undo' || cell === 'settings') return `<div class="sb-cell sb-void"></div>`;
+      const it = bySlot[cell];
+      if (it) return `<div class="sb-cell sb-filled">${miniRaute(it.pins)}<button type="button" class="sb-del" data-sbdel="${sbEditN}:${cell}" aria-label="Bild auf Feld ${cell} löschen">🗑</button></div>`;
+      return `<button type="button" class="sb-cell sb-slot${ready ? ' is-ready' : ''}" data-sbplace="${cell}" aria-label="Bild auf Feld ${cell} legen"><span class="sb-slot-digit">${cell}</span></button>`;
+    }).join('');
+    return `
+      <div class="sb-editor">
+        <p class="erf-settings-sub" style="margin-bottom:6px;">Für wie viele gefallene Kegel?</p>
+        <div class="sb-nums">${nums}</div>
+        <p class="sb-hint">Bild bauen: die <strong>${sbEditN}</strong> gefallenen Kegel antippen (${sbDraft.length}/${sbEditN}), dann unten auf ein <strong>freies Feld</strong> tippen — dort erscheint es später im Pop-up.</p>
+        <div class="sb-build">${miniRaute(sbDraft, true)}</div>
+        <div class="sb-posgrid">${cells}</div>
+      </div>`;
+  }
+
+  // Schnellauswahl-Pop-up: nach dem Tippen einer Zahl die hinterlegten Standard-Bilder zeigen.
+  // Liegt GENAU über dem Ziffernblock (Position/Größe setzt positionPinPick() nach dem Render);
+  // die Felder haben dasselbe 3-Spalten-Raster und dieselbe Zellengröße wie die Zahlentasten.
+  // Ein Tipp setzt die Raute automatisch; „Manuell" schließt und lässt die Wahl offen (wie bisher).
+  function pinPickPanel() {
+    // Schon vorher gefallene Kegel (Abräumen): alles außerhalb der noch stehenden Restmenge —
+    // in den Vorschau-Rauten ausgegraut wie im großen Kegelbrett.
+    const ctx = throwContext(current(), pinPick.idx);
+    const gone = (ctx.abraeum && ctx.exact) ? fullPins().filter((p) => !ctx.universe.includes(p)) : [];
+    const bySlot = {};
+    pinPick.combos.forEach((c, i) => { bySlot[c.slot] = { c, i }; });
+    const cells = PICK_CELLS.map((cell) => {
+      if (cell === 'manual') return `<button type="button" class="pk-cell pk-manual" data-act="pick-close" aria-label="Manuell wählen">Manuell</button>`;
+      if (cell === 'undo' || cell === 'settings') return `<span class="pk-cell pk-void" aria-hidden="true"></span>`;
+      const hit = bySlot[cell];
+      if (hit) return `<button type="button" class="pk-cell" data-pick="${hit.i}" aria-label="Bild ${hit.c.pins.join(', ')}">${miniRaute(hit.c.pins, false, gone)}</button>`;
+      return `<span class="pk-cell pk-void" aria-hidden="true"></span>`;
+    }).join('');
+    return `
+      <div class="pk-overlay" data-act="pick-close">
+        <div class="pk-pop" role="dialog" aria-modal="true" aria-label="${pinPick.n} Kegel — Bild wählen">
+          <div class="pk-grid">${cells}</div>
+        </div>
+      </div>`;
+  }
+
+  // Das Pop-up exakt über den Ziffernblock legen und die Zellen auf Tastengröße bringen.
+  function positionPinPick() {
+    if (!pinPick) return;
+    const pop = root.querySelector('.pk-pop');
+    const pad = root.querySelector('.erf-numpad');
+    if (!pop || !pad) return;
+    const r = pad.getBoundingClientRect();
+    if (r.height === 0) { requestAnimationFrame(positionPinPick); return; }
+    const key = pad.querySelector('.erf-num');
+    const kh = key ? key.getBoundingClientRect().height : 52;
+    const grid = pop.querySelector('.pk-grid');
+    pop.style.left = r.left + 'px';
+    pop.style.top = r.top + 'px';
+    pop.style.width = r.width + 'px';
+    grid.style.gap = getComputedStyle(pad).rowGap || '6px';
+    grid.style.setProperty('--pk-cell-h', kh + 'px');
+    // Kegelgröße der Mini-Raute so, dass sie in eine Tastenzelle passt (Höhe minus kleine Gaps/Padding).
+    grid.style.setProperty('--pk-mp', Math.max(6, Math.floor((kh - 12) / 5)) + 'px');
+  }
+
   function kegelBoard(blk) {
+    const sp = state.aktiverSpieler;
+    const name = playerName(sp);
+    const lane = laneOf(sp, state.aktiverSatz);              // Bahnnummer (oben links)
+    const wurfN = blk.wuerfe.length;
+    const fehl = blk.wuerfe.filter((w) => w === 0).length;   // Fehlwürfe = kein Kegel getroffen (Wurf 0)
+    const ergBahn = satzHolz(blk, ranges);                    // Ergebnis auf dieser Bahn (aktueller Satz)
+    const ergGesamt = playerTotal(sp);                       // Ergebnis über alle Sätze
     const target = pinTarget();
     const has = target >= 0;
 
+    let pins, curVal, curColor;
     if (!has) {
-      const pins = KEGEL_LAYOUT.map((p) =>
+      pins = KEGEL_LAYOUT.map((p) =>
         `<span class="erf-kegel-pin is-off" style="grid-column:${p.c};grid-row:${p.r};">${p.n}</span>`).join('');
-      return `
-        <div class="erf-kegel">
-          <div class="erf-kegel-head"><span class="ek-title">Kegel</span><span class="ek-target">kein Wurf</span></div>
-          <div class="erf-kegel-grid">${pins}</div>
-          <div class="erf-kegel-foot"></div>
-        </div>`;
+      curVal = '–'; curColor = 'is-gold';
+    } else {
+      const n = blk.wuerfe[target];
+      const ctx = throwContext(blk, target);
+      const U = ctx.universe;              // wählbare Kegel (Abräumen: nur stehende)
+      const inU = (pin) => !ctx.abraeum || !ctx.exact || U.includes(pin);
+      const unset = blk.kegel[target] == null;
+      // König-Wurf (Langdruck): N Kranz-Kegel gefallen, König (5) steht — genaue Kegel offen.
+      const koenigThrow = ctx.kranz && Array.isArray(blk.koenig) && blk.koenig[target] && unset;
+      // F = gefallene (leuchtende) Kegel. Unbestimmt: gefallen-Modus keiner an, stehend-Modus alle wählbaren an.
+      // Beim Kranz-Langdruck sind die genauen Kegel offen, aber es fielen alle STEHENDEN außer dem
+      // König (5) -> so darstellen: die 8 Kranzkegel leuchten, der König steht ganz normal.
+      const fallen = koenigThrow
+        ? U.filter((pin) => pin !== 5)
+        : (unset ? (pinMode === 'stehend' ? U.slice() : []) : blk.kegel[target]);
+      const fallenN = fallen.length;
+      const locked = blk.done;
+      const match = fallenN === n;
+
+      pins = KEGEL_LAYOUT.map((p) => {
+        const gone = !inU(p.n);                          // vor diesem Wurf schon gefallen -> weg
+        const isFallen = !gone && fallen.includes(p.n);
+        // Gefallener Kegel leuchtet (Lampe an), stehender ist aus; schon gefallener ist "weg".
+        const cls = gone ? 'is-gone' : (isFallen ? 'is-lamp-on' : '');
+        const aria = gone ? 'schon gefallen' : (isFallen ? 'gefallen' : 'steht');
+        const dis = locked || gone;
+        return `<button type="button" class="erf-kegel-pin ${cls}" style="grid-column:${p.c};grid-row:${p.r};"
+          data-pin="${p.n}"${dis ? ' disabled' : ''} aria-label="Kegel ${p.n}, ${aria}">${p.n}</button>`;
+      }).join('');
+
+      // Aktueller Wurf (mittig unter der Raute): Gold solange keine Pins gewählt (unbestimmt),
+      // sonst Grün wenn die gewählte Anzahl zur Holzzahl passt, sonst Rot.
+      curVal = n;
+      curColor = unset ? 'is-gold' : (match ? 'is-green' : 'is-red');
     }
-
-    const n = blk.wuerfe[target];
-    const ctx = throwContext(blk, target);
-    const U = ctx.universe;              // wählbare Kegel (Abräumen: nur stehende)
-    const Usize = U.length;
-    const inU = (pin) => !ctx.abraeum || !ctx.exact || U.includes(pin);
-    const unset = blk.kegel[target] == null;
-    // König-Wurf (Langdruck): N Kranz-Kegel gefallen, König (5) steht — genaue Kegel offen.
-    const koenigThrow = ctx.kranz && Array.isArray(blk.koenig) && blk.koenig[target] && unset;
-    // F = gefallene (leuchtende) Kegel. Unbestimmt: gefallen-Modus keiner an, stehend-Modus alle wählbaren an.
-    // Beim Kranz-Langdruck sind die genauen Kegel offen, aber es fielen alle STEHENDEN außer dem
-    // König (5) -> so darstellen: die 8 Kranzkegel leuchten, der König steht ganz normal (keine Sonder-Umrandung).
-    const fallen = koenigThrow
-      ? U.filter((pin) => pin !== 5)
-      : (unset ? (pinMode === 'stehend' ? U.slice() : []) : blk.kegel[target]);
-    const fallenN = fallen.length;
-    const stehendN = Usize - fallenN;
-    const locked = blk.done;
-    const match = fallenN === n;
-
-    const pins = KEGEL_LAYOUT.map((p) => {
-      const gone = !inU(p.n);                          // vor diesem Wurf schon gefallen -> weg
-      const isFallen = !gone && fallen.includes(p.n);
-      // Gefallener Kegel leuchtet (Lampe an), stehender ist aus; schon gefallener ist "weg".
-      // Der König (5) steht beim Kranz wie jeder andere stehende Kegel — keine Sonder-Umrandung.
-      const cls = gone ? 'is-gone' : (isFallen ? 'is-lamp-on' : '');
-      const aria = gone ? 'schon gefallen' : (isFallen ? 'gefallen' : 'steht');
-      const dis = locked || gone;
-      return `<button type="button" class="erf-kegel-pin ${cls}" style="grid-column:${p.c};grid-row:${p.r};"
-        data-pin="${p.n}"${dis ? ' disabled' : ''} aria-label="Kegel ${p.n}, ${aria}">${p.n}</button>`;
-    }).join('');
-
-    const counter = pinMode === 'gefallen' ? `${fallenN}/${n}` : `${stehendN}/${Usize - n}`;
-    let foot;
-    foot = '';
 
     return `
       <div class="erf-kegel">
         <div class="erf-kegel-head">
-          <div class="ek-modes" role="group" aria-label="Kegel erfassen als">
-            <button type="button" aria-pressed="${pinMode === 'gefallen'}" class="ek-mode${pinMode === 'gefallen' ? ' is-active' : ''}" data-pinmode="gefallen">Gefallene</button>
-            <button type="button" aria-pressed="${pinMode === 'stehend'}" class="ek-mode${pinMode === 'stehend' ? ' is-active' : ''}" data-pinmode="stehend">Stehende</button>
-          </div>
-          <span class="ek-target">${counter}</span>
+          <span class="ek-bahn">Bahn ${lane}</span>
+          <span class="ek-name">${esc(name)}</span>
+          ${pinModeToggle()}
         </div>
-        <div class="erf-kegel-grid">${pins}</div>
-        <div class="erf-kegel-foot">${foot}</div>
+        <div class="erf-kegel-body">
+          <div class="erf-kegel-grid">${pins}</div>
+        </div>
+        <div class="erf-kegel-foot">
+          <div class="ek-stat ek-stat-left">
+            <span class="ek-stat-a">${fehl}</span>
+            <span class="ek-stat-b">${wurfN}/${c.wuerfeProSatz}</span>
+          </div>
+          <div class="erf-kegel-cur"><span class="ek-cur ${curColor}${Date.now() - flashTs < 500 ? ' is-flash' : ''}">${curVal}</span></div>
+          <div class="ek-stat ek-stat-right">
+            <span class="ek-stat-a">${ergGesamt}</span>
+            <span class="ek-stat-b">${ergBahn}</span>
+          </div>
+        </div>
       </div>`;
   }
 
@@ -609,6 +1065,7 @@ export function spielLaufendView() {
     if (c.wuerfeProSatz === 0) return '';
     const rows = ranges.map((r, i) => {
       const label = MODUS_LABEL[r.modus] || r.modus;
+      const abk = MODUS_ABK[r.modus] || label;
       const t = teilsatzStats(blk, ranges, i, satzDone);
       // Abräumen/Kranz: Lauf einmal durchscannen (Plausibilität + Kranz-Treffer pro Wurf).
       const scan = isAbraeumMode(r.modus) ? abraeumScan(blk, r) : null;
@@ -640,8 +1097,8 @@ export function spielLaufendView() {
         if (bad.length) errNote = `<div class="erf-chip-err">⚠ ${esc(bad.join(' · '))}</div>`;
       }
       return `<div class="erf-chip-group">
-        <span class="ecg-label">${label}</span>
         <div class="erf-chip-line">
+          <span class="ecg-label" title="${label}">${abk}</span>
           <div class="erf-chip-row" data-ts="${i}">${chips.join('')}</div>
           ${result}
         </div>
@@ -669,11 +1126,22 @@ export function spielLaufendView() {
     const btn = (n) => {
       const dis = locked || (ctx.abraeum && n > ctx.maxPins);
       const canK = koenigLong && !dis && n === koenigDigit;
-      return `<button type="button" class="erf-num${n === 0 ? ' zero' : ''}${canK ? ' can-koenig' : ''}" data-num="${n}"${canK ? ' data-koenig="1"' : ''}${dis ? ' disabled' : ''}>${n}</button>`;
+      return `<button type="button" class="erf-num${canK ? ' can-koenig' : ''}" data-num="${n}"${canK ? ' data-koenig="1"' : ''}${dis ? ' disabled' : ''}>${n}</button>`;
     };
+    // Bodenreihe (3 Zellen wie die Zahlen): links Aktion · 0 · rechts Aktion.
+    // Normal: ↩ Zurück · 0 · ⚙ Bahneinstellung. Beim Korrigieren: 🗑 Löschen · 0 · ✕ Abbrechen.
+    const editing = editIdx !== null;
+    const leftAct = editing
+      ? `<button type="button" class="erf-num erf-num-act danger" data-act="delete" aria-label="Wurf löschen">🗑</button>`
+      : `<button type="button" class="erf-num erf-num-act" data-act="undo" aria-label="Letzten Wurf zurück">↩</button>`;
+    const rightAct = editing
+      ? `<button type="button" class="erf-num erf-num-act" data-act="cancel-edit" aria-label="Korrektur abbrechen">✕</button>`
+      : `<button type="button" class="erf-num erf-num-act" data-act="lane-settings" aria-label="Bahneinstellung">⚙</button>`;
     return `<div class="erf-numpad">
       ${[7, 8, 9, 4, 5, 6, 1, 2, 3].map(btn).join('')}
+      ${leftAct}
       ${btn(0)}
+      ${rightAct}
     </div>`;
   }
 
@@ -690,7 +1158,7 @@ export function spielLaufendView() {
       // dem Langdruck (auch nach dem Re-Render) noch einen zweiten Wurf auslöst.
       b.addEventListener('click', () => {
         if (Date.now() - lpSuppress < 500) return;
-        addWurf(n);
+        tapNumber(n);
       });
       if (!canK) return;
       let timer = null;
@@ -727,6 +1195,33 @@ export function spielLaufendView() {
     act('lane-settings', () => { laneSettingsOpen = true; render(); });
     act('end-satz', toggleDone);
     act('end-game', endPlayerGame);
+    act('toggle-vorschlaege', toggleVorschlaege);
+    act('show-stats', () => { statsOpen = true; render(); });
+    // Statistik schließen (Kopf-← und „Weiter bearbeiten" tragen beide diesen Hook).
+    root.querySelectorAll('[data-act="stats-close"]').forEach((b) =>
+      b.addEventListener('click', () => { statsOpen = false; render(); }));
+
+    // Standard-Bilder-Editor (in den Einstellungen)
+    root.querySelectorAll('[data-sbnum]').forEach((b) =>
+      b.addEventListener('click', () => setSbEditN(parseInt(b.dataset.sbnum, 10))));
+    root.querySelectorAll('[data-sbpin]').forEach((b) =>
+      b.addEventListener('click', () => toggleSbPin(parseInt(b.dataset.sbpin, 10))));
+    root.querySelectorAll('[data-sbplace]').forEach((b) =>
+      b.addEventListener('click', () => placeSbImage(parseInt(b.dataset.sbplace, 10))));
+    root.querySelectorAll('[data-sbdel]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const [n, slot] = b.dataset.sbdel.split(':').map((x) => parseInt(x, 10));
+        deleteSbImage(n, slot);
+      }));
+
+    // Schnellauswahl-Pop-up (Standard-Bild nach Zahleneingabe)
+    root.querySelectorAll('[data-pick]').forEach((b) =>
+      b.addEventListener('click', () => choosePinImage(parseInt(b.dataset.pick, 10))));
+    root.querySelectorAll('[data-act="pick-close"]').forEach((b) =>
+      b.addEventListener('click', (e) => {
+        if (b.classList.contains('pk-overlay') && e.target !== b) return;
+        pinPick = null; render();
+      }));
     // Schließen: ✕-Button oder Klick auf den Backdrop (aber nicht ins Sheet hinein).
     root.querySelectorAll('[data-act="settings-close"]').forEach((b) =>
       b.addEventListener('click', (e) => {
@@ -834,6 +1329,15 @@ export function spielLaufendView() {
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
   }
+
+  // Bei Größen-/Ausrichtungswechsel die Kegel-Raute neu einpassen. Listener entfernt sich
+  // selbst, sobald die View aus dem DOM ist (nach Navigation zu einer anderen Seite).
+  const onResize = () => {
+    if (!root.isConnected) { window.removeEventListener('resize', onResize); return; }
+    fitBoard();
+    positionPinPick();
+  };
+  window.addEventListener('resize', onResize);
 
   render();
   return root;
