@@ -3,7 +3,7 @@
 // Verbindungsaussetzern. Cache-first für die App-Shell, Netzwerk-Fallback.
 // Bei Änderungen an den App-Dateien CACHE hochzählen (v1 -> v2 ...).
 
-const CACHE = 'pin-scorer-v20';
+const CACHE = 'pin-scorer-v31';
 
 // Relative Pfade -> funktionieren auch unter GitHub-Pages-Unterpfad /<repo>/
 const SHELL = [
@@ -14,6 +14,9 @@ const SHELL = [
   './js/app.js',
   './js/router.js',
   './js/store.js',
+  './js/backend/supabase.js',
+  './js/backend/geraet.js',
+  './js/backend/sync.js',
   './js/data/standardbilder-default.js',
   './js/util.js',
   './js/wakelock.js',
@@ -24,6 +27,7 @@ const SHELL = [
   './js/logic/statistik.js',
   './js/views/menu.js',
   './js/views/neues-spiel.js',
+  './js/views/beitreten.js',
   './js/views/setup-wk.js',
   './js/views/spiel-laufend.js',
   './js/views/statistiken.js',
@@ -52,13 +56,19 @@ self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
+  const url = new URL(req.url);
+  // Supabase-API (REST/Auth/Realtime) NIE cachen — immer frisch übers Netz,
+  // sonst würden Live-Daten veralten. Der SW fasst diese Requests gar nicht an.
+  if (url.hostname.endsWith('.supabase.co')) return;
+
   event.respondWith(
     caches.match(req).then((cached) => {
       if (cached) return cached;
       return fetch(req)
         .then((res) => {
-          // Erfolgreiche Antworten gleichen Ursprungs nachträglich cachen
-          if (res && res.ok && new URL(req.url).origin === self.location.origin) {
+          // Erfolgreiche GETs cachen: eigene App-Shell + das Supabase-JS vom CDN
+          // (esm.sh) für Folgestarts/Offline.
+          if (res && res.ok && (url.origin === self.location.origin || url.hostname === 'esm.sh')) {
             const copy = res.clone();
             caches.open(CACHE).then((cache) => cache.put(req, copy));
           }

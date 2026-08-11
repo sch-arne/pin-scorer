@@ -36,10 +36,18 @@ test('teilsatzStats.mark: Mismatch nur wenn "settled"', () => {
   assert.equal(teilsatzStats(blk([9, 8], [null, null], true), ranges, 0, true).mark, true);
   // Genau Soll -> nie Mark (auch bei done)
   assert.equal(teilsatzStats(blk([9, 8, 7], [null, null], true), ranges, 0, true).mark, false);
-  // Override (manual) macht settled -> Mark bei zu wenigen Würfen
-  assert.equal(teilsatzStats(blk([9, 8], [50, null]), ranges, 0, false).mark, true);
+  // Manuell gesetztes Ergebnis (Override) ist Absicht -> NIE Mismatch-Mark (auch bei != Soll Würfen)
+  assert.equal(teilsatzStats(blk([9, 8], [50, null]), ranges, 0, false).mark, false);
   // Späterer Teilsatz hat Würfe -> Teilsatz 0 ist voll (Soll), also KEIN Mark (lückenlos gefüllt)
   assert.equal(teilsatzStats(blk([9, 8, 7, 6]), ranges, 0, false).mark, false);
+});
+
+test('teilsatzStats.count: manuell -> Soll, sonst erfasste Würfe', () => {
+  // Ohne Override: tatsächliche Wurfzahl im Teilsatz-Bereich.
+  assert.equal(teilsatzStats(blk([9, 8]), ranges, 0, false).count, 2);
+  // Override gesetzt (auch ohne/mit zu wenig Würfen) -> Zähler springt auf Soll (3).
+  assert.equal(teilsatzStats(blk([], [42, null]), ranges, 0, false).count, 3);
+  assert.equal(teilsatzStats(blk([9, 8], [42, null]), ranges, 0, false).count, 3);
 });
 
 test('satzStatus: pending / live / done', () => {

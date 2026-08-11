@@ -20,7 +20,14 @@ export function computeGameStats(config, bloecke, ranges) {
     }));
     const gesamt = saetze.reduce((s, x) => s + x.holz, 0);
     const wuerfe = arr.flatMap((b) => (Array.isArray(b.wuerfe) ? b.wuerfe : []));
-    const wurfCount = wuerfe.length;
+    // Wurfzahl je Teilsatz: manuell eingetragenes Ergebnis (Override) zählt als voller Teilsatz
+    // (Soll-Würfe), sonst die tatsächlich erfassten Würfe im Teilsatz-Bereich. So steigt "Würfe"
+    // auch, wenn Ergebnisse nur als Summe (ohne Einzelwürfe) über die Übersicht eingetragen wurden.
+    const wurfCount = arr.reduce((tot, b) => tot + ranges.reduce((s, r, i) => {
+      const manual = Array.isArray(b.overrides) && b.overrides[i] != null;
+      const actual = (Array.isArray(b.wuerfe) ? b.wuerfe.slice(r.start, r.end) : []).length;
+      return s + (manual ? r.soll : actual);
+    }, 0), 0);
     return {
       index: i,
       name: sp.name || ('Spieler ' + (i + 1)),

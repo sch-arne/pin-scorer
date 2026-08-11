@@ -40,6 +40,20 @@ test('Gesamt, Bester, Schnitte je Spieler', () => {
   assert.equal(ben.fehl, 1);             // eine 0
 });
 
+test('wurfCount: manuelles Ergebnis (Override) zählt als voller Teilsatz', () => {
+  // 2 Teilsätze à 2 Würfe; Satz 1 komplett geworfen, Satz 2 nur als Summen (Overrides) eingetragen.
+  const cfg = { ...config, wuerfeProSatz: 4, teilsaetze: [{ modus: 'volle', wuerfe: 2 }, { modus: 'abraeumen', wuerfe: 2 }] };
+  const r = teilsatzRanges(cfg);
+  const bloecke = [[
+    { wuerfe: [9, 8, 7, 6], kegel: [], koenig: [], overrides: [null, null], done: true }, // 4 echte Würfe
+    { wuerfe: [], kegel: [], koenig: [], overrides: [15, 12], done: true },                // 0 echte, 2 Overrides
+  ]];
+  const { players } = computeGameStats({ ...cfg, spielerListe: [{ name: 'A' }], saetze: 2 }, bloecke, r);
+  // Satz 1: 4 Würfe; Satz 2: 2 Teilsätze à Soll 2 = 4 -> gesamt 8.
+  assert.equal(players[0].wurfCount, 8);
+  assert.equal(players[0].gesamt, 30 + 27); // (9+8+7+6) + (15+12)
+});
+
 test('Platzierung nach Gesamt absteigend', () => {
   const bloecke = [
     [blk([1, 1, 1]), blk([1, 1, 1])], // Anna: 6

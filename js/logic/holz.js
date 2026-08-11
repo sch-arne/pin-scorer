@@ -10,10 +10,15 @@ export function teilsatzStats(blk, ranges, i, satzDone) {
   const settled = manual || laterHasThrows || satzDone;
   return {
     val: manual ? blk.overrides[i] : sum,
-    count: throwsIn.length,
+    // Ein manuell eingetragenes Ergebnis (z. B. aus der Übersicht, ohne Einzelwürfe) zählt als
+    // vollständiger Teilsatz -> Wurfzähler springt auf Soll (statt bei den erfassten Würfen zu bleiben).
+    count: manual ? r.soll : throwsIn.length,
     soll: r.soll,
     manual,
-    mark: settled && throwsIn.length !== r.soll,
+    // Mismatch-Warnung nur für ERFASSTE (nicht manuell gesetzte) Teilsätze: ein manuell
+    // eingegebenes Ergebnis ist Absicht (z. B. nachgetragener Satz ohne Einzelwürfe) und
+    // soll nicht als "falsche Wurfzahl" markiert werden.
+    mark: settled && !manual && throwsIn.length !== r.soll,
   };
 }
 

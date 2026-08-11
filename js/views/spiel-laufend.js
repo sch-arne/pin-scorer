@@ -11,7 +11,7 @@
 //   - Holz je Satz = Summe Teilsaetze; Spieler-Gesamt ueber alle Saetze
 //   - Satz-Status pending/live/done, Bahn je Satz aus bahnplan
 
-import { getActiveGame, getGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings } from '../store.js';
+import { getActiveGame, getGame, saveGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings } from '../store.js';
 import { esc } from '../util.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
 import { computeGameStats } from '../logic/statistik.js';
@@ -184,7 +184,9 @@ export function spielLaufendView() {
   let lpSuppress = 0; // Zeitstempel: unterdrückt den Klick direkt nach einem Langdruck (König)
   let settingsOpen = false; // Einstellungsmenü (⚙) offen? — enthält u.a. die Spiel-Details
   let laneSettingsOpen = false; // Bahneinstellung (⚙ in der Satz-Kopfzeile) offen?
-  let overrideTs = null; // Teilsatz-Index, dessen Summe-Sheet offen ist (null = zu)
+  let satzOverviewOpen = false; // Spieler-Übersicht (inline, statt Wurferfassung) offen?
+  let overrideSt = null; // Satz-Index, dessen Ergebnis-Sheet offen ist (null = zu); bearbeitet wird aus der Übersicht
+  let overrideTs = null; // Teilsatz-Index im Sheet (null = ganzes Satz-Ergebnis eingeben -> auf offenen Teilsatz verteilen)
   let overrideDraft = ''; // im Override-Sheet eingetippte Ziffern
   let standardbilder = normalizeStandardbilder(getStandardbilder()); // globale Schnellauswahl-Bilder (Zahl -> Liste { pins, slot })
   let pinPick = null; // offenes Schnellauswahl-Pop-up: { idx, n, combos } (null = zu)
@@ -196,12 +198,223 @@ export function spielLaufendView() {
 
   function persist() {
     if (saveErfassung(gameId, state) === null) toast('Speichern fehlgeschlagen — Speicher voll?');
+    pushDirty();
+  }
+  // Wie persist(), aber ohne Hochschreiben — für lokal übernommene Remote-Änderungen
+  // (die dürfen nicht als eigener Push zurücklaufen).
+  function persistLocalOnly() { saveErfassung(gameId, state); }
+
+  // ── Mehrgeräte-Sync (nur bei einem mit der DB verknüpften Spiel) ─────────────
+  // Local-first bleibt: ein unverknüpftes Spiel läuft rein lokal wie bisher. Bei einem
+  // verknüpften Spiel schreibt DIESES Gerät nur die Würfe seiner EIGENEN Spieler hoch und
+  // übernimmt fremde Änderungen live. Ein Spieler gehört immer genau einem Gerät.
+  let linked = !!(game.linked && game.remoteId);
+  let syncMod = null;                     // lazy geladenes backend/sync.js
+  let meGeraet = null;                    // eigene Geräte-uid
+  let owners = game.spielerOwners || {};  // position -> { id, besitzer, heartbeat }
+  let unsub = null;                       // Realtime abmelden
+  let hbTimer = null;                     // Heartbeat-Intervall
+  const lastPushed = {};                  // "sp:st" -> JSON des zuletzt gepushten Blocks (Diff-Push)
+
+  function ownerOf(sp) { return owners[sp] || null; }
+  // Darf dieses Gerät den Spieler bearbeiten? Unverknüpft immer ja (lokal). Verknüpft nur,
+  // wenn ich ihn besitze; freie/fremde Spieler sind gesperrt (erst „Übernehmen").
+  function canEdit(sp) {
+    if (!linked) return true;
+    const o = ownerOf(sp);
+    if (!o) return true;                  // Besitz noch nicht geladen -> nicht blockieren
+    return o.besitzer === meGeraet;
+  }
+  function fremdAktiv(sp) {
+    return linked && !!syncMod && syncMod.istFremdAktiv(ownerOf(sp), meGeraet);
+  }
+  // Sperr-Feedback für die mutierenden Aktionen. true = darf bearbeiten.
+  function guardEdit() {
+    if (canEdit(state.aktiverSpieler)) return true;
+    const o = ownerOf(state.aktiverSpieler);
+    toast(o && o.besitzer ? '🔒 Wird auf anderem Gerät erfasst' : 'Bahn frei — erst „Übernehmen"');
+    return false;
+  }
+
+  // Geänderte Blöcke EIGENER Spieler in die DB schreiben (Diff gegen den letzten Push).
+  function pushDirty() {
+    if (!linked || !syncMod || !meGeraet) return;
+    state.bloecke.forEach((satzArr, sp) => {
+      if (!canEdit(sp)) return;
+      const pid = owners[sp] && owners[sp].id;
+      if (!pid) return;
+      satzArr.forEach((blk, st) => {
+        const key = sp + ':' + st;
+        const snap = JSON.stringify(blk);
+        if (lastPushed[key] === snap) return;
+        lastPushed[key] = snap;
+        syncMod.pushBlock(game.remoteId, pid, st, blk).catch(() => { delete lastPushed[key]; });
+      });
+    });
+  }
+  function seedPushed() {
+    state.bloecke.forEach((satzArr, sp) => satzArr.forEach((blk, st) => {
+      lastPushed[sp + ':' + st] = JSON.stringify(blk);
+    }));
+  }
+
+  // Eingehende Realtime-Änderung eines FREMDEN Spielers in den lokalen Stand übernehmen.
+  function onRemoteBlock(row) {
+    if (!row || row.geraet === meGeraet) return;   // eigene Echos ignorieren
+    let pos = null;
+    for (const p in owners) if (owners[p].id === row.spieler_id) { pos = +p; break; }
+    if (pos == null || !state.bloecke[pos] || state.bloecke[pos][row.satz] === undefined) return;
+    state.bloecke[pos][row.satz] = row.block_json || state.bloecke[pos][row.satz];
+    lastPushed[pos + ':' + row.satz] = JSON.stringify(state.bloecke[pos][row.satz]);
+    persistLocalOnly();
+    render();
+  }
+  function onRemoteSpieler(row) {
+    if (!row || row.position == null) return;
+    const prev = owners[row.position] || {};
+    owners[row.position] = { id: row.id || prev.id, besitzer: row.besitzer_geraet, heartbeat: row.heartbeat_am };
+    render();
+  }
+
+  function beat() {
+    if (!root.isConnected) { teardownSync(); return; }
+    if (syncMod && meGeraet) syncMod.heartbeat(game.remoteId).catch(() => {});
+  }
+  function teardownSync() {
+    if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+    if (unsub) { try { unsub(); } catch (e) {} unsub = null; }
+    window.removeEventListener('hashchange', teardownSync);
+  }
+  function startRealtime() {
+    if (unsub) return;
+    unsub = syncMod.subscribe(game.remoteId, { onBlock: onRemoteBlock, onSpieler: onRemoteSpieler });
+    beat();
+    hbTimer = setInterval(beat, 12000);
+  }
+
+  // Beim Öffnen eines bereits verknüpften Spiels: Besitz + fremde Blöcke frisch laden,
+  // Realtime abonnieren, Heartbeat starten. Fällt still auf lokal zurück, wenn offline.
+  async function initSync() {
+    if (!linked) return;
+    try {
+      syncMod = await import('../backend/sync.js');
+      meGeraet = await syncMod.ensureGeraet();
+      const fresh = await syncMod.pullGame(game.remoteId);
+      owners = fresh.spielerOwners || owners;
+      if (fresh.erfassung && Array.isArray(fresh.erfassung.bloecke)) {
+        fresh.erfassung.bloecke.forEach((satzArr, sp) => {
+          if (canEdit(sp)) return;         // meine Spieler bleiben wie lokal
+          satzArr.forEach((blk, st) => {
+            if (state.bloecke[sp] && state.bloecke[sp][st] !== undefined) state.bloecke[sp][st] = blk;
+          });
+        });
+      }
+      seedPushed();
+      startRealtime();
+      render();
+    } catch (e) { /* offline / CDN nicht erreichbar -> lokal weiterspielen */ }
+  }
+  window.addEventListener('hashchange', teardownSync);
+
+  // Lokales Spiel teilen: in Supabase spiegeln, ab jetzt verknüpft + Realtime.
+  async function shareGame() {
+    try {
+      if (!syncMod) syncMod = await import('../backend/sync.js');
+      game.erfassung = state;
+      const res = await syncMod.linkGame(game);
+      meGeraet = await syncMod.ensureGeraet();
+      game.linked = true; game.remoteId = res.remoteId; game.beitrittsCode = res.beitrittsCode;
+      linked = true;
+      owners = {};
+      Object.keys(res.posToId).forEach((pos) => {
+        owners[pos] = { id: res.posToId[pos], besitzer: meGeraet, heartbeat: new Date().toISOString() };
+      });
+      game.spielerOwners = owners;
+      saveGame(game);
+      seedPushed();
+      startRealtime();
+      toast('Spiel geteilt · Code ' + res.beitrittsCode);
+      render();
+    } catch (e) { toast('Teilen fehlgeschlagen — online?'); }
+  }
+  async function claimActive() {
+    const sp = state.aktiverSpieler; const o = ownerOf(sp);
+    if (!syncMod || !o || !o.id) return;
+    try {
+      const ok = await syncMod.claimPlayer(o.id);
+      if (!ok) { toast('Noch aktiv auf anderem Gerät'); return; }
+      owners[sp] = { ...o, besitzer: meGeraet, heartbeat: new Date().toISOString() };
+      state.bloecke[sp].forEach((blk, st) => { lastPushed[sp + ':' + st] = JSON.stringify(blk); });
+      toast('Bahn übernommen'); render();
+    } catch (e) { toast('Übernehmen fehlgeschlagen'); }
+  }
+  async function releaseActive() {
+    const sp = state.aktiverSpieler; const o = ownerOf(sp);
+    if (!syncMod || !o || !o.id) return;
+    try {
+      await syncMod.releasePlayer(o.id);
+      owners[sp] = { ...o, besitzer: null };
+      laneSettingsOpen = false;
+      toast('Bahn freigegeben'); render();
+    } catch (e) { toast('Freigeben fehlgeschlagen'); }
   }
   function block(sp, st) { return state.bloecke[sp][st]; }
   function current() { return block(state.aktiverSpieler, state.aktiverSatz); }
   function laneOf(sp, st) { return c.bahnplan?.[sp]?.[st] ?? (c.ersteBahn + st); }
   function playerName(sp) { return c.spielerListe[sp].name || ('Spieler ' + (sp + 1)); }
   function playerTotal(sp) { return state.bloecke[sp].reduce((s, blk) => s + satzHolz(blk, ranges), 0); }
+
+  // Effektive Wurfzahl eines Satz-Blocks fürs Anzeigen: ein manuell gesetzter Teilsatz zählt als
+  // vollständig (Soll-Würfe), sonst die tatsächlich erfassten Würfe im Teilsatz-Bereich. Deckungs-
+  // gleich mit der Statistik (computeGameStats.wurfCount) und dem Teilsatz-Zähler (teilsatzStats.count),
+  // damit die Wurfzahl nach einer manuellen Eingabe überall gleich hochzählt (Bahn-Tabs, Kegelbrett).
+  function wuerfeCount(blk) {
+    return ranges.reduce((s, r, i) => {
+      const manual = Array.isArray(blk.overrides) && blk.overrides[i] != null;
+      const actual = blk.wuerfe.slice(r.start, r.end).length;
+      return s + (manual ? r.soll : actual);
+    }, 0);
+  }
+
+  // Teilsatz-Spaltenlabels (Vo, Ab, Kr …); kommt derselbe Modus mehrfach vor, durchnummerieren.
+  function teilsatzLabels() {
+    const modusN = {};
+    ranges.forEach((r) => { modusN[r.modus] = (modusN[r.modus] || 0) + 1; });
+    const seen = {};
+    return ranges.map((r) => {
+      const abk = MODUS_ABK[r.modus] || r.modus;
+      if (modusN[r.modus] > 1) { seen[r.modus] = (seen[r.modus] || 0) + 1; return `${abk}${seen[r.modus]}`; }
+      return abk;
+    });
+  }
+
+  // Ein Teilsatz gilt als "offen" (noch kein Ergebnis), wenn er weder manuell gesetzt ist noch
+  // seine Soll-Würfe vollständig erfasst sind. Rückgabe: Indizes der offenen Teilsätze.
+  function openTeilsaetze(blk) {
+    const done = satzStatus(blk) === 'done';
+    const open = [];
+    ranges.forEach((_, i) => {
+      const t = teilsatzStats(blk, ranges, i, done);
+      if (!(t.manual || t.count === t.soll)) open.push(i);
+    });
+    return open;
+  }
+
+  // Summe der bereits bekannten Teilsätze eines Satzes (ohne den ausgeschlossenen Index).
+  function knownTeilsatzSum(blk, exclude) {
+    const done = satzStatus(blk) === 'done';
+    return ranges.reduce((s, _, i) =>
+      (i === exclude ? s : s + teilsatzStats(blk, ranges, i, done).val), 0);
+  }
+
+  // Nach einer manuellen Ergebnis-Eingabe: haben ALLE Teilsätze ein Ergebnis (manuell oder volle
+  // Würfe), wird der Satz automatisch abgeschlossen — genau wie ein vollständig geworfener Satz.
+  // Bewusst OHNE Bahnwechsel-Gate (manuelle Endergebnisse dürfen jederzeit abschließen).
+  // Rückgabe: true, wenn gerade abgeschlossen wurde (für die Rückmeldung).
+  function autoCloseIfComplete(blk) {
+    if (!blk.done && openTeilsaetze(blk).length === 0) { blk.done = true; return true; }
+    return false;
+  }
 
   // Kontext eines (geplanten oder bestehenden) Wurfs an absolutem Index `idx`:
   // Beim Abräumen/Kranz-Abräumen nur die stehenden Kegel wählbar, Numpad auf deren
@@ -276,6 +489,7 @@ export function spielLaufendView() {
   // bleibt stehen. Genaue Kranz-Kegel bleiben offen (kegel=null), gespeichert wird nur,
   // DASS der König danach noch steht (blk.koenig[idx]=true).
   function addWurf(pins, koenigFlag = false) {
+    if (!guardEdit()) return false;
     const blk = current();
     if (!Array.isArray(blk.koenig)) blk.koenig = blk.wuerfe.map(() => false);
     if (editIdx !== null) {
@@ -410,6 +624,7 @@ export function spielLaufendView() {
   //   "gefallen": Grundzustand alle aus, die N gefallenen einschalten.
   //   "stehend":  Grundzustand alle an (alle gefallen), die 9-N stehenden ausschalten.
   function tapPin(p) {
+    if (!guardEdit()) return;
     const blk = current();
     const k = pinTarget();
     if (k < 0) { toast('Erst einen Wurf eintragen'); return; }
@@ -450,6 +665,7 @@ export function spielLaufendView() {
   }
 
   function undo() {
+    if (!guardEdit()) return;
     const blk = current();
     if (blk.wuerfe.length === 0) { toast('Nichts rückgängig zu machen'); return; }
     blk.wuerfe.pop();
@@ -459,6 +675,7 @@ export function spielLaufendView() {
   }
 
   function deleteEditing() {
+    if (!guardEdit()) return;
     const blk = current();
     if (editIdx === null || editIdx >= blk.wuerfe.length) return;
     blk.wuerfe.splice(editIdx, 1);
@@ -470,6 +687,7 @@ export function spielLaufendView() {
 
   // Aktuellen Satz beenden / wieder öffnen (aus der Bahneinstellung).
   function toggleDone() {
+    if (!guardEdit()) return;
     const blk = current();
     // Beenden eines Satzes, den man physisch noch nicht bespielt (Bahnwechsel steht
     // aus), würde einen zweiten Bahnwechsel vorziehen — gesperrt. Wieder-Öffnen bleibt erlaubt.
@@ -485,6 +703,7 @@ export function spielLaufendView() {
   // Ganzes Spiel für DIESEN Spieler beenden: alle offenen Sätze auf fertig setzen (Bahn
   // wird frei für den Bahnwechsel). Sind bereits alle fertig, öffnet die Aktion sie wieder.
   function endPlayerGame() {
+    if (!guardEdit()) return;
     const bloecke = state.bloecke[state.aktiverSpieler];
     const allDone = bloecke.every((b) => b.done);
     bloecke.forEach((b) => { b.done = !allDone; });
@@ -514,11 +733,6 @@ export function spielLaufendView() {
       statsOpen = false;
       setGameStatus(gameId, 'laufend');
     }
-  }
-
-  function setOverride(i, val) {
-    current().overrides[i] = val;
-    persist(); render();
   }
 
   // ── Standard-Bilder verwalten (Einstellungen) ──
@@ -586,7 +800,6 @@ export function spielLaufendView() {
     const head = kegel.querySelector('.erf-kegel-head');
     const foot = kegel.querySelector('.erf-kegel-foot');   // enthält jetzt Ecken-Stats + Wurfergebnis in einer Zeile
     const body = kegel.querySelector('.erf-kegel-body');
-    const modes = kegel.querySelector('.ek-modes');
     const ks = getComputedStyle(kegel);
     const gs = getComputedStyle(grid);
     const padY = num(ks.paddingTop) + num(ks.paddingBottom);
@@ -598,10 +811,9 @@ export function spielLaufendView() {
     const gapsY = kegelGap * Math.max(0, [head, body, foot].filter(Boolean).length - 1);
     const rowGap = num(gs.rowGap);
     const colGap = num(gs.columnGap);
-    // Der hochkant-Umschalter liegt absolut links; damit die Raute mittig bleibt, muss links UND
-    // rechts jeweils seine Breite (+ kleiner Abstand) frei bleiben.
-    const modesW = modes ? modes.getBoundingClientRect().width : 0;
-    const sideGap = 6;
+    // Kleiner seitlicher Sicherheitsabstand, damit die Raute nicht am Box-Rand klebt.
+    // (Der Modus-Umschalter sitzt oben im Kopf, nicht neben der Raute -> keine Breiten-Reservierung.)
+    const sideGap = 4;
     // Vom Fuß nur (Naturhöhe − LIFT_MAX) reservieren: die Raute darf um bis zu LIFT_MAX tiefer
     // reichen; die obere Ecken-Zeile wird per margin-top wieder in die Raute überlappt, während
     // Wurf + untere Ecken-Zahlen auf einer Ebene UNTER der Raute bleiben.
@@ -609,16 +821,31 @@ export function spielLaufendView() {
     const footReserve = Math.max(0, footNat - LIFT_MAX);
     // Freie Höhe/Breite für das 5×5-Raster innerhalb der (flexibel zugeteilten) Kegel-Box.
     const availH = kegel.clientHeight - padY - headH - footReserve - gapsY;
-    const availW = kegel.clientWidth - padX - 2 * (modesW + sideGap);
-    const byH = (availH - 4 * rowGap) / 5;
+    const availW = kegel.clientWidth - padX - 2 * sideGap;
     const byW = (availW - 4 * colGap) / 5;
-    // Bei wenig Platz die Raute stärker stauchen (min 16px) statt den Wurf in die Kegel zu drücken.
-    const pin = Math.max(16, Math.min(40, Math.floor(Math.min(byH, byW))));
-    if (Number.isFinite(pin)) grid.style.setProperty('--pin', pin + 'px');
-    // Tatsächliche Überlappung: passt die (evtl. gestauchte) Raute in availH -> voller Lift
-    // (obere Zahlen tief in der Raute); überschießt sie, Lift zurücknehmen, damit der Wurf
-    // Kegel 1 nicht überlappt.
-    const diamondH = 5 * pin + 4 * rowGap;
+    // Getrennt: Spaltenbreite (--pin-w) = Anordnung seitlich, Zeilenhöhe (--pin-h) = Anordnung
+    // vertikal, Kegel-Durchmesser (--pin-d) = die runden Pins selbst. Die PINS werden NIE
+    // gestaucht (immer Kreis mit Durchmesser d); reicht die Höhe nicht, rückt nur die
+    // ANORDNUNG zusammen (kleineres --pin-h -> Zeilen näher), der Pin bleibt rund.
+    // BREITE zuerst: die Spalten füllen den Platz seitlich aus (Deckel 80px), min 16px.
+    const pinW = Math.max(16, Math.min(80, Math.floor(byW)));
+    // Pin-Durchmesser d: durch die Breite begrenzt (d <= pinW) und durch die Höhe. In der
+    // Raute liegen die engsten gleichspaltigen Nachbarn 2 Zeilen auseinander -> kein Überlapp
+    // solange 2*pinH >= d, also pinH >= d/2. Bei minimalem pinH=d/2 ist die sichtbare
+    // Rautenhöhe 4*(d/2)+4*rowGap+d = 3d+4*rowGap -> d <= (availH-4*rowGap)/3.
+    const dByH = (availH - 4 * rowGap) / 3;
+    const pinD = Math.max(16, Math.min(80, Math.floor(Math.min(pinW, dByH))));
+    // Zeilenhöhe füllt die restliche Höhe, aber >= d/2 (kein Überlapp) und <= pinW (die
+    // Anordnung wird nur gestaucht, nie vertikal gestreckt).
+    const pinH = Math.max(Math.ceil(pinD / 2), Math.min(pinW, Math.floor((availH - 4 * rowGap - pinD) / 4)));
+    if (Number.isFinite(pinW)) grid.style.setProperty('--pin-w', pinW + 'px');
+    if (Number.isFinite(pinH)) grid.style.setProperty('--pin-h', pinH + 'px');
+    if (Number.isFinite(pinD)) grid.style.setProperty('--pin-d', pinD + 'px');
+    // Sichtbare Rautenhöhe: die runden Pins ragen über die (gestauchten) Zeilentracks hinaus,
+    // von der Mitte des obersten bis zur Mitte des untersten Pins + ein Durchmesser.
+    // Passt sie in availH -> voller Lift (obere Ecken-Zahlen tief in der Raute); überschießt
+    // sie, Lift zurücknehmen, damit der Wurf Kegel 1 nicht überlappt.
+    const diamondH = 4 * pinH + 4 * rowGap + pinD;
     const overshoot = Math.max(0, diamondH - availH);
     const lift = Math.max(0, Math.min(LIFT_MAX, LIFT_MAX - overshoot));
     kegel.style.setProperty('--foot-mt', (-lift) + 'px');
@@ -669,17 +896,19 @@ export function spielLaufendView() {
 
       ${satzTabs()}
 
+      ${satzOverviewOpen ? spielerUebersichtPanel() : `
       <div class="erf-satz">
+        ${linked && !canEdit(state.aktiverSpieler) ? lockBanner() : ''}
         ${kegelBoard(blk)}
 
         ${wurfChips(blk, status === 'done')}
         ${numpad(blk, status)}
-      </div>
+      </div>`}
 
       <div id="erf-toast" class="erf-toast"></div>
       ${settingsOpen ? settingsPanel() : ''}
       ${laneSettingsOpen ? laneSettingsPanel() : ''}
-      ${overrideTs !== null ? overridePanel() : ''}
+      ${overrideSt !== null ? overridePanel() : ''}
       ${pinPick ? pinPickPanel() : ''}
       ${statsOpen ? statsPanel() : ''}`;
   }
@@ -763,6 +992,22 @@ export function spielLaufendView() {
                 <span class="erf-switch-knob"></span>
               </button>
             </div>
+            <h3 class="erf-settings-sub">Mehrgeräte</h3>
+            ${linked ? `
+            <div class="erf-setting-row">
+              <div class="erf-setting-text">
+                <span class="erf-setting-label">Beitritts-Code</span>
+                <span class="erf-setting-hint">Anderes Gerät: im Menü „Spiel beitreten" wählen und diesen Code eingeben.</span>
+              </div>
+              <span class="erf-share-code">${esc(game.beitrittsCode || '—')}</span>
+            </div>` : `
+            <div class="erf-setting-row">
+              <div class="erf-setting-text">
+                <span class="erf-setting-label">Spiel teilen</span>
+                <span class="erf-setting-hint">Auf mehreren Geräten gleichzeitig erfassen — Konto nicht nötig.</span>
+              </div>
+              <button type="button" class="erf-btn done" data-act="share">🔗 Teilen</button>
+            </div>`}
             <h3 class="erf-settings-sub">Standard-Kegelbilder</h3>
             ${standardbilderEditor()}
             <h3 class="erf-settings-sub" style="margin-top:20px;">Spiel-Details</h3>
@@ -791,6 +1036,7 @@ export function spielLaufendView() {
             <div class="erf-lane-actions">
               <button type="button" class="erf-btn ${satzDone ? 'is-on' : 'done'}" data-act="end-satz">${satzDone ? '↺ Satz wieder öffnen' : '✓ Satz beenden'}</button>
               <button type="button" class="erf-btn ${allDone ? 'is-on' : 'danger'}" data-act="end-game">${allDone ? '↺ Spiel wieder öffnen' : '⏹ Spiel beenden (nur dieser Spieler)'}</button>
+              ${linked && canEdit(sp) ? `<button type="button" class="erf-btn" data-act="release">🔓 Bahn freigeben (anderes Gerät)</button>` : ''}
             </div>
           </div>
         </div>
@@ -820,6 +1066,26 @@ export function spielLaufendView() {
   // Wartende Spieler (fertig, naechste Bahn noch besetzt) bleiben auf ihrer Bahn mit
   // Status "wartet auf Bahnwechsel". Bahnen ohne Spieler -> "frei".
   function bahnTabs(bs) {
+    return renderBahnTabs(bs);
+  }
+
+  // Banner über der Erfassung, wenn der aktive Spieler nicht diesem Gerät gehört.
+  // „Übernehmen" nur, wenn die Bahn frei oder das andere Gerät inaktiv ist.
+  function lockBanner() {
+    const sp = state.aktiverSpieler;
+    const o = ownerOf(sp);
+    const belegt = !!(o && o.besitzer);
+    const claimable = !belegt || !fremdAktiv(sp);
+    const txt = belegt
+      ? (fremdAktiv(sp) ? '🔒 Wird auf einem anderen Gerät erfasst' : '🔒 Anderes Gerät (inaktiv)')
+      : 'Diese Bahn ist frei';
+    return `<div class="erf-lock-banner">
+      <span class="elb-text">${txt}</span>
+      ${claimable ? `<button type="button" class="erf-btn done" data-act="claim">🔓 Übernehmen</button>` : ''}
+    </div>`;
+  }
+
+  function renderBahnTabs(bs) {
     // Alle Bahnen des Spiels zeigen; bis zu 4 füllen die Breite komplett,
     // ab der 5. entsteht horizontaler Scroll (CSS .erf-ptab min-width).
     const anzahl = c.bahnen;
@@ -843,14 +1109,16 @@ export function spielLaufendView() {
       const status = s.waiting ? 'wartet' : satzStatus(blk);
       const total = playerTotal(sp);
       const satzH = satzHolz(blk, ranges);
-      const wurfN = blk.wuerfe.length;
+      const realN = blk.wuerfe.length;          // echte Würfe (für den zuletzt erfassten Wurf)
+      const wurfN = wuerfeCount(blk);           // Anzeige: manuell gesetzte Teilsätze zählen als voll
       // FUNK-Stil-Kopf, 2-zeilig: Zeile 1 = B{Bahn} · Name · Gesamtergebnis (gold);
       // Zeile 2 = Wurf-Nr · aktueller Wurf · Gesamt Bahn.
-      const lastThrow = wurfN ? blk.wuerfe[wurfN - 1] : '–';
+      const lastThrow = realN ? blk.wuerfe[realN - 1] : '–';
       tabs.push(`<button type="button" role="tab" aria-selected="${sp === state.aktiverSpieler}" class="erf-ptab is-${status}${sp === state.aktiverSpieler ? ' is-active' : ''}" data-player="${sp}">
         <span class="ept-top">
           <span class="ept-bahn">B${bahn}</span>
           ${s.waiting ? `<span class="ept-warten" title="wartet auf Bahnwechsel">⏳</span>` : ''}
+          ${fremdAktiv(sp) ? `<span class="ept-lock" title="wird auf anderem Gerät erfasst">🔒</span>` : ''}
           <span class="ept-total" title="Gesamtergebnis">${total}</span>
         </span>
         <span class="ept-name">${esc(playerName(sp))}</span>
@@ -866,14 +1134,109 @@ export function spielLaufendView() {
 
   function satzTabs() {
     const sp = state.aktiverSpieler;
-    return `<div class="erf-stabs" role="tablist">${state.bloecke[sp].map((blk, st) => {
+    const tabs = state.bloecke[sp].map((blk, st) => {
       const s = satzStatus(blk);
       const h = satzHolz(blk, ranges);
       return `<button type="button" role="tab" aria-selected="${st === state.aktiverSatz}" class="erf-stab is-${s}${st === state.aktiverSatz ? ' is-active' : ''}" data-satz="${st}">
         <span class="est-label">Satz ${st + 1}</span>
         <span class="est-val">${s === 'pending' ? '–' : h}</span>
       </button>`;
-    }).join('')}</div>`;
+    }).join('');
+    // Übersicht-Button in der Satz-Zeile: schaltet zwischen Wurferfassung und Spieler-Übersicht
+    // um (Tab-Leisten bleiben oben stehen). Aktiv gefärbt, solange die Übersicht offen ist.
+    const overviewBtn = `<button type="button" class="erf-stab erf-stab-more${satzOverviewOpen ? ' is-active' : ''}" data-act="satz-overview" aria-pressed="${satzOverviewOpen}" aria-label="Spieler-Übersicht" title="Übersicht">▦</button>`;
+    return `<div class="erf-stabs" role="tablist">${overviewBtn}${tabs}</div>`;
+  }
+
+  // Spieler-Übersicht (inline, ersetzt die Wurferfassung; die Bahn- und Satz-Leiste bleiben oben
+  // stehen): alle spielerspezifischen Daten des AKTIVEN Spielers auf einen Blick —
+  //   • Statistik-Kacheln (Gesamt, Ø/Satz, bester Satz, Ø/Wurf, Alle Neune, Fehlwürfe, Würfe)
+  //   • alle Sätze NACH BAHN sortiert, je Satz die Teilsatz-Ergebnisse + deren Summe (Holz)
+  //   • Fußzeile mit den Spalten-Summen (Teilsätze) und dem Gesamt-Holz
+  // Ein Tipp auf eine Zeile wählt den Satz (die Satz-Leiste oben spiegelt das); der ▦-Button
+  // schaltet zurück zur Erfassung.
+  function spielerUebersichtPanel() {
+    const sp = state.aktiverSpieler;
+    const arr = state.bloecke[sp];
+    const stats = computeGameStats(c, state.bloecke, ranges).players[sp];
+
+    const tsLabels = teilsatzLabels();
+    // Nur bei mehr als einem Teilsatz eigene Spalten zeigen — sonst wäre der Teilsatz = Satz-Holz.
+    const showTs = ranges.length > 1;
+
+    // Sätze nach Bahn sortieren (bei gleicher Bahn nach Satz-Nummer).
+    const infos = arr.map((blk, st) => ({ st, blk, bahn: laneOf(sp, st), status: satzStatus(blk) }));
+    const sorted = infos.slice().sort((a, b) => a.bahn - b.bahn || a.st - b.st);
+
+    const tsHead = showTs
+      ? tsLabels.map((l, i) => `<th class="ub-h-ts" title="${esc(MODUS_LABEL[ranges[i].modus] || '')}">${esc(l)}</th>`).join('')
+      : '';
+
+    const rows = sorted.map(({ st, blk, bahn, status }) => {
+      const empty = status === 'pending';
+      const active = st === state.aktiverSatz;
+      const tsCells = showTs
+        ? ranges.map((_, i) => {
+          const t = teilsatzStats(blk, ranges, i, status === 'done');
+          const touched = t.count > 0 || t.manual;
+          return `<td class="ub-ts ub-edit${t.manual ? ' is-manual' : ''}${t.mark ? ' is-mark' : ''}" data-edit-ts="${st}:${i}" role="button" tabindex="0" aria-label="${esc(tsLabels[i])}, Satz ${st + 1} bearbeiten">${touched ? t.val : '·'}${t.mark ? ' ⚠' : ''}</td>`;
+        }).join('')
+        : '';
+      return `<tr class="ub-row is-${status}${active ? ' is-active' : ''}" data-satz="${st}">
+        <td class="ub-bahn">B${bahn}</td>
+        <td class="ub-satz">Satz ${st + 1}</td>
+        ${tsCells}
+        <td class="ub-holz ub-edit" data-edit-satz="${st}" role="button" tabindex="0" aria-label="Satz ${st + 1} Ergebnis bearbeiten">${empty ? '–' : satzHolz(blk, ranges)}</td>
+      </tr>`;
+    }).join('');
+
+    // Fußzeile: Summe je Teilsatz-Spalte über alle Sätze + Gesamt-Holz.
+    const tsFoot = showTs
+      ? ranges.map((_, i) =>
+        `<td class="ub-ts">${arr.reduce((s, blk) => s + teilsatzStats(blk, ranges, i, satzStatus(blk) === 'done').val, 0)}</td>`).join('')
+      : '';
+
+    const metric = (val, lbl) => `<div class="stats-metric"><span class="stats-metric-val">${val}</span><span class="stats-metric-lbl">${lbl}</span></div>`;
+
+    return `
+      <div class="erf-ueber">
+        <div class="ueber-scroll">
+          <div class="ueber-head">
+            <span class="ueber-name">${esc(playerName(sp))}</span>
+            <span class="ueber-total">${stats.gesamt}</span>
+          </div>
+          <div class="stats-metrics">
+            ${metric(stats.schnittSatz.toFixed(1), 'Ø / Satz')}
+            ${metric(stats.bester, 'bester Satz')}
+            ${metric(stats.schnittWurf.toFixed(1), 'Ø / Wurf')}
+            ${metric(stats.neuner, 'Alle Neune ☆')}
+            ${metric(stats.fehl, 'Fehlwürfe')}
+            ${metric(stats.wurfCount, 'Würfe')}
+          </div>
+          <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an, um es anzupassen.</p>
+          <div class="ueber-tablewrap">
+            <table class="ub-table">
+              <thead>
+                <tr>
+                  <th class="ub-h-bahn">Bahn</th>
+                  <th class="ub-h-satz">Satz</th>
+                  ${tsHead}
+                  <th class="ub-h-holz">Holz</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+              <tfoot>
+                <tr>
+                  <td class="ub-bahn ub-foot-label">Σ</td>
+                  <td class="ub-satz"></td>
+                  ${tsFoot}
+                  <td class="ub-holz ub-grand">${playerTotal(sp)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </div>`;
   }
 
   // Kegel-Raute: welche Kegel im Ziel-Wurf gefallen/stehen (anklickbar).
@@ -990,7 +1353,7 @@ export function spielLaufendView() {
     const sp = state.aktiverSpieler;
     const name = playerName(sp);
     const lane = laneOf(sp, state.aktiverSatz);              // Bahnnummer (oben links)
-    const wurfN = blk.wuerfe.length;
+    const wurfN = wuerfeCount(blk);                          // manuell gesetzte Teilsätze zählen als voll
     const fehl = blk.wuerfe.filter((w) => w === 0).length;   // Fehlwürfe = kein Kegel getroffen (Wurf 0)
     const ergBahn = satzHolz(blk, ranges);                    // Ergebnis auf dieser Bahn (aktueller Satz)
     const ergGesamt = playerTotal(sp);                       // Ergebnis über alle Sätze
@@ -1084,11 +1447,12 @@ export function spielLaufendView() {
           chips.push(`<span class="erf-chip is-empty" data-slot="${k}"><span class="ec-nr">${k + 1}</span><span class="ec-pins">·</span></span>`);
         }
       }
-      // Teilsatz-Ergebnis direkt in der Wurfzeile (rechts), antippen -> Override.
-      const result = `<button type="button" class="erf-chip-result${t.mark ? ' mismatch' : ''}${t.manual ? ' manual' : ''}" data-override="${i}" aria-label="${label}-Ergebnis setzen">
+      // Teilsatz-Ergebnis direkt in der Wurfzeile (rechts) — nur Anzeige. Das Anpassen der
+      // Teilsatz-/Satz-Ergebnisse läuft jetzt ausschließlich über die Spieler-Übersicht (▦).
+      const result = `<span class="erf-chip-result${t.mark ? ' mismatch' : ''}${t.manual ? ' manual' : ''}" aria-label="${label}-Ergebnis">
         <span class="ecr-val">${t.val}${t.mark ? ' ⚠' : ''}${t.manual ? ' ✎' : ''}</span>
         <span class="ecr-count">${t.count}/${t.soll}</span>
-      </button>`;
+      </span>`;
       // Fehlerhinweis unter der Wurfzeile (auf dem Handy ohne Tooltip sichtbar).
       let errNote = '';
       if (errors) {
@@ -1110,7 +1474,7 @@ export function spielLaufendView() {
 
   function numpad(blk, status) {
     const full = blk.wuerfe.length >= c.wuerfeProSatz;
-    const locked = editIdx === null && (status === 'done' || full);
+    const locked = !canEdit(state.aktiverSpieler) || (editIdx === null && (status === 'done' || full));
     // Ziel-Wurf: beim Korrigieren der editIdx-Wurf, sonst der nächste neue.
     const idx = editIdx !== null ? editIdx : blk.wuerfe.length;
     const ctx = throwContext(blk, idx);
@@ -1181,8 +1545,19 @@ export function spielLaufendView() {
         editIdx = editIdx === idx ? null : idx;
         render();
       }));
-    root.querySelectorAll('[data-override]').forEach((b) =>
-      b.addEventListener('click', () => openOverride(parseInt(b.dataset.override, 10))));
+    // Übersicht: Teilsatz-/Satz-Ergebnis antippen -> Bearbeiten-Sheet. stopPropagation, damit der
+    // Tipp nicht zusätzlich die (auf der Zeile liegende) Satz-Auswahl auslöst.
+    root.querySelectorAll('[data-edit-ts]').forEach((el) =>
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const [st, i] = el.dataset.editTs.split(':').map((x) => parseInt(x, 10));
+        openOverride(st, i);
+      }));
+    root.querySelectorAll('[data-edit-satz]').forEach((el) =>
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openSatzOverride(parseInt(el.dataset.editSatz, 10));
+      }));
 
     const act = (name, fn) => {
       const el = root.querySelector(`[data-act="${name}"]`);
@@ -1197,9 +1572,17 @@ export function spielLaufendView() {
     act('end-game', endPlayerGame);
     act('toggle-vorschlaege', toggleVorschlaege);
     act('show-stats', () => { statsOpen = true; render(); });
+    act('share', shareGame);
+    act('claim', claimActive);
+    act('release', releaseActive);
     // Statistik schließen (Kopf-← und „Weiter bearbeiten" tragen beide diesen Hook).
     root.querySelectorAll('[data-act="stats-close"]').forEach((b) =>
       b.addEventListener('click', () => { statsOpen = false; render(); }));
+
+    // Spieler-Übersicht (inline): der ▦-Button schaltet zwischen Erfassung und Übersicht um.
+    // Die Übersichts-Zeilen tragen data-satz und werden über die Satz-Tab-Verdrahtung
+    // (selectSatz) mitgenommen — ein Tipp wählt den Satz, die Übersicht bleibt offen.
+    act('satz-overview', () => { satzOverviewOpen = !satzOverviewOpen; render(); });
 
     // Standard-Bilder-Editor (in den Einstellungen)
     root.querySelectorAll('[data-sbnum]').forEach((b) =>
@@ -1242,37 +1625,77 @@ export function spielLaufendView() {
     root.querySelectorAll('[data-act="override-close"]').forEach((b) =>
       b.addEventListener('click', (e) => {
         if (b.classList.contains('erf-settings-backdrop') && e.target !== b) return;
-        overrideTs = null; render();
+        overrideSt = null; overrideTs = null; render();
       }));
   }
 
-  // Teilsatz-Summe manuell setzen (Override): öffnet das Sheet mit Ziffernblock.
-  function openOverride(i) {
-    const cur = current().overrides[i];
-    overrideTs = i;
+  // Teilsatz-Ergebnis manuell setzen: Sheet für Satz `st`, Teilsatz `i` (aus der Übersicht).
+  function openOverride(st, i) {
+    const blk = state.bloecke[state.aktiverSpieler][st];
+    overrideSt = st; overrideTs = i;
+    const cur = blk.overrides[i];
     overrideDraft = cur != null ? String(cur) : '';
     render();
   }
 
-  // Overlay-Sheet mit eigenem Ziffernblock — ersetzt den früheren window.prompt.
+  // Ganzes Satz-Ergebnis für Satz `st` eingeben: beim Übernehmen wird der Wert auf den einzigen
+  // offenen Teilsatz ergänzt (bzw. direkt gesetzt, wenn es nur einen Teilsatz gibt).
+  function openSatzOverride(st) {
+    const blk = state.bloecke[state.aktiverSpieler][st];
+    overrideSt = st; overrideTs = null;
+    // Ein-Teilsatz-Satz = direktes Ergebnis: aktuellen Wert vorbelegen (nur anpassen). Bei mehreren
+    // Teilsätzen wird verteilt → leer starten, damit die Gesamtsumme bewusst getippt wird und nicht
+    // versehentlich der vorbelegte Teil-Stand einen offenen Teilsatz auf 0 setzt.
+    overrideDraft = (ranges.length === 1 && satzStatus(blk) !== 'pending') ? String(satzHolz(blk, ranges)) : '';
+    render();
+  }
+
+  // Overlay-Sheet mit eigenem Ziffernblock. Zwei Modi: einzelnen Teilsatz setzen (overrideTs=i)
+  // oder das ganze Satz-Ergebnis eingeben (overrideTs=null -> auf den offenen Teilsatz verteilen).
   function overridePanel() {
-    const i = overrideTs;
-    const blk = current();
-    const r = ranges[i];
-    const label = MODUS_LABEL[r.modus] || r.modus;
-    const stats = teilsatzStats(blk, ranges, i, satzStatus(blk) === 'done');
-    const wSum = blk.wuerfe.slice(r.start, r.end).reduce((a, w) => a + w, 0);
+    const st = overrideSt;
+    const blk = state.bloecke[state.aktiverSpieler][st];
+    const bahn = laneOf(state.aktiverSpieler, st);
     const draft = overrideDraft === '' ? '—' : overrideDraft;
     const numBtn = (n) => `<button type="button" class="erf-num${n === 0 ? ' zero' : ''}" data-ovnum="${n}">${n}</button>`;
+
+    let title, sub, hint = '', resetBtn = '';
+    if (overrideTs !== null) {
+      const r = ranges[overrideTs];
+      const label = MODUS_LABEL[r.modus] || r.modus;
+      const throwsIn = blk.wuerfe.slice(r.start, r.end);
+      const wSum = throwsIn.reduce((a, w) => a + w, 0);
+      title = 'Teilsatz-Ergebnis';
+      sub = `Satz ${st + 1} · Bahn ${bahn} · ${esc(label)} · aus Würfen: ${throwsIn.length} Wurf, ${wSum} Holz`;
+      hint = `Möglich: 0–${r.soll * 9} Holz (${r.soll}×9).`;
+      // Entfernen NUR über diesen klaren Knopf (nie über ein leeres Feld). Bei erfassten Würfen
+      // ist es ein Zurückfallen auf die Würfe-Summe, sonst ein echtes Entfernen des Ergebnisses.
+      const resetLabel = throwsIn.length > 0 ? '↺ Auf Würfe zurück' : '↺ Ergebnis entfernen';
+      resetBtn = `<button type="button" class="erf-btn danger" data-act="override-reset">${resetLabel}</button>`;
+    } else {
+      const labels = teilsatzLabels();
+      const open = openTeilsaetze(blk);
+      title = 'Satz-Ergebnis';
+      sub = `Satz ${st + 1} · Bahn ${bahn}`;
+      if (ranges.length > 1) {
+        if (open.length === 1) hint = `Ergänzt automatisch <strong>${esc(labels[open[0]])}</strong> (der einzige offene Teilsatz).`;
+        else if (open.length === 0) hint = 'Alle Teilsätze bereits gesetzt — bitte einzeln bearbeiten.';
+        else hint = `${open.length} Teilsätze offen — bitte einzeln eingeben.`;
+      } else {
+        hint = `Möglich: 0–${ranges[0].soll * 9} Holz.`;
+      }
+    }
+
     return `
       <div class="erf-settings-backdrop" data-act="override-close">
-        <div class="erf-settings-sheet" role="dialog" aria-modal="true" aria-label="Teilsatz-Summe">
+        <div class="erf-settings-sheet" role="dialog" aria-modal="true" aria-label="${title}">
           <div class="erf-settings-head">
-            <h2 class="erf-settings-title">Teilsatz-Summe</h2>
+            <h2 class="erf-settings-title">${title}</h2>
             <button type="button" class="icon-btn" data-act="override-close" aria-label="Schließen">✕</button>
           </div>
           <div class="erf-settings-body">
-            <p class="erf-lane-sub">${esc(label)} · aus Würfen: ${stats.count} Wurf, ${wSum} Holz</p>
+            <p class="erf-lane-sub">${sub}</p>
+            ${hint ? `<p class="erf-ov-hint">${hint}</p>` : ''}
             <div class="erf-ov-value" aria-live="polite">${draft}</div>
             <div class="erf-numpad erf-ov-numpad">
               ${[7, 8, 9, 4, 5, 6, 1, 2, 3].map(numBtn).join('')}
@@ -1281,7 +1704,7 @@ export function spielLaufendView() {
             </div>
             <div class="erf-lane-actions">
               <button type="button" class="erf-btn done" data-act="override-apply">✓ Übernehmen</button>
-              <button type="button" class="erf-btn danger" data-act="override-reset">↺ Zurücksetzen</button>
+              ${resetBtn}
             </div>
           </div>
         </div>
@@ -1296,28 +1719,74 @@ export function spielLaufendView() {
   }
 
   function applyOverride() {
-    const i = overrideTs;
-    const label = MODUS_LABEL[ranges[i].modus] || ranges[i].modus;
-    if (overrideDraft !== '') {
+    if (!guardEdit()) return;
+    const st = overrideSt;
+    const blk = state.bloecke[state.aktiverSpieler][st];
+    const labels = teilsatzLabels();
+
+    // Modus A: einzelner Teilsatz.
+    if (overrideTs !== null) {
+      const i = overrideTs;
+      // Leeres Feld ist KEINE Eingabe -> nichts löschen (Entfernen läuft nur über den ↺-Knopf).
+      if (overrideDraft === '') { toast('Bitte einen Wert eingeben (oder ↺ zum Entfernen)'); return; }
       const v = parseInt(overrideDraft, 10);
       if (Number.isNaN(v) || v < 0) { toast('Ungültiger Wert'); return; }
-      overrideTs = null;
-      setOverride(i, v); // persist + render (Sheet ist dann zu)
-      toast(`${label} auf ${v} Holz gesetzt`);
-      return;
+      const maxV = ranges[i].soll * 9; // physikalisches Maximum: Soll-Würfe × 9 Kegel
+      if (v > maxV) { toast(`${labels[i]}: höchstens ${maxV} möglich (${ranges[i].soll}×9)`); return; }
+      blk.overrides[i] = v;
+      const closed = autoCloseIfComplete(blk);
+      overrideSt = null; overrideTs = null; persist(); render();
+      toast(`${labels[i]} auf ${v} Holz gesetzt${closed ? ` · Satz ${st + 1} abgeschlossen` : ''}`); return;
     }
-    // leer = wie Zurücksetzen
-    overrideTs = null;
-    setOverride(i, null);
-    toast(`${label}: Override entfernt`);
+
+    // Modus B: ganzes Satz-Ergebnis -> auf den EINEN offenen Teilsatz verteilen.
+    if (overrideDraft === '') { toast('Bitte ein Ergebnis eingeben'); return; }
+    const T = parseInt(overrideDraft, 10);
+    if (Number.isNaN(T) || T < 0) { toast('Ungültiger Wert'); return; }
+
+    if (ranges.length === 1) { // nur ein Teilsatz -> Satz = Teilsatz
+      const maxV = ranges[0].soll * 9;
+      if (T > maxV) { toast(`Höchstens ${maxV} möglich (${ranges[0].soll}×9)`); return; }
+      blk.overrides[0] = T;
+      const closed = autoCloseIfComplete(blk);
+      overrideSt = null; overrideTs = null; persist(); render();
+      toast(`Satz ${st + 1} auf ${T} Holz gesetzt${closed ? ' · abgeschlossen' : ''}`); return;
+    }
+
+    const open = openTeilsaetze(blk);
+    if (open.length === 0) { toast('Alle Teilsätze gesetzt — bitte einzeln bearbeiten'); return; }
+    if (open.length > 1) { toast(`${open.length} Teilsätze offen — bitte einzeln eingeben`); return; }
+    const i = open[0];
+    const known = knownTeilsatzSum(blk, i);
+    const diff = T - known;
+    // Nicht plausibel -> nichts eintragen, Sheet bleibt offen (keine Daten verändert).
+    if (diff < 0) { toast(`Ergebnis kleiner als erfasste Teilsätze (${known})`); return; }
+    const maxOpen = ranges[i].soll * 9;
+    if (diff > maxOpen) { toast(`${labels[i]} fasst höchstens ${maxOpen} — Rest wäre ${diff}`); return; }
+    blk.overrides[i] = diff;
+    const closed = autoCloseIfComplete(blk);
+    overrideSt = null; overrideTs = null; persist(); render();
+    toast(`${labels[i]} auf ${diff} Holz ergänzt${closed ? ` · Satz ${st + 1} abgeschlossen` : ''}`);
   }
 
+  // Entfernen betrifft IMMER nur den einen bearbeiteten Teilsatz (gibt es nur im Teilsatz-Modus).
+  // Der Satz-Modus verteilt nur eine Summe und bietet daher bewusst kein Massen-Löschen an —
+  // so kann eine unplausible/versehentliche Aktion nie mehrere manuelle Ergebnisse auf einmal killen.
   function resetOverride() {
+    if (!guardEdit()) return;
+    const st = overrideSt;
+    const blk = state.bloecke[state.aktiverSpieler][st];
+    if (overrideTs === null) { overrideSt = null; render(); return; }
     const i = overrideTs;
-    const label = MODUS_LABEL[ranges[i].modus] || ranges[i].modus;
-    overrideTs = null;
-    setOverride(i, null);
-    toast(`${label}: Override entfernt`);
+    const labels = teilsatzLabels();
+    const hadThrows = blk.wuerfe.slice(ranges[i].start, ranges[i].end).length > 0;
+    blk.overrides[i] = null;
+    // War der Satz (auto-)abgeschlossen und ist durch das Entfernen wieder unvollständig,
+    // öffnet er sich wieder — kein "fertiger" Satz mit offenem Teilsatz.
+    const reopened = blk.done && openTeilsaetze(blk).length > 0;
+    if (reopened) blk.done = false;
+    overrideSt = null; overrideTs = null; persist(); render();
+    toast(`${labels[i]}: ${hadThrows ? 'zurück auf erfasste Würfe' : 'Ergebnis entfernt'}${reopened ? ` · Satz ${st + 1} wieder offen` : ''}`);
   }
 
   let toastTimer;
@@ -1340,5 +1809,6 @@ export function spielLaufendView() {
   window.addEventListener('resize', onResize);
 
   render();
+  initSync();
   return root;
 }
