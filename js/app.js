@@ -8,6 +8,7 @@ import { statistikenView } from './views/statistiken.js';
 import { setupWkView } from './views/setup-wk.js';
 import { spielLaufendView } from './views/spiel-laufend.js';
 import { beitretenView } from './views/beitreten.js';
+import { spielerView } from './views/login.js';
 
 register('/menu', menuView);
 register('/neues-spiel', neuesSpielView);
@@ -15,6 +16,7 @@ register('/statistiken', statistikenView);
 register('/setup/sportkegler-wk', setupWkView);
 register('/spiel-laufend', spielLaufendView);
 register('/beitreten', beitretenView);
+register('/spieler', spielerView);
 
 start({ mount: '#app', notFound: menuView });
 

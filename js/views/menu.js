@@ -5,7 +5,7 @@ const TILES = [
   { label: 'Neues Spiel', desc: 'Ein Spiel starten und Würfe erfassen', icon: '🎳', route: '/neues-spiel' },
   { label: 'Spiel beitreten', desc: 'Mit Code einem geteilten Spiel beitreten', icon: '🔗', route: '/beitreten' },
   { label: 'Statistiken', desc: 'Ergebnisse und Auswertungen', icon: '📊', route: '/statistiken' },
-  { label: 'Spieler', desc: 'Account & Profil — folgt', icon: '👤', disabled: true },
+  { label: 'Spieler', desc: 'Account & Profil (geräteübergreifend)', icon: '👤', route: '/spieler' },
   { label: 'Anlagen', desc: 'Kegelbahnen verknüpfen — folgt', icon: '📍', disabled: true },
 ];
 

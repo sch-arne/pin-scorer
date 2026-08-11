@@ -225,6 +225,16 @@ export async function pushStatus(remoteId, status) {
   if (error) throw error;
 }
 
+// Ergebnis-Snapshots bei Spielende schreiben (für die Statistik-Historie).
+// rows = [{ spiel_id, spieler_id, profil_id, gesamt, schnitt_satz, ... }].
+export async function pushResults(rows) {
+  if (!rows || !rows.length) return;
+  const { error } = await supabase
+    .from('spiel_ergebnis')
+    .upsert(rows, { onConflict: 'spiel_id,spieler_id' });
+  if (error) throw error;
+}
+
 // --- Realtime ---------------------------------------------------------------
 
 // Auf Aenderungen an satz_block + spiel_spieler eines Spiels lauschen.

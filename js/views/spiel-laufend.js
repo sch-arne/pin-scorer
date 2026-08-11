@@ -358,6 +358,26 @@ export function spielLaufendView() {
       toast('Bahn freigegeben'); render();
     } catch (e) { toast('Freigeben fehlgeschlagen'); }
   }
+  // Bei Spielende einen Ergebnis-Snapshot je EIGENEM Spieler in die DB schreiben
+  // (für die geräteübergreifende Statistik-Historie). Best-effort.
+  function pushResults() {
+    if (!linked || !syncMod || !meGeraet) return;
+    try {
+      const { players } = computeGameStats(c, state.bloecke, ranges);
+      const rows = [];
+      players.forEach((p, sp) => {
+        if (!canEdit(sp)) return;
+        const pid = owners[sp] && owners[sp].id;
+        if (!pid) return;
+        rows.push({
+          spiel_id: game.remoteId, spieler_id: pid, profil_id: meGeraet,
+          gesamt: p.gesamt, schnitt_satz: p.schnittSatz, schnitt_wurf: p.schnittWurf,
+          bester_satz: p.bester, neuner: p.neuner, fehl: p.fehl, wurf_count: p.wurfCount, rang: p.rang,
+        });
+      });
+      if (rows.length) syncMod.pushResults(rows).catch(() => {});
+    } catch (e) { /* Snapshot ist best-effort */ }
+  }
   function block(sp, st) { return state.bloecke[sp][st]; }
   function current() { return block(state.aktiverSpieler, state.aktiverSatz); }
   function laneOf(sp, st) { return c.bahnplan?.[sp]?.[st] ?? (c.ersteBahn + st); }
@@ -728,6 +748,7 @@ export function spielLaufendView() {
       finishSeen = true;
       statsOpen = true;
       setGameStatus(gameId, 'beendet');
+      pushResults();
     } else if (!done && finishSeen) {
       finishSeen = false;
       statsOpen = false;

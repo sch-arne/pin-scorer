@@ -1459,3 +1459,22 @@ button.mini-pin { cursor: pointer; }
 .join-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .join-go { width: 100%; margin-top: 14px; }
 .join-msg { min-height: 1.2em; margin: 12px 0 0; text-align: center; font-size: 0.9rem; color: var(--text-dim); }
+
+/* Account / Spieler-Seite */
+.acc-text { text-transform: none; letter-spacing: 0; font-size: 1.1rem; font-family: inherit; text-align: left; }
+.acc-label { display: block; margin: 14px 0 4px; font-size: 0.8rem; color: var(--text-dim); }
+.acc-logout { margin-top: 8px; }
+
+/* Statistik-Seite (lokale Historie + Konto-Überblick) */
+.stat-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 12px; }
+.stat-card { background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 10px 12px; }
+.stat-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.stat-date { font-size: 0.8rem; color: var(--text-dim); }
+.stat-prow { display: flex; align-items: center; justify-content: space-between; padding: 3px 0; }
+.stat-pname { font-size: 0.95rem; color: var(--text); }
+.stat-ptotal { color: var(--accent); font-weight: 800; }
+.status-badge.is-beendet { background: rgba(120, 200, 120, 0.18); color: #8fd08f; }
+.stat-acc-box { background: var(--surface-2); border: 1px solid rgba(245,166,35,0.3); border-radius: 12px; padding: 10px 12px; margin: 4px 0 12px; }
+.stat-acc-head { font-weight: 700; margin-bottom: 8px; }
+.stat-acc-empty { font-size: 0.85rem; color: var(--text-dim); margin: 4px 0 12px; }
+.stat-login-hint { display: block; text-align: center; padding: 10px; margin: 4px 0 12px; color: var(--accent); text-decoration: none; font-size: 0.9rem; border: 1px dashed rgba(245,166,35,0.4); border-radius: 12px; }

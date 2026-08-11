@@ -72,6 +72,10 @@ drop policy if exists profil_update on profil;
 create policy profil_update on profil for update
   using (id = auth.uid()) with check (id = auth.uid());
 
+drop policy if exists profil_delete on profil;
+create policy profil_delete on profil for delete
+  using (id = auth.uid());
+
 -- =============================================================================
 -- spiel — Mitglieder lesen; nur der Ersteller ändert Setup/Status
 -- =============================================================================
