@@ -501,9 +501,14 @@ export function spielLaufendView() {
     state.aktiverSpieler = sp;
     state.aktiverSatz = firstOpenSatz(sp);
     editIdx = null;
+    overrideSt = null; overrideTs = null; overrideDraft = '';
     persist(); render();
   }
-  function selectSatz(st) { state.aktiverSatz = st; editIdx = null; persist(); render(); }
+  function selectSatz(st) {
+    state.aktiverSatz = st; editIdx = null;
+    overrideSt = null; overrideTs = null; overrideDraft = '';
+    persist(); render();
+  }
 
   // koenigFlag (nur Kranz, per Langdruck): der Wurf fällt N Kranz-Kegel, der König (5)
   // bleibt stehen. Genaue Kranz-Kegel bleiben offen (kegel=null), gespeichert wird nur,
@@ -917,7 +922,11 @@ export function spielLaufendView() {
 
       ${satzTabs()}
 
-      ${satzOverviewOpen ? spielerUebersichtPanel() : `
+      ${satzOverviewOpen ? `
+      <div class="erf-satz erf-satz-ueber">
+        ${spielerUebersichtPanel()}
+        ${overviewNumpad()}
+      </div>` : `
       <div class="erf-satz">
         ${linked && !canEdit(state.aktiverSpieler) ? lockBanner() : ''}
         ${kegelBoard(blk)}
@@ -929,7 +938,6 @@ export function spielLaufendView() {
       <div id="erf-toast" class="erf-toast"></div>
       ${settingsOpen ? settingsPanel() : ''}
       ${laneSettingsOpen ? laneSettingsPanel() : ''}
-      ${overrideSt !== null ? overridePanel() : ''}
       ${pinPick ? pinPickPanel() : ''}
       ${statsOpen ? statsPanel() : ''}`;
   }
@@ -1200,14 +1208,20 @@ export function spielLaufendView() {
         ? ranges.map((_, i) => {
           const t = teilsatzStats(blk, ranges, i, status === 'done');
           const touched = t.count > 0 || t.manual;
-          return `<td class="ub-ts ub-edit${t.manual ? ' is-manual' : ''}${t.mark ? ' is-mark' : ''}" data-edit-ts="${st}:${i}" role="button" tabindex="0" aria-label="${esc(tsLabels[i])}, Satz ${st + 1} bearbeiten">${touched ? t.val : '·'}${t.mark ? ' ⚠' : ''}</td>`;
+          // Wird diese Teilsatz-Zelle gerade per Ziffernblock bearbeitet? -> Entwurf live zeigen.
+          const editing = overrideSt === st && overrideTs === i;
+          const cell = editing ? (overrideDraft || '–') : (touched ? t.val : '·');
+          return `<td class="ub-ts ub-edit${t.manual ? ' is-manual' : ''}${t.mark ? ' is-mark' : ''}${editing ? ' is-editing' : ''}" data-edit-ts="${st}:${i}" role="button" tabindex="0" aria-label="${esc(tsLabels[i])}, Satz ${st + 1} bearbeiten">${cell}${!editing && t.mark ? ' ⚠' : ''}</td>`;
         }).join('')
         : '';
+      // Satz-Holz-Zelle: bearbeitet wird das ganze Satz-Ergebnis (overrideTs === null).
+      const editingSatz = overrideSt === st && overrideTs === null;
+      const holzCell = editingSatz ? (overrideDraft || '–') : (empty ? '–' : satzHolz(blk, ranges));
       return `<tr class="ub-row is-${status}${active ? ' is-active' : ''}" data-satz="${st}">
         <td class="ub-bahn">B${bahn}</td>
         <td class="ub-satz">Satz ${st + 1}</td>
         ${tsCells}
-        <td class="ub-holz ub-edit" data-edit-satz="${st}" role="button" tabindex="0" aria-label="Satz ${st + 1} Ergebnis bearbeiten">${empty ? '–' : satzHolz(blk, ranges)}</td>
+        <td class="ub-holz ub-edit${editingSatz ? ' is-editing' : ''}" data-edit-satz="${st}" role="button" tabindex="0" aria-label="Satz ${st + 1} Ergebnis bearbeiten">${holzCell}</td>
       </tr>`;
     }).join('');
 
@@ -1234,7 +1248,7 @@ export function spielLaufendView() {
             ${metric(stats.fehl, 'Fehlwürfe')}
             ${metric(stats.wurfCount, 'Würfe')}
           </div>
-          <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an, um es anzupassen.</p>
+          <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an und ändere es unten mit dem Ziffernblock.</p>
           <div class="ueber-tablewrap">
             <table class="ub-table">
               <thead>
@@ -1603,7 +1617,12 @@ export function spielLaufendView() {
     // Spieler-Übersicht (inline): der ▦-Button schaltet zwischen Erfassung und Übersicht um.
     // Die Übersichts-Zeilen tragen data-satz und werden über die Satz-Tab-Verdrahtung
     // (selectSatz) mitgenommen — ein Tipp wählt den Satz, die Übersicht bleibt offen.
-    act('satz-overview', () => { satzOverviewOpen = !satzOverviewOpen; render(); });
+    act('satz-overview', () => {
+      satzOverviewOpen = !satzOverviewOpen;
+      // Beim Verlassen der Übersicht eine ggf. angefangene Zellen-Bearbeitung verwerfen.
+      overrideSt = null; overrideTs = null; overrideDraft = '';
+      render();
+    });
 
     // Standard-Bilder-Editor (in den Einstellungen)
     root.querySelectorAll('[data-sbnum]').forEach((b) =>
@@ -1643,11 +1662,6 @@ export function spielLaufendView() {
       b.addEventListener('click', () => overrideKey(b.dataset.ovnum)));
     act('override-apply', applyOverride);
     act('override-reset', resetOverride);
-    root.querySelectorAll('[data-act="override-close"]').forEach((b) =>
-      b.addEventListener('click', (e) => {
-        if (b.classList.contains('erf-settings-backdrop') && e.target !== b) return;
-        overrideSt = null; overrideTs = null; render();
-      }));
   }
 
   // Teilsatz-Ergebnis manuell setzen: Sheet für Satz `st`, Teilsatz `i` (aus der Übersicht).
@@ -1673,62 +1687,53 @@ export function spielLaufendView() {
 
   // Overlay-Sheet mit eigenem Ziffernblock. Zwei Modi: einzelnen Teilsatz setzen (overrideTs=i)
   // oder das ganze Satz-Ergebnis eingeben (overrideTs=null -> auf den offenen Teilsatz verteilen).
-  function overridePanel() {
-    const st = overrideSt;
-    const blk = state.bloecke[state.aktiverSpieler][st];
-    const bahn = laneOf(state.aktiverSpieler, st);
-    const draft = overrideDraft === '' ? '—' : overrideDraft;
-    const numBtn = (n) => `<button type="button" class="erf-num${n === 0 ? ' zero' : ''}" data-ovnum="${n}">${n}</button>`;
+  // Ziffernblock unter der Spieler-Übersicht: bearbeitet die in der Tabelle angetippte Zelle
+  // (overrideSt/overrideTs). Ohne gewählte Zelle sind die Ziffern gesperrt und ein Hinweis steht
+  // oben. Alle Data-Hooks (data-ovnum / override-apply / override-reset) sind bereits in wire()
+  // verdrahtet und teilen sich die Logik mit dem alten Overlay.
+  function overviewNumpad() {
+    const active = overrideSt !== null;
 
-    let title, sub, hint = '', resetBtn = '';
-    if (overrideTs !== null) {
-      const r = ranges[overrideTs];
-      const label = MODUS_LABEL[r.modus] || r.modus;
-      const throwsIn = blk.wuerfe.slice(r.start, r.end);
-      const wSum = throwsIn.reduce((a, w) => a + w, 0);
-      title = 'Teilsatz-Ergebnis';
-      sub = `Satz ${st + 1} · Bahn ${bahn} · ${esc(label)} · aus Würfen: ${throwsIn.length} Wurf, ${wSum} Holz`;
-      hint = `Möglich: 0–${r.soll * 9} Holz (${r.soll}×9).`;
-      // Entfernen NUR über diesen klaren Knopf (nie über ein leeres Feld). Bei erfassten Würfen
-      // ist es ein Zurückfallen auf die Würfe-Summe, sonst ein echtes Entfernen des Ergebnisses.
-      const resetLabel = throwsIn.length > 0 ? '↺ Auf Würfe zurück' : '↺ Ergebnis entfernen';
-      resetBtn = `<button type="button" class="erf-btn danger" data-act="override-reset">${resetLabel}</button>`;
+    // Kontextzeile über dem Block: was wird bearbeitet + zulässiger Bereich + Entfernen.
+    let bar;
+    if (!active) {
+      bar = `<div class="ueber-editbar is-idle">Ergebnis in der Tabelle antippen, um es zu ändern.</div>`;
     } else {
-      const labels = teilsatzLabels();
-      const open = openTeilsaetze(blk);
-      title = 'Satz-Ergebnis';
-      sub = `Satz ${st + 1} · Bahn ${bahn}`;
-      if (ranges.length > 1) {
-        if (open.length === 1) hint = `Ergänzt automatisch <strong>${esc(labels[open[0]])}</strong> (der einzige offene Teilsatz).`;
-        else if (open.length === 0) hint = 'Alle Teilsätze bereits gesetzt — bitte einzeln bearbeiten.';
-        else hint = `${open.length} Teilsätze offen — bitte einzeln eingeben.`;
+      const st = overrideSt;
+      const blk = state.bloecke[state.aktiverSpieler][st];
+      const bahn = laneOf(state.aktiverSpieler, st);
+      let ctxText, resetBtn = '';
+      if (overrideTs !== null) {
+        const r = ranges[overrideTs];
+        const label = MODUS_LABEL[r.modus] || r.modus;
+        const throwsIn = blk.wuerfe.slice(r.start, r.end);
+        ctxText = `Satz ${st + 1} · Bahn ${bahn} · ${esc(label)} · 0–${r.soll * 9}`;
+        // Entfernen NUR über diesen klaren Knopf. Bei erfassten Würfen ist es ein Zurückfallen auf
+        // die Würfe-Summe, sonst ein echtes Entfernen des Ergebnisses.
+        const resetLabel = throwsIn.length > 0 ? '↺ Auf Würfe' : '↺ Entfernen';
+        resetBtn = `<button type="button" class="ueber-editreset" data-act="override-reset">${resetLabel}</button>`;
       } else {
-        hint = `Möglich: 0–${ranges[0].soll * 9} Holz.`;
+        const labels = teilsatzLabels();
+        const open = openTeilsaetze(blk);
+        if (ranges.length > 1) {
+          if (open.length === 1) ctxText = `Satz ${st + 1} · Bahn ${bahn} · ergänzt ${esc(labels[open[0]])}`;
+          else if (open.length === 0) ctxText = `Satz ${st + 1} · alle Teilsätze gesetzt — einzeln bearbeiten`;
+          else ctxText = `Satz ${st + 1} · ${open.length} Teilsätze offen — einzeln eingeben`;
+        } else {
+          ctxText = `Satz ${st + 1} · Bahn ${bahn} · 0–${ranges[0].soll * 9}`;
+        }
       }
+      bar = `<div class="ueber-editbar"><span class="ueber-editctx">${ctxText}</span>${resetBtn}</div>`;
     }
 
+    const btn = (n) => `<button type="button" class="erf-num${n === 0 ? ' zero' : ''}" data-ovnum="${n}"${active ? '' : ' disabled'}>${n}</button>`;
     return `
-      <div class="erf-settings-backdrop" data-act="override-close">
-        <div class="erf-settings-sheet" role="dialog" aria-modal="true" aria-label="${title}">
-          <div class="erf-settings-head">
-            <h2 class="erf-settings-title">${title}</h2>
-            <button type="button" class="icon-btn" data-act="override-close" aria-label="Schließen">✕</button>
-          </div>
-          <div class="erf-settings-body">
-            <p class="erf-lane-sub">${sub}</p>
-            ${hint ? `<p class="erf-ov-hint">${hint}</p>` : ''}
-            <div class="erf-ov-value" aria-live="polite">${draft}</div>
-            <div class="erf-numpad erf-ov-numpad">
-              ${[7, 8, 9, 4, 5, 6, 1, 2, 3].map(numBtn).join('')}
-              <button type="button" class="erf-num" data-ovnum="back" aria-label="Letzte Ziffer löschen">⌫</button>
-              ${numBtn(0)}
-            </div>
-            <div class="erf-lane-actions">
-              <button type="button" class="erf-btn done" data-act="override-apply">✓ Übernehmen</button>
-              ${resetBtn}
-            </div>
-          </div>
-        </div>
+      ${bar}
+      <div class="erf-numpad erf-ueber-numpad">
+        ${[7, 8, 9, 4, 5, 6, 1, 2, 3].map(btn).join('')}
+        <button type="button" class="erf-num erf-num-act" data-ovnum="back" aria-label="Letzte Ziffer löschen"${active ? '' : ' disabled'}>⌫</button>
+        ${btn(0)}
+        <button type="button" class="erf-num erf-num-act" data-act="override-apply" aria-label="Ergebnis übernehmen"${active ? '' : ' disabled'}>✓</button>
       </div>`;
   }
 

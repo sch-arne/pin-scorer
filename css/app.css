@@ -1426,6 +1426,36 @@ button.mini-pin { cursor: pointer; }
 .erf-ov-hint { margin: 2px 0 8px; font-size: 0.8rem; color: var(--text-dim); }
 .erf-ov-hint strong { color: var(--accent); }
 
+/* Übersicht als Inhalt der Satz-Box: die äußere .erf-satz liefert schon Rahmen/Hintergrund/Padding,
+   daher die innere .erf-ueber-Box flach halten (kein doppelter Rahmen). */
+.erf-satz-ueber .erf-ueber { border: 0; background: none; border-radius: 0; padding: 0; }
+/* Gerade per Ziffernblock bearbeitete Zelle hervorheben (Akzent-Rahmen + getönter Hintergrund). */
+.ub-edit.is-editing {
+  color: var(--accent);
+  background: rgba(245, 166, 35, 0.14);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 4px;
+  font-weight: 800;
+}
+/* Kontextzeile zwischen Tabelle und Ziffernblock: was wird bearbeitet + Entfernen-Knopf. */
+.ueber-editbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 10px;
+  min-height: 30px;
+  font-size: 0.8rem; color: var(--text-dim);
+}
+.ueber-editbar.is-idle { justify-content: center; }
+.ueber-editctx { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ueber-editreset {
+  flex: 0 0 auto;
+  padding: 5px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); font-size: 0.78rem; font-weight: 700; cursor: pointer;
+}
+.ueber-editreset:active { background: var(--surface); }
+.erf-ueber-numpad { flex: 0 0 auto; }
+.erf-ueber-numpad .erf-num[disabled] { opacity: 0.4; cursor: default; }
+
 /* ── Mehrgeräte-Sync ─────────────────────────────────────────────────────── */
 /* Lock-Symbol im Bahn-Tab (fremd bespielter Spieler). */
 .ept-lock { font-size: 0.8rem; line-height: 1; }
