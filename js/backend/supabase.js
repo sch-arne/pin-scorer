@@ -22,7 +22,18 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     persistSession: true,
     autoRefreshToken: true,
     storageKey: 'pins-scorer:auth',
-    detectSessionInUrl: true, // fuer den spaeteren Magic-Link-Callback (Accounts)
+    detectSessionInUrl: true, // fuer Magic-Link-, Bestaetigungs- und Reset-Callbacks
   },
   realtime: { params: { eventsPerSecond: 10 } },
 });
+
+// Passwort-Reset: Klickt der Nutzer den Reset-Link, verarbeitet der Client die URL
+// beim Laden und feuert EINMAL das PASSWORD_RECOVERY-Event — moeglicherweise BEVOR die
+// Login-View ihren eigenen Listener setzt. Deshalb hier ein synchron (bei Client-
+// Erstellung) registrierter Listener, der ein Flag setzt; die View liest es beim Mount.
+let _recoveryPending = false;
+supabase.auth.onAuthStateChange((event) => {
+  if (event === 'PASSWORD_RECOVERY') _recoveryPending = true;
+});
+export function isRecoveryPending() { return _recoveryPending; }
+export function clearRecovery() { _recoveryPending = false; }

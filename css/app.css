@@ -1573,6 +1573,20 @@ button.mini-pin { cursor: pointer; }
 .acc-label { display: block; margin: 14px 0 4px; font-size: 0.8rem; color: var(--text-dim); }
 .acc-logout { margin-top: 8px; }
 
+/* Umschalter Anmelden / Registrieren */
+.acc-tabs { display: flex; gap: 6px; margin: 0 0 14px; padding: 4px; background: var(--surface-2); border: 1px solid var(--border, #2c3340); border-radius: 12px; }
+.acc-tab { flex: 1; min-height: 40px; font-size: 0.95rem; font-weight: 700; color: var(--text-dim); background: transparent; border: 0; border-radius: 9px; cursor: pointer; }
+.acc-tab.is-on { color: #1a1205; background: var(--accent); }
+
+/* Passwortfeld mit Anzeigen/Verbergen */
+.acc-field { position: relative; margin-top: 10px; }
+.acc-field .join-input { padding-right: 48px; }
+.acc-eye { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; background: transparent; border: 0; border-radius: 8px; cursor: pointer; opacity: 0.75; }
+.acc-eye:active { background: var(--surface); }
+
+/* „Passwort vergessen?" / Zurück-Link */
+.acc-link { display: block; width: 100%; margin: 10px 0 0; padding: 6px; font-size: 0.9rem; color: var(--accent); background: transparent; border: 0; cursor: pointer; text-align: center; }
+
 /* Statistik-Seite (lokale Historie + Konto-Überblick) */
 .stat-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 12px; }
 .stat-card { background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 10px 12px; }

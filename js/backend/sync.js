@@ -18,9 +18,9 @@
 // synchronisiert.
 
 import { supabase } from './supabase.js';
-import { ensureGeraet, geraetId } from './geraet.js';
+import { ensureGeraet, geraetId, kontoId } from './geraet.js';
 
-export { ensureGeraet, geraetId };
+export { ensureGeraet, geraetId, kontoId };
 
 const STALE_MS = 30_000; // Besitz gilt als "inaktiv", wenn Heartbeat aelter (siehe RLS)
 
@@ -161,9 +161,12 @@ export async function pullGame(remoteId) {
 }
 
 // Einem Spiel per Beitritts-Code beitreten (RPC), dann vollstaendig laden.
+// p_geraet = eigene Geraete-ID (RLS prueft, dass sie zu meinem Account gehoert).
 export async function joinGame(code) {
-  await ensureGeraet();
-  const { data: remoteId, error } = await supabase.rpc('spiel_beitreten', { p_code: (code || '').trim() });
+  const geraet = await ensureGeraet();
+  const { data: remoteId, error } = await supabase.rpc('spiel_beitreten', {
+    p_code: (code || '').trim(), p_geraet: geraet,
+  });
   if (error) throw error;
   return pullGame(remoteId);
 }
