@@ -185,6 +185,7 @@ export function spielLaufendView() {
   let settingsOpen = false; // Einstellungsmenü (⚙) offen? — enthält u.a. die Spiel-Details
   let laneSettingsOpen = false; // Bahneinstellung (⚙ in der Satz-Kopfzeile) offen?
   let satzOverviewOpen = false; // Spieler-Übersicht (inline, statt Wurferfassung) offen?
+  let ueberTab = 'uebersicht'; // aktiver Tab der Übersicht: 'uebersicht' (Bahnen editieren) | 'statistik' | 'verteilung' (Wurf-Häufigkeit)
   let overrideSt = null; // Satz-Index, dessen Ergebnis-Sheet offen ist (null = zu); bearbeitet wird aus der Übersicht
   let overrideTs = null; // Teilsatz-Index im Sheet (null = ganzes Satz-Ergebnis eingeben -> auf offenen Teilsatz verteilen)
   let overrideDraft = ''; // im Override-Sheet eingetippte Ziffern
@@ -925,7 +926,7 @@ export function spielLaufendView() {
       ${satzOverviewOpen ? `
       <div class="erf-satz erf-satz-ueber">
         ${spielerUebersichtPanel()}
-        ${overviewNumpad()}
+        ${ueberTab === 'uebersicht' ? overviewNumpad() : ''}
       </div>` : `
       <div class="erf-satz">
         ${linked && !canEdit(state.aktiverSpieler) ? lockBanner() : ''}
@@ -949,6 +950,8 @@ export function spielLaufendView() {
   function statsPanel() {
     const { players, ranking } = computeGameStats(c, state.bloecke, ranges);
     const multi = players.length > 1;
+    const hasKranz = ranges.some((r) => r.modus === 'kranz-abraeumen');
+    const hasAbraeum = ranges.some((r) => r.modus === 'abraeumen' || r.modus === 'kranz-abraeumen');
     const medal = (r) => (r === 1 ? '🥇' : r === 2 ? '🥈' : r === 3 ? '🥉' : `${r}.`);
 
     const rankingBox = multi ? `
@@ -962,9 +965,26 @@ export function spielLaufendView() {
       </div>` : '';
 
     const metric = (val, lbl) => `<div class="stats-metric"><span class="stats-metric-val">${val}</span><span class="stats-metric-lbl">${lbl}</span></div>`;
+    // Gefallene Kegel je Einzelwurf (sofern einzeln erfasst), nach Teilsatz gruppiert; 9 = Alle Neune,
+    // 0 = Fehlwurf werden hervorgehoben. Teilsätze, die nur als Summe eingetragen wurden, bleiben leer.
+    const MODUS_LBL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz' };
+    const wuerfeRow = (s) => {
+      const groups = s.teilsaetze.filter((t) => t.wuerfe.length);
+      if (!groups.length) return '';
+      const multi = groups.length > 1;
+      const html = groups.map((t) => {
+        const chips = t.wuerfe.map((w) => `<span class="stats-wurf${w === 9 ? ' is-neuner' : w === 0 ? ' is-fehl' : ''}">${w}</span>`).join('');
+        const lbl = multi ? `<span class="stats-wurf-lbl">${MODUS_LBL[t.modus] || t.modus}</span>` : '';
+        return `<span class="stats-wurf-group">${lbl}${chips}</span>`;
+      }).join('');
+      return `<div class="stats-wuerfe">${html}</div>`;
+    };
     const cards = players.map((p) => {
       const satzRows = p.saetze.map((s) => `
-        <div class="stats-satz-row"><span>Satz ${s.satz} · Bahn ${s.bahn}</span><strong>${s.holz}</strong></div>`).join('');
+        <div class="stats-satz">
+          <div class="stats-satz-row"><span>Satz ${s.satz} · Bahn ${s.bahn}</span><strong>${s.holz}</strong></div>
+          ${wuerfeRow(s)}
+        </div>`).join('');
       return `
         <div class="stats-card">
           <div class="stats-card-head">
@@ -976,6 +996,9 @@ export function spielLaufendView() {
             ${metric(p.bester, 'bester Satz')}
             ${metric(p.schnittWurf.toFixed(1), 'Ø / Wurf')}
             ${metric(p.neuner, 'Alle Neune ☆')}
+            ${p.vollChance ? metric(Math.round(p.neunerQuote * 100) + ' %', '9er-Quote (volles Bild)') : ''}
+            ${hasKranz ? metric(p.kranz, 'Kränze ♔') : ''}
+            ${hasAbraeum && p.raeumer ? metric(p.raeumSchnitt.toFixed(1), 'Ø Würfe/Räumer') : ''}
             ${metric(p.fehl, 'Fehlwürfe')}
             ${metric(p.wurfCount, 'Würfe')}
           </div>
@@ -1233,6 +1256,55 @@ export function spielLaufendView() {
 
     const metric = (val, lbl) => `<div class="stats-metric"><span class="stats-metric-val">${val}</span><span class="stats-metric-lbl">${lbl}</span></div>`;
 
+    // Inhalt „Übersicht": die editierbare Bahnen-Tabelle (Teilsatz-/Satz-Ergebnisse antippbar).
+    const uebersichtTab = `
+      <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an und ändere es unten mit dem Ziffernblock.</p>
+      <div class="ueber-tablewrap">
+        <table class="ub-table">
+          <thead>
+            <tr>
+              <th class="ub-h-bahn">Bahn</th>
+              <th class="ub-h-satz">Satz</th>
+              ${tsHead}
+              <th class="ub-h-holz">Holz</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+          <tfoot>
+            <tr>
+              <td class="ub-bahn ub-foot-label">Σ</td>
+              <td class="ub-satz"></td>
+              ${tsFoot}
+              <td class="ub-holz ub-grand">${playerTotal(sp)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>`;
+
+    // Inhalt „Statistik": die Kennzahl-Kacheln. Kränze nur, wenn Kranz-Abräumen gespielt wird.
+    const hasKranz = ranges.some((r) => r.modus === 'kranz-abraeumen');
+    const hasAbraeum = ranges.some((r) => r.modus === 'abraeumen' || r.modus === 'kranz-abraeumen');
+    const statistikTab = `
+      <div class="stats-metrics">
+        ${metric(stats.schnittSatz.toFixed(1), 'Ø / Satz')}
+        ${metric(stats.bester, 'bester Satz')}
+        ${metric(stats.schnittWurf.toFixed(1), 'Ø / Wurf')}
+        ${metric(stats.neuner, 'Alle Neune ☆')}
+        ${stats.vollChance ? metric(Math.round(stats.neunerQuote * 100) + ' %', '9er-Quote (volles Bild)') : ''}
+        ${hasKranz ? metric(stats.kranz, 'Kränze ♔') : ''}
+        ${hasAbraeum && stats.raeumer ? metric(stats.raeumSchnitt.toFixed(1), 'Ø Würfe/Räumer') : ''}
+        ${metric(stats.fehl, 'Fehlwürfe')}
+        ${metric(stats.wurfCount, 'Würfe')}
+      </div>`;
+
+    // Tab-Leiste + aktiver Inhalt.
+    const tab = (id, label) =>
+      `<button type="button" role="tab" aria-selected="${ueberTab === id}" class="ueber-tab${ueberTab === id ? ' is-active' : ''}" data-uebertab="${id}">${label}</button>`;
+    const body =
+      ueberTab === 'statistik' ? statistikTab :
+      ueberTab === 'verteilung' ? wurfVerteilungTab(arr) :
+      uebersichtTab;
+
     return `
       <div class="erf-ueber">
         <div class="ueber-scroll">
@@ -1240,38 +1312,46 @@ export function spielLaufendView() {
             <span class="ueber-name">${esc(playerName(sp))}</span>
             <span class="ueber-total">${stats.gesamt}</span>
           </div>
-          <div class="stats-metrics">
-            ${metric(stats.schnittSatz.toFixed(1), 'Ø / Satz')}
-            ${metric(stats.bester, 'bester Satz')}
-            ${metric(stats.schnittWurf.toFixed(1), 'Ø / Wurf')}
-            ${metric(stats.neuner, 'Alle Neune ☆')}
-            ${metric(stats.fehl, 'Fehlwürfe')}
-            ${metric(stats.wurfCount, 'Würfe')}
+          <div class="ueber-tabs" role="tablist">
+            ${tab('uebersicht', 'Übersicht')}
+            ${tab('statistik', 'Statistik')}
+            ${tab('verteilung', 'Wurf-Bild')}
           </div>
-          <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an und ändere es unten mit dem Ziffernblock.</p>
-          <div class="ueber-tablewrap">
-            <table class="ub-table">
-              <thead>
-                <tr>
-                  <th class="ub-h-bahn">Bahn</th>
-                  <th class="ub-h-satz">Satz</th>
-                  ${tsHead}
-                  <th class="ub-h-holz">Holz</th>
-                </tr>
-              </thead>
-              <tbody>${rows}</tbody>
-              <tfoot>
-                <tr>
-                  <td class="ub-bahn ub-foot-label">Σ</td>
-                  <td class="ub-satz"></td>
-                  ${tsFoot}
-                  <td class="ub-holz ub-grand">${playerTotal(sp)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+          ${body}
         </div>
       </div>`;
+  }
+
+  // Inhalt „Wurf-Bild": wie häufig welches Ergebnis (0–9 Holz) geworfen wurde. Zählt nur die
+  // einzeln ERFASSTEN Würfe des aktiven Spielers (rein als Summe eingetragene Ergebnisse liefern
+  // keine Einzelwürfe). Balken proportional zum häufigsten Wert; 9 (Alle Neune) und 0 (Fehl)
+  // sind farblich hervorgehoben.
+  function wurfVerteilungTab(arr) {
+    const alle = arr.flatMap((b) => (Array.isArray(b.wuerfe) ? b.wuerfe : []));
+    const dist = Array.from({ length: 10 }, () => 0);
+    alle.forEach((w) => { if (w >= 0 && w <= 9) dist[w] += 1; });
+    const total = alle.length;
+    if (total === 0) {
+      return `<p class="ueber-dist-empty">Noch keine Einzelwürfe erfasst.<br><span>Nur als Summe eingetragene Ergebnisse zählen hier nicht mit.</span></p>`;
+    }
+    const maxCount = Math.max(1, ...dist);
+    const rows = [];
+    for (let v = 9; v >= 0; v -= 1) {
+      const count = dist[v];
+      const pct = Math.round((count / total) * 100);
+      const barW = (count / maxCount) * 100;
+      const cls = v === 9 ? ' is-neuner' : v === 0 ? ' is-fehl' : '';
+      const note = v === 9 ? '<span class="ud-note">☆</span>' : v === 0 ? '<span class="ud-note">Fehl</span>' : '';
+      rows.push(`
+        <div class="ud-row${cls}">
+          <span class="ud-val">${v}${note}</span>
+          <span class="ud-bar"><span class="ud-fill" style="width:${barW}%"></span></span>
+          <span class="ud-count">${count}<span class="ud-pct">${pct}%</span></span>
+        </div>`);
+    }
+    return `
+      <p class="ueber-edithint">${total} Würfe erfasst · wie häufig welches Holz-Ergebnis fiel.</p>
+      <div class="ueber-dist">${rows.join('')}</div>`;
   }
 
   // Kegel-Raute: welche Kegel im Ziel-Wurf gefallen/stehen (anklickbar).
@@ -1623,6 +1703,17 @@ export function spielLaufendView() {
       overrideSt = null; overrideTs = null; overrideDraft = '';
       render();
     });
+
+    // Tabs innerhalb der Übersicht (Übersicht / Statistik / Wurf-Bild) umschalten. Ein
+    // Tab-Wechsel verwirft eine angefangene Zellen-Bearbeitung (Ziffernblock gibt es nur im
+    // Übersicht-Tab).
+    root.querySelectorAll('[data-uebertab]').forEach((b) =>
+      b.addEventListener('click', () => {
+        if (ueberTab === b.dataset.uebertab) return;
+        ueberTab = b.dataset.uebertab;
+        overrideSt = null; overrideTs = null; overrideDraft = '';
+        render();
+      }));
 
     // Standard-Bilder-Editor (in den Einstellungen)
     root.querySelectorAll('[data-sbnum]').forEach((b) =>

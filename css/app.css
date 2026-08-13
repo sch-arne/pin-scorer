@@ -1330,6 +1330,24 @@ button.mini-pin { cursor: pointer; }
 .stats-satz-row span { color: var(--text-dim); }
 .stats-satz-row strong { font-size: 1rem; }
 
+/* Einzelwürfe je Satz (gefallene Kegel), nach Teilsatz gruppiert. Nur sichtbar, wenn Würfe
+   einzeln erfasst wurden. */
+.stats-wuerfe { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 0 2px 8px; }
+.stats-wurf-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.stats-wurf-lbl { font-size: 0.68rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.03em; margin-right: 2px; }
+.stats-wurf {
+  min-width: 24px;
+  text-align: center;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.stats-wurf.is-neuner { border-color: var(--accent); color: var(--accent); }
+.stats-wurf.is-fehl { color: var(--text-dim); opacity: 0.7; }
+
 .stats-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
 .stats-actions .erf-btn { width: 100%; display: flex; align-items: center; justify-content: center; text-decoration: none; }
 
@@ -1372,7 +1390,67 @@ button.mini-pin { cursor: pointer; }
 .ueber-name { font-weight: 800; font-size: 1.15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ueber-total { flex: 0 0 auto; font-weight: 800; font-size: 1.7rem; color: var(--accent); line-height: 1; }
 
-.ueber-tablewrap { margin-top: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* Tabs innerhalb der Übersicht (Übersicht / Statistik / Wurf-Bild). */
+.ueber-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+.ueber-tab {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ueber-tab.is-active { border-color: var(--accent); background: var(--surface-2); color: var(--text); }
+
+.ueber-tablewrap { margin-top: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Wurf-Bild: horizontales Balken-Histogramm der Holz-Ergebnisse (0–9). */
+.ueber-dist { display: flex; flex-direction: column; gap: 6px; }
+.ud-row { display: flex; align-items: center; gap: 10px; }
+.ud-val {
+  flex: 0 0 auto;
+  width: 44px;
+  display: flex; align-items: baseline; gap: 4px;
+  font-weight: 800; font-size: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+.ud-note { font-size: 0.6rem; font-weight: 700; color: var(--text-dim); }
+.ud-bar {
+  flex: 1 1 auto;
+  height: 18px;
+  background: var(--surface-2);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.ud-fill {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  background: var(--text-dim);
+  border-radius: 6px;
+  transition: width 0.18s ease;
+}
+.ud-count {
+  flex: 0 0 auto;
+  width: 62px;
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.ud-pct { margin-left: 5px; font-size: 0.72rem; font-weight: 600; color: var(--text-dim); }
+.ud-row.is-neuner .ud-val { color: var(--accent); }
+.ud-row.is-neuner .ud-fill { background: var(--accent); }
+.ud-row.is-fehl .ud-val,
+.ud-row.is-fehl .ud-count { color: var(--text-dim); }
+.ueber-dist-empty { text-align: center; color: var(--text-dim); font-size: 0.9rem; margin: 28px 0; line-height: 1.5; }
+.ueber-dist-empty span { font-size: 0.78rem; }
 .ub-table {
   width: 100%;
   border-collapse: separate;

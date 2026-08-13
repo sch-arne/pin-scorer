@@ -3,7 +3,7 @@
 // Verbindungsaussetzern. Cache-first für die App-Shell, Netzwerk-Fallback.
 // Bei Änderungen an den App-Dateien CACHE hochzählen (v1 -> v2 ...).
 
-const CACHE = 'pin-scorer-v33';
+const CACHE = 'pin-scorer-v37';
 
 // Relative Pfade -> funktionieren auch unter GitHub-Pages-Unterpfad /<repo>/
 const SHELL = [
@@ -40,8 +40,14 @@ const SHELL = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE)
-      // Einzelne fehlende Datei soll die Installation nicht sprengen
-      .then((cache) => Promise.allSettled(SHELL.map((url) => cache.add(url))))
+      // Einzelne fehlende Datei soll die Installation nicht sprengen.
+      // `cache: 'reload'` umgeht den HTTP-Cache des Browsers: ohne Cache-Control-Header
+      // (lokaler Dev-Server, GitHub Pages) würde sonst per Heuristik eine veraltete Datei
+      // vorgeladen und ein Update bliebe trotz hochgezähltem CACHE hängen.
+      .then((cache) => Promise.allSettled(
+        SHELL.map((url) => fetch(new Request(url, { cache: 'reload' }))
+          .then((res) => { if (res && res.ok) return cache.put(url, res); }))
+      ))
       .then(() => self.skipWaiting())
   );
 });
