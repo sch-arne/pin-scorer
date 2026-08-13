@@ -33,11 +33,43 @@ test('Gesamt, Bester, Schnitte je Spieler', () => {
   assert.equal(anna.wurfCount, 6);
   assert.equal(anna.neuner, 1);          // eine 9
   assert.equal(anna.fehl, 0);
+  assert.equal(anna.kranz, 0);           // ohne Kranz-Abräumen keine Kränze
 
   assert.equal(ben.gesamt, 30);
   assert.equal(ben.bester, 27);
   assert.equal(ben.neuner, 3);           // drei 9er
   assert.equal(ben.fehl, 1);             // eine 0
+
+  // Volle: jeder Wurf kommt aus vollem Bild -> vollChance = wurfCount, kein Abräumen.
+  assert.equal(anna.vollChance, 6);
+  assert.equal(anna.raeumer, 0);
+  assert.equal(anna.neunerQuote, 1 / 6); // eine 9 von 6 Würfen aus vollem Bild
+  assert.equal(ben.neunerQuote, 3 / 6);  // drei 9er von 6
+});
+
+test('Abräum-Tempo & Neuner-Quote am vollen Bild', () => {
+  // Ein Teilsatz Abräumen à 3 Würfe, 1 Satz. Zwei Läufe:
+  //   Lauf 1: 9 -> in 1 Wurf abgeräumt (9er-Räumer, aus vollem Bild)
+  //   Lauf 2: 6 (Rest 3 stehen), dann 3 -> in 2 Würfen abgeräumt; der 6er kam aus vollem Bild
+  const cfg = {
+    spielerListe: [{ name: 'R' }], saetze: 1, ersteBahn: 1, wuerfeProSatz: 3,
+    teilsaetze: [{ modus: 'abraeumen', wuerfe: 3 }],
+  };
+  const r = teilsatzRanges(cfg);
+  const bloecke = [[
+    {
+      wuerfe: [9, 6, 3],
+      kegel: [[1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 6, 7, 8], [4, 5, 9]],
+      koenig: [false, false, false], overrides: [null], done: true,
+    },
+  ]];
+  const p = computeGameStats(cfg, bloecke, r).players[0];
+  assert.equal(p.raeumer, 2);            // zwei vollständige Räumer
+  assert.equal(p.raeumSchnitt, 1.5);     // (1 + 2) Würfe / 2 Räumer
+  // Aus vollem Bild geworfen: der 9er (Lauf 1) und der 6er (Beginn Lauf 2). Die 3 und die 0
+  // kamen aus Restbildern -> keine Gelegenheit.
+  assert.equal(p.vollChance, 2);
+  assert.equal(p.neunerQuote, 0.5);      // ein 9er von zwei Würfen aus vollem Bild
 });
 
 test('wurfCount: manuelles Ergebnis (Override) zählt als voller Teilsatz', () => {
@@ -52,6 +84,29 @@ test('wurfCount: manuelles Ergebnis (Override) zählt als voller Teilsatz', () =
   // Satz 1: 4 Würfe; Satz 2: 2 Teilsätze à Soll 2 = 4 -> gesamt 8.
   assert.equal(players[0].wurfCount, 8);
   assert.equal(players[0].gesamt, 30 + 27); // (9+8+7+6) + (15+12)
+});
+
+test('Kränze: Kranz-Abräumen (nur König 5 bleibt) und Volle-Kranz (8 lässt König)', () => {
+  // Kranz-Abräumen: eine 8, die genau die 8 Nebenkegel fällt (König 5 steht) = Kranz.
+  // Nach einem Kranz wird wieder aufs volle Bild gespielt -> zweiter Wurf gleich = zweiter Kranz.
+  const kranzKegel = [1, 2, 3, 4, 6, 7, 8, 9];
+  const cfgK = {
+    spielerListe: [{ name: 'K' }], saetze: 1, ersteBahn: 1, wuerfeProSatz: 2,
+    teilsaetze: [{ modus: 'kranz-abraeumen', wuerfe: 2 }],
+  };
+  const rK = teilsatzRanges(cfgK);
+  const bloeckeK = [[
+    { wuerfe: [8, 8], kegel: [kranzKegel, kranzKegel], koenig: [false, false], overrides: [null], done: true },
+  ]];
+  assert.equal(computeGameStats(cfgK, bloeckeK, rK).players[0].kranz, 2);
+
+  // Volle: eine 8, deren Kegelbild genau den König (5) übrig lässt, zählt ebenfalls als Kranz;
+  // eine 8 ohne passendes Kegelbild (null) dagegen nicht.
+  const cfgV = { ...config, spielerListe: [{ name: 'V' }], saetze: 1, wuerfeProSatz: 3 };
+  const bloeckeV = [[
+    { wuerfe: [8, 8, 9], kegel: [kranzKegel, null, null], koenig: [false, false, false], overrides: [null], done: true },
+  ]];
+  assert.equal(computeGameStats(cfgV, bloeckeV, ranges).players[0].kranz, 1);
 });
 
 test('Platzierung nach Gesamt absteigend', () => {
