@@ -13,12 +13,25 @@
   <div id="app"></div>
   <script type="module" src="js/app.js"></script>
   <script>
+    // Lokale Entwicklung (localhost/127.0.0.1): KEIN Service-Worker. So gibt es
+    // beim Entwickeln kein Caching alter Dateien — man sieht immer den frischen
+    // Stand und testet gegen die Test-DB (siehe js/backend/config.local.js).
+    // In Produktion (GitHub Pages) laeuft der Service-Worker ganz normal.
+    const _istLokal = ['localhost', '127.0.0.1'].includes(location.hostname);
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js').catch((err) => {
-          console.warn('Service-Worker-Registrierung fehlgeschlagen:', err);
+      if (_istLokal) {
+        // Evtl. frueher registrierten SW + dessen Caches lokal wieder entfernen.
+        navigator.serviceWorker.getRegistrations().then((regs) => {
+          regs.forEach((r) => r.unregister());
         });
-      });
+        if (window.caches) caches.keys().then((keys) => keys.forEach((k) => caches.delete(k)));
+      } else {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('sw.js').catch((err) => {
+            console.warn('Service-Worker-Registrierung fehlgeschlagen:', err);
+          });
+        });
+      }
     }
   </script>
 </body>
