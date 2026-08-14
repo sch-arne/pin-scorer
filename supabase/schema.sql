@@ -33,11 +33,23 @@ create table if not exists geraet (
 create index if not exists idx_geraet_konto on geraet(konto);
 
 -- 1:1 zu auth.users. Wird erst im Account-Schritt befüllt (anon-Nutzer haben keins).
+-- Nur `anzeigename` wird öffentlich (View profil_public, siehe policies.sql) und erscheint
+-- im Livestream. Alle übrigen Felder sind privat (self-only RLS). vorname/nachname/verein
+-- sind selbst eingegeben; passnummer (Sportwinner-SpielerID) dient dem späteren Abgleich.
 create table if not exists profil (
   id            uuid primary key references auth.users(id) on delete cascade,
   anzeigename   text,
+  vorname       text,
+  nachname      text,
+  verein        text,
+  passnummer    text,
   erstellt_am   timestamptz not null default now()
 );
+-- Idempotent für bereits bestehende profil-Tabellen (ALTER ist ein No-op, wenn Spalte da).
+alter table profil add column if not exists vorname    text;
+alter table profil add column if not exists nachname   text;
+alter table profil add column if not exists verein     text;
+alter table profil add column if not exists passnummer text;
 
 -- Stub für den späteren Anlagen-Schritt (Menü-Kachel "Anlagen"). Bewusst minimal.
 create table if not exists anlage (

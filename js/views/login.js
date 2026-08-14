@@ -193,28 +193,173 @@ function renderRecovery(auth, body) {
   pw.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') set(); });
 }
 
-// --- Angemeldet: Profil + Abmelden -------------------------------------------
+// --- Angemeldet: Profil + Geräte + Abmelden + Konto löschen -------------------
 
 async function renderLoggedIn(auth, body, user) {
   let profil = null;
   try { profil = await auth.getProfil(); } catch (e) { /* ignore */ }
+  const v = (k) => esc((profil && profil[k]) || '');
   body.innerHTML = `
     <p class="join-hint">Angemeldet als <strong>${esc(user.email)}</strong>.</p>
+
+    <h2 class="acc-section">Profil</h2>
     <label class="acc-label" for="acc-name">Anzeigename</label>
-    <input id="acc-name" class="join-input acc-text" type="text" autocomplete="name" placeholder="Dein Name" value="${esc((profil && profil.anzeigename) || '')}" />
+    <input id="acc-name" class="join-input acc-text" type="text" autocomplete="name" placeholder="Dein Name" value="${v('anzeigename')}" />
+    <p class="acc-hint">Dein Anzeigename kann im öffentlichen Livestream sichtbar sein.</p>
+
+    <label class="acc-label" for="acc-vorname">Vorname</label>
+    <input id="acc-vorname" class="join-input acc-text" type="text" autocomplete="given-name" placeholder="optional" value="${v('vorname')}" />
+    <label class="acc-label" for="acc-nachname">Nachname</label>
+    <input id="acc-nachname" class="join-input acc-text" type="text" autocomplete="family-name" placeholder="optional" value="${v('nachname')}" />
+    <label class="acc-label" for="acc-verein">Verein</label>
+    <input id="acc-verein" class="join-input acc-text" type="text" placeholder="optional" value="${v('verein')}" />
+    <label class="acc-label" for="acc-passnummer">SpielerID / Passnummer</label>
+    <input id="acc-passnummer" class="join-input acc-text" type="text" inputmode="numeric" autocapitalize="off" spellcheck="false" placeholder="optional" value="${v('passnummer')}" />
+    <p class="acc-hint">Privat. Wird nur zum Abgleich mit Sportwinner genutzt.</p>
+
     <button type="button" id="acc-save" class="erf-btn done join-go">Speichern</button>
+
+    <h2 class="acc-section">Geräte</h2>
+    <div id="acc-devices"><p class="join-msg">Lade Geräte …</p></div>
+
     <button type="button" id="acc-logout" class="erf-btn join-go acc-logout">Abmelden</button>
+
+    <div id="acc-danger" class="acc-danger"></div>
     <p id="acc-msg" class="join-msg" role="status"></p>`;
-  const name = body.querySelector('#acc-name');
+
   const msg = body.querySelector('#acc-msg');
+
   body.querySelector('#acc-save').addEventListener('click', async () => {
-    try { await auth.saveProfil(name.value); msg.textContent = '✓ Gespeichert.'; }
+    const felder = {
+      anzeigename: body.querySelector('#acc-name').value,
+      vorname:     body.querySelector('#acc-vorname').value,
+      nachname:    body.querySelector('#acc-nachname').value,
+      verein:      body.querySelector('#acc-verein').value,
+      passnummer:  body.querySelector('#acc-passnummer').value,
+    };
+    try { await auth.saveProfil(felder); msg.textContent = '✓ Gespeichert.'; }
     catch (e) { msg.textContent = 'Speichern fehlgeschlagen.'; }
   });
+
   body.querySelector('#acc-logout').addEventListener('click', async () => {
     try { await auth.signOut(); } catch (e) { /* ignore */ }
     navigate('/menu');
   });
+
+  // Geräte-Liste und Danger-Zone brauchen jeweils eigene Backend-Module — separat laden,
+  // damit ein Fehler (offline) die eingeloggte Ansicht nicht als Ganzes blockiert.
+  renderDevices(body.querySelector('#acc-devices'));
+  renderDanger(auth, body.querySelector('#acc-danger'), msg);
+}
+
+// --- Geräte-Verwaltung -------------------------------------------------------
+
+async function renderDevices(host) {
+  let geraetMod;
+  try { geraetMod = await import('../backend/geraet.js'); } catch (e) {
+    host.innerHTML = '<p class="join-hint">Offline — Geräte nicht abrufbar.</p>';
+    return;
+  }
+  let liste;
+  try { liste = await geraetMod.listGeraete(); } catch (e) {
+    host.innerHTML = '<p class="join-hint">Geräte konnten nicht geladen werden.</p>';
+    return;
+  }
+  const meins = geraetMod.geraetId();
+  if (!liste.length) { host.innerHTML = '<p class="join-hint">Noch keine Geräte registriert.</p>'; return; }
+
+  host.innerHTML = '<ul class="acc-devices"></ul>';
+  const ul = host.querySelector('ul');
+  for (const g of liste) {
+    const li = document.createElement('li');
+    li.className = 'acc-device';
+    const aktuell = g.id === meins;
+    li.innerHTML = `
+      <div class="acc-device-info">
+        <span class="acc-device-name">${esc(g.name || 'Unbenannt')}</span>
+        ${aktuell ? '<span class="acc-badge">dieses Gerät</span>' : ''}
+        <span class="acc-device-seen">zuletzt aktiv ${relZeit(g.gesehen_am)}</span>
+      </div>
+      <div class="acc-device-actions">
+        <button type="button" class="acc-link" data-act="rename">Umbenennen</button>
+        <button type="button" class="acc-link acc-link-danger" data-act="remove">Entfernen</button>
+      </div>`;
+
+    li.querySelector('[data-act="rename"]').addEventListener('click', () => {
+      const info = li.querySelector('.acc-device-info');
+      info.innerHTML = `
+        <input class="join-input acc-text acc-rename" type="text" value="${esc(g.name || '')}" placeholder="Gerätename" />
+        <button type="button" class="acc-link" data-act="save">Speichern</button>
+        <button type="button" class="acc-link" data-act="cancel">Abbrechen</button>`;
+      const input = info.querySelector('.acc-rename');
+      input.focus();
+      info.querySelector('[data-act="cancel"]').addEventListener('click', () => renderDevices(host));
+      const save = async () => {
+        try { await geraetMod.renameGeraet(g.id, input.value); } catch (e) { /* ignore */ }
+        renderDevices(host);
+      };
+      info.querySelector('[data-act="save"]').addEventListener('click', save);
+      input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') save(); });
+    });
+
+    li.querySelector('[data-act="remove"]').addEventListener('click', async () => {
+      const frage = aktuell
+        ? 'Dieses Gerät entfernen? Es wird beim nächsten Synchronisieren automatisch neu registriert.'
+        : 'Dieses Gerät entfernen?';
+      if (!confirm(frage)) return;
+      try { await geraetMod.removeGeraet(g.id); } catch (e) { /* ignore */ }
+      renderDevices(host);
+    });
+
+    ul.appendChild(li);
+  }
+}
+
+// --- Konto löschen (Danger-Zone, Zwei-Schritt-Bestätigung) -------------------
+
+function renderDanger(auth, host, msg) {
+  host.innerHTML = '<button type="button" id="acc-delete" class="acc-link acc-link-danger">Konto löschen</button>';
+  host.querySelector('#acc-delete').addEventListener('click', () => {
+    host.innerHTML = `
+      <p class="acc-hint acc-warn">⚠️ Dein Konto wird <strong>unwiderruflich</strong> gelöscht — inklusive aller
+        deiner Spiele, Statistiken und Geräte. Tippe zum Bestätigen <strong>LÖSCHEN</strong> ein.</p>
+      <input id="acc-del-confirm" class="join-input acc-text" type="text" autocapitalize="characters" placeholder="LÖSCHEN" />
+      <button type="button" id="acc-del-go" class="erf-btn join-go acc-logout" disabled>Konto endgültig löschen</button>
+      <button type="button" id="acc-del-cancel" class="acc-link">Abbrechen</button>`;
+    const confirmInput = host.querySelector('#acc-del-confirm');
+    const go = host.querySelector('#acc-del-go');
+    confirmInput.focus();
+    confirmInput.addEventListener('input', () => {
+      go.disabled = confirmInput.value.trim().toUpperCase() !== 'LÖSCHEN';
+    });
+    host.querySelector('#acc-del-cancel').addEventListener('click', () => renderDanger(auth, host, msg));
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      msg.textContent = 'Lösche Konto …';
+      try {
+        await auth.deleteAccount();
+        navigate('/menu');
+      } catch (e) {
+        msg.textContent = 'Löschen fehlgeschlagen: ' + errText(e);
+        renderDanger(auth, host, msg);
+      }
+    });
+  });
+}
+
+// Grobe relative Zeitangabe für „zuletzt aktiv".
+function relZeit(iso) {
+  const t = Date.parse(iso);
+  if (!t) return '–';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return 'gerade eben';
+  const min = Math.floor(s / 60);
+  if (min < 60) return `vor ${min} Min`;
+  const std = Math.floor(min / 60);
+  if (std < 24) return `vor ${std} Std`;
+  const tage = Math.floor(std / 24);
+  if (tage < 30) return `vor ${tage} Tag${tage === 1 ? '' : 'en'}`;
+  return new Date(t).toLocaleDateString('de-DE');
 }
 
 function errText(e) { return String((e && e.message) || e); }

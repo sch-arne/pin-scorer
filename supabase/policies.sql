@@ -119,6 +119,20 @@ drop policy if exists profil_delete on profil;
 create policy profil_delete on profil for delete
   using (id = auth.uid());
 
+-- Öffentliche Sicht: NUR (id, anzeigename). Der Anzeigename darf für Mitspieler / im
+-- Livestream sichtbar sein; alle übrigen profil-Spalten (vorname/nachname/verein/
+-- passnummer) bleiben durch die self-only-RLS der Basistabelle privat.
+--
+-- Die View läuft mit den Rechten ihres Owners (security_invoker = off) und umgeht damit
+-- bewusst die RLS der Basistabelle — legt aber ausschließlich anzeigename offen.
+-- WICHTIG: security_invoker muss `off` bleiben (sonst greift wieder self-only und Fremde
+-- sehen nichts), und die Basistabelle `profil` wird NIE an anon/authenticated ge-grantet.
+create or replace view profil_public
+  with (security_invoker = off) as
+  select id, anzeigename from profil;
+
+grant select on profil_public to anon, authenticated;
+
 -- =============================================================================
 -- spiel — Mitglieder lesen; nur der Ersteller ändert Setup/Status
 -- =============================================================================
@@ -305,3 +319,45 @@ insert into geraet (id, konto)
   from spiel_geraet sg
   join auth.users u on u.id = sg.geraet
   on conflict (id, konto) do nothing;
+
+-- =============================================================================
+-- Konto-Löschung (DSGVO) — self-service, atomar
+-- -----------------------------------------------------------------------------
+-- Der Client (anon/authenticated) darf auth.users NICHT selbst löschen — das braucht
+-- erhöhte Rechte. Diese Funktion läuft `security definer` (als Owner) und löscht
+-- ausschließlich die Daten des AUFRUFERS (auth.uid()).
+--
+-- WICHTIG (FK-Verhalten, siehe schema.sql): spiel.besitzer, spiel_spieler.profil_id und
+-- spiel_ergebnis.profil_id sind ON DELETE SET NULL. Ein reines DELETE der auth.users-Zeile
+-- würde daher die vom Nutzer erstellten Spiele + Sätze als personenbezogene Restdaten
+-- stehen lassen. Deshalb werden eigene Spiele (und eigene Ergebnis-Snapshots in fremden
+-- Spielen) hier EXPLIZIT gelöscht; profil + geraet kaskadieren über auth.users.
+create or replace function konto_loeschen()
+returns void
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null then
+    raise exception 'nicht angemeldet';
+  end if;
+
+  -- 1) Eigene Spiele -> kaskadiert spiel_geraet, spiel_spieler, satz_block,
+  --    spiel_ergebnis dieser Spiele (alle ON DELETE CASCADE auf spiel_id).
+  delete from spiel where besitzer = v_uid;
+
+  -- 2) Eigene Ergebnis-Snapshots in FREMDEN Spielen vollständig entfernen
+  --    (statt nur profil_id auf NULL zu setzen).
+  delete from spiel_ergebnis where profil_id = v_uid;
+
+  -- 3) Auth-User -> kaskadiert profil + geraet (ON DELETE CASCADE) sowie die
+  --    auth-internen identities/sessions.
+  delete from auth.users where id = v_uid;
+end;
+$$;
+
+revoke all on function konto_loeschen() from public;
+grant execute on function konto_loeschen() to authenticated;

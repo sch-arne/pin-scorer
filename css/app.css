@@ -1586,6 +1586,27 @@ button.mini-pin { cursor: pointer; }
 
 /* „Passwort vergessen?" / Zurück-Link */
 .acc-link { display: block; width: 100%; margin: 10px 0 0; padding: 6px; font-size: 0.9rem; color: var(--accent); background: transparent; border: 0; cursor: pointer; text-align: center; }
+.acc-link-danger { color: #e0736b; }
+
+/* Abschnitts-Überschrift im eingeloggten Zustand (Profil / Geräte) */
+.acc-section { margin: 22px 0 4px; font-size: 0.95rem; font-weight: 800; color: var(--text); border-top: 1px solid var(--border, #2c3340); padding-top: 16px; }
+/* kleiner Datenschutz-/Zweck-Hinweis unter einem Feld */
+.acc-hint { margin: 4px 0 2px; font-size: 0.78rem; color: var(--text-dim); line-height: 1.35; }
+
+/* Geräte-Liste */
+.acc-devices { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.acc-device { background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 8px 12px; }
+.acc-device-info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.acc-device-name { font-size: 0.95rem; color: var(--text); font-weight: 700; }
+.acc-device-seen { font-size: 0.78rem; color: var(--text-dim); }
+.acc-badge { font-size: 0.7rem; font-weight: 700; color: #1a1205; background: var(--accent); border-radius: 6px; padding: 1px 6px; }
+.acc-device-actions { display: flex; gap: 4px; margin-top: 6px; }
+.acc-device-actions .acc-link { width: auto; margin: 0; padding: 4px 8px; }
+.acc-rename { flex: 1; min-width: 140px; }
+
+/* Konto löschen (Danger-Zone) */
+.acc-danger { margin-top: 18px; border-top: 1px solid var(--border, #2c3340); padding-top: 12px; }
+.acc-warn { color: #e0736b; }
 
 /* Statistik-Seite (lokale Historie + Konto-Überblick) */
 .stat-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 12px; }
