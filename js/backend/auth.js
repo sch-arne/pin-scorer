@@ -94,22 +94,42 @@ export function onPasswordRecovery(cb) {
   return () => { try { data.subscription.unsubscribe(); } catch (e) { /* ignore */ } };
 }
 
-// Profil (Anzeigename) lesen / speichern.
+// Profil lesen / speichern. Nur `anzeigename` wird öffentlich (View profil_public) und
+// erscheint im Livestream; vorname/nachname/verein/passnummer sind privat (self-only RLS).
 export async function getProfil() {
   const uid = (await currentUser())?.id;
   if (!uid) return null;
   const { data } = await supabase.from('profil').select('*').eq('id', uid).maybeSingle();
   return data || null;
 }
-export async function saveProfil(anzeigename) {
+
+// Felder, die per Profil gespeichert werden dürfen. `saveProfil` akzeptiert ein Objekt mit
+// beliebiger Teilmenge davon; für Rückwärtskompatibilität wird ein String als anzeigename
+// interpretiert. Leere Werte landen konsistent als NULL (echtes „optional" in der DB).
+const PROFIL_FELDER = ['anzeigename', 'vorname', 'nachname', 'verein', 'passnummer'];
+export async function saveProfil(felder) {
   const uid = (await currentUser())?.id;
   if (!uid) throw new Error('nicht angemeldet');
-  const { error } = await supabase
-    .from('profil')
-    .upsert({ id: uid, anzeigename: (anzeigename || '').trim() }, { onConflict: 'id' });
+  const f = (typeof felder === 'string') ? { anzeigename: felder } : (felder || {});
+  const row = { id: uid };
+  for (const k of PROFIL_FELDER) {
+    if (k in f) row[k] = (f[k] ?? '').trim() || null;
+  }
+  const { error } = await supabase.from('profil').upsert(row, { onConflict: 'id' });
   if (error) throw error;
 }
 
 export async function signOut() {
   await supabase.auth.signOut();
+}
+
+// Konto UNWIDERRUFLICH löschen (DSGVO). Ruft die serverseitige RPC `konto_loeschen`
+// (security definer) auf, die eigene Spiele, Sätze, Ergebnisse, das Profil, die Geräte-
+// Bindungen und den auth.users-Eintrag entfernt. Danach lokal abmelden: der Auth-Storage
+// muss geräumt werden, sonst hängt die App mit einem toten Token in einem „Zombie-Login".
+export async function deleteAccount() {
+  const { error } = await supabase.rpc('konto_loeschen');
+  if (error) throw error;
+  try { await supabase.auth.signOut(); } catch (e) { /* Session serverseitig bereits weg */ }
+  try { localStorage.removeItem('pins-scorer:auth'); } catch (e) { /* privater Modus o.ä. */ }
 }

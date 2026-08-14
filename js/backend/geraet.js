@@ -80,6 +80,34 @@ export async function kontoId() {
   return (session && session.user && session.user.id) || null;
 }
 
+// --- Geraete-Verwaltung ------------------------------------------------------
+// Alle Geraete des aktuellen Accounts. Die RLS auf `geraet` ist self-only
+// (konto = auth.uid()), daher liefert das nur die eigenen Eintraege.
+export async function listGeraete() {
+  const { data, error } = await supabase
+    .from('geraet')
+    .select('id,name,erstellt_am,gesehen_am')
+    .order('gesehen_am', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// Ein eigenes Geraet umbenennen (leerer Name -> NULL). RLS erlaubt nur eigene Zeilen.
+export async function renameGeraet(id, name) {
+  const { error } = await supabase
+    .from('geraet')
+    .update({ name: (name || '').trim() || null })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+// Ein eigenes Geraet aus dem Register entfernen. Entfernt man das AKTUELLE Geraet, wird es
+// beim naechsten ensureGeraet() automatisch neu gebunden (funktional unkritisch).
+export async function removeGeraet(id) {
+  const { error } = await supabase.from('geraet').delete().eq('id', id);
+  if (error) throw error;
+}
+
 // Kontowechsel (Login/Logout): das Geraet beim naechsten ensureGeraet() neu binden.
 let lastKonto;
 supabase.auth.onAuthStateChange((_event, session) => {
