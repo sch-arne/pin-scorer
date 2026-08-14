@@ -12,10 +12,10 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.112';
 
-export const SUPABASE_URL = 'https://oizupdfesgihpzdzwvcw.supabase.co';
+export const SUPABASE_URL = 'https://bajiihfyvupvsdsxwdkj.supabase.co';
 // Oeffentlicher anon-Key: durch Row-Level-Security abgesichert, darf im Frontend liegen.
 export const SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9penVwZGZlc2dpaHB6ZHp3dmN3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY0MzA3MDgsImV4cCI6MjEwMjAwNjcwOH0.Hl0L0_Xp9WJfVTigiW2vPPo9ZjNQuBk2337CRysPY30';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJhamlpaGZ5dnVwdnNkc3h3ZGtqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY2OTQ4ODYsImV4cCI6MjEwMjI3MDg4Nn0.4xf05tBTBmkR-L7UFXUVmKT2-GbSi5DpQMM0EqKjo7U';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
