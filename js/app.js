@@ -9,6 +9,7 @@ import { setupWkView } from './views/setup-wk.js';
 import { spielLaufendView } from './views/spiel-laufend.js';
 import { beitretenView } from './views/beitreten.js';
 import { spielerView } from './views/login.js';
+import { anlagenView } from './views/anlagen.js';
 
 register('/menu', menuView);
 register('/neues-spiel', neuesSpielView);
@@ -17,6 +18,7 @@ register('/setup/sportkegler-wk', setupWkView);
 register('/spiel-laufend', spielLaufendView);
 register('/beitreten', beitretenView);
 register('/spieler', spielerView);
+register('/anlagen', anlagenView);
 
 start({ mount: '#app', notFound: menuView });
 

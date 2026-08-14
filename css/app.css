@@ -1608,6 +1608,40 @@ button.mini-pin { cursor: pointer; }
 .acc-danger { margin-top: 18px; border-top: 1px solid var(--border, #2c3340); padding-top: 12px; }
 .acc-warn { color: #e0736b; }
 
+/* Anlagen-Seite */
+.anl-list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.anl-new { width: auto; margin: 0; padding: 6px 4px; }
+.anl-inline-link, .anl-inline-link:visited { color: var(--accent); text-decoration: none; }
+
+.anl-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.anl-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 10px 12px; }
+.anl-card-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.anl-name { font-size: 1rem; font-weight: 700; color: var(--text); }
+.anl-meta { font-size: 0.78rem; color: var(--text-dim); }
+.anl-actions { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.anl-actions .acc-link { width: auto; margin: 0; padding: 4px 8px; }
+.anl-badge { font-size: 0.7rem; color: var(--text-dim); border: 1px solid var(--border, #2c3340); border-radius: 6px; padding: 1px 6px; white-space: nowrap; }
+
+/* Freischaltungs-Status + gesperrte erweiterte Funktionen */
+.anl-frei { background: var(--surface-2); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 10px 12px; margin: 4px 0 8px; }
+.anl-frei.is-on { border-color: rgba(245,166,35,0.5); }
+.anl-frei-head { margin: 0 0 8px; font-size: 0.9rem; font-weight: 700; color: var(--text); }
+.anl-features { display: flex; flex-direction: column; gap: 6px; }
+.anl-feature { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 10px; }
+.anl-feature.is-locked { opacity: 0.55; }
+.anl-feature-icon { font-size: 1.1rem; line-height: 1; }
+.anl-feature-text { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.anl-feature-text strong { font-size: 0.9rem; color: var(--text); }
+.anl-feature-text span { font-size: 0.75rem; color: var(--text-dim); }
+.anl-feature-state { font-size: 0.95rem; }
+
+/* Bahnen-Editor */
+.anl-bahn-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.anl-bahn-row { display: flex; align-items: center; gap: 8px; }
+.anl-bahn-nr { width: 72px; flex: 0 0 auto; text-align: center; }
+.anl-bahn-art { flex: 1; }
+.anl-bahn-del { width: auto; flex: 0 0 auto; margin: 0; padding: 4px 10px; }
+
 /* Statistik-Seite (lokale Historie + Konto-Überblick) */
 .stat-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 12px; }
 .stat-card { background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 10px 12px; }

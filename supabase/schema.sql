@@ -51,13 +51,52 @@ alter table profil add column if not exists nachname   text;
 alter table profil add column if not exists verein     text;
 alter table profil add column if not exists passnummer text;
 
--- Stub für den späteren Anlagen-Schritt (Menü-Kachel "Anlagen"). Bewusst minimal.
+-- Kegel-Anlage (physischer Standort mit Bahnen). Jeder eingeloggte Account darf eine
+-- Anlage anlegen (reale Daten sind im Formular Pflicht); alle dürfen Anlagen lesen und
+-- darauf spielen (RLS: select = true). Ändern/Löschen nur der Besitzer. Erweiterte
+-- Funktionen (Kontrollzentrum, Sportwinner, Livestream/OBS) sind späteren Etappen
+-- vorbehalten und nur für freigeschaltete Accounts (Tabelle `freischaltung`).
 create table if not exists anlage (
   id            uuid primary key default gen_random_uuid(),
   name          text not null,
   ort           text,
   besitzer      uuid references auth.users(id) on delete set null,
   erstellt_am   timestamptz not null default now()
+);
+-- Idempotente Erweiterungen (No-op, wenn Spalte bereits existiert).
+alter table anlage add column if not exists strasse         text;
+alter table anlage add column if not exists plz             text;
+alter table anlage add column if not exists anzahl_bahnen   int not null default 4;
+alter table anlage add column if not exists aktualisiert_am timestamptz not null default now();
+-- Weicher Duplikat-Index (nur zur Warnung im Formular; KEINE Unique-Constraint —
+-- verschiedene Anlagen dürfen denselben Namen tragen).
+create index if not exists idx_anlage_dupe on anlage(lower(name), plz);
+
+-- Bahnen einer Anlage. Nummer je Anlage eindeutig; bahnart optional pro Bahn.
+-- roi_json ist für die spätere OCR-Kalibrierung (FUNK-Display) reserviert.
+create table if not exists bahn (
+  id        uuid primary key default gen_random_uuid(),
+  anlage_id uuid not null references anlage(id) on delete cascade,
+  nummer    int  not null,
+  bahnart   text,
+  roi_json  jsonb,
+  unique (anlage_id, nummer)
+);
+create index if not exists idx_bahn_anlage on bahn(anlage_id);
+
+-- Hinweis: Bahngruppen (welche Bahnen zusammen bespielt werden) sind bewusst NICHT
+-- Teil der Anlagen-Stammdaten. Sie werden später beim Spiel-Setup zusammengestellt
+-- (Etappe 2), da die Zusammenstellung je Spiel unterschiedlich ist.
+
+-- Freischaltung (Betreiber-Whitelist). Pflegt der Betreiber ausschließlich per SQL:
+--   insert into freischaltung(konto) values ('<auth.users.id>');
+-- Schaltet die erweiterten Anlagen-Funktionen für diesen Account frei. Clients dürfen
+-- die Tabelle nur LESEN (eigene Zeile), niemals schreiben (siehe policies.sql).
+create table if not exists freischaltung (
+  konto       uuid primary key references auth.users(id) on delete cascade,
+  stufe       text not null default 'erweitert',
+  notiz       text,
+  erstellt_am timestamptz not null default now()
 );
 
 -- Ein Spiel. config_json = das gesamte Setup-Objekt (bahnart, bahnen, ersteBahn,
@@ -154,6 +193,10 @@ create trigger trg_spiel_touch before update on spiel
 
 drop trigger if exists trg_satz_block_touch on satz_block;
 create trigger trg_satz_block_touch before update on satz_block
+  for each row execute function pins_touch_aktualisiert_am();
+
+drop trigger if exists trg_anlage_touch on anlage;
+create trigger trg_anlage_touch before update on anlage
   for each row execute function pins_touch_aktualisiert_am();
 
 -- --- Realtime: satz_block + spiel_spieler in die Realtime-Publication ---------

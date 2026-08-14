@@ -44,6 +44,19 @@ set search_path = public as $$
   );
 $$;
 
+-- Helfer: Ist der aktuelle Account für die erweiterten Anlagen-Funktionen freigeschaltet?
+-- (Whitelist `freischaltung`, vom Betreiber per SQL gepflegt.) security definer, damit die
+-- Policy/Frontend die Tabelle prüfen kann, ohne selbst RLS auszulösen. Wird in dieser Etappe
+-- nur zur Status-Anzeige genutzt; die Feature-Gates folgen mit den erweiterten Funktionen.
+create or replace function pins_ist_freigeschaltet()
+returns boolean
+language sql security definer stable
+set search_path = public as $$
+  select exists (select 1 from freischaltung where konto = auth.uid());
+$$;
+
+grant execute on function pins_ist_freigeschaltet() to anon, authenticated;
+
 -- Einem Spiel per Beitritts-Code beitreten. security definer, weil das beitretende
 -- Gerät das Spiel noch nicht lesen darf (Henne/Ei). p_geraet muss zum aufrufenden
 -- Account gehören; die Mitgliedschaft wird auf DIESES Gerät eingetragen.
@@ -75,6 +88,8 @@ grant execute on function spiel_beitreten(text, uuid) to anon, authenticated;
 alter table geraet          enable row level security;
 alter table profil          enable row level security;
 alter table anlage          enable row level security;
+alter table bahn            enable row level security;
+alter table freischaltung   enable row level security;
 alter table spiel           enable row level security;
 alter table spiel_geraet    enable row level security;
 alter table spiel_spieler   enable row level security;
@@ -298,11 +313,55 @@ create policy spiel_ergebnis_update on spiel_ergebnis for update
   );
 
 -- =============================================================================
--- anlage — Stub (Zukunft): nur der Besitzer
+-- anlage — jeder darf LESEN (auf Anlagen spielen); Anlegen jeder eingeloggte Account;
+-- Ändern/Löschen nur der Besitzer.
 -- =============================================================================
+-- Alte owner-only-Policy entfernen (sie blockierte das Fremd-Lesen).
 drop policy if exists anlage_all on anlage;
-create policy anlage_all on anlage for all
+
+drop policy if exists anlage_select on anlage;
+create policy anlage_select on anlage for select
+  using (true);
+
+drop policy if exists anlage_insert on anlage;
+create policy anlage_insert on anlage for insert
+  with check (besitzer = auth.uid());
+
+drop policy if exists anlage_update on anlage;
+create policy anlage_update on anlage for update
   using (besitzer = auth.uid()) with check (besitzer = auth.uid());
+
+drop policy if exists anlage_delete on anlage;
+create policy anlage_delete on anlage for delete
+  using (besitzer = auth.uid());
+
+-- =============================================================================
+-- bahn — für alle lesbar; Schreiben nur der Besitzer der zugehörigen Anlage.
+-- =============================================================================
+drop policy if exists bahn_select on bahn;
+create policy bahn_select on bahn for select
+  using (true);
+
+drop policy if exists bahn_insert on bahn;
+create policy bahn_insert on bahn for insert
+  with check (exists (select 1 from anlage a where a.id = anlage_id and a.besitzer = auth.uid()));
+
+drop policy if exists bahn_update on bahn;
+create policy bahn_update on bahn for update
+  using (exists (select 1 from anlage a where a.id = anlage_id and a.besitzer = auth.uid()))
+  with check (exists (select 1 from anlage a where a.id = anlage_id and a.besitzer = auth.uid()));
+
+drop policy if exists bahn_delete on bahn;
+create policy bahn_delete on bahn for delete
+  using (exists (select 1 from anlage a where a.id = anlage_id and a.besitzer = auth.uid()));
+
+-- =============================================================================
+-- freischaltung — nur lesen, nur die eigene Zeile. Schreiben ausschließlich per SQL /
+-- Service-Role (der Betreiber pflegt die Whitelist im SQL-Editor). Keine Client-Writes.
+-- =============================================================================
+drop policy if exists freischaltung_select on freischaltung;
+create policy freischaltung_select on freischaltung for select
+  using (konto = auth.uid());
 
 -- =============================================================================
 -- MIGRATION (einmalig, optional) — bestehende Daten aus der Zeit "Gerät = auth.uid()"
