@@ -92,13 +92,19 @@ export function istFremdAktiv(owner, meineUid) {
 // bespielt); Freigeben/Uebernehmen fuer weitere Geraete laeuft ueber die UI.
 export async function linkGame(game) {
   const geraet = await ensureGeraet();
+  // Besitzer des Spiels ist der ACCOUNT (auth.uid()), NICHT das Geraet: die RLS
+  // (spiel_insert/update/delete/select) prueft `besitzer = auth.uid()`. Die Geraete-ID
+  // wird darunter fuer Mitgliedschaft (spiel_geraet) und Besitz-Lock (besitzer_geraet)
+  // genutzt. ensureGeraet() hat die Session bereits sichergestellt, kontoId() ist gesetzt.
+  const konto = await kontoId();
+  if (!konto) throw new Error('nicht angemeldet');
   const now = new Date().toISOString();
   const config = game.config || {};
 
   const { data: sp, error: e1 } = await supabase
     .from('spiel')
     .insert({
-      besitzer: geraet,
+      besitzer: konto,
       spielart: game.spiel || 'sportkegler-wk',
       status: game.status || 'setup',
       config_json: config,
