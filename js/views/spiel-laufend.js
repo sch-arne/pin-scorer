@@ -211,7 +211,8 @@ export function spielLaufendView() {
   // übernimmt fremde Änderungen live. Ein Spieler gehört immer genau einem Gerät.
   let linked = !!(game.linked && game.remoteId);
   let syncMod = null;                     // lazy geladenes backend/sync.js
-  let meGeraet = null;                    // eigene Geräte-uid
+  let meGeraet = null;                    // eigene Geräte-ID (entkoppelt vom Account)
+  let meKonto = null;                     // eigener Account (auth.uid()) — die Person
   let owners = game.spielerOwners || {};  // position -> { id, besitzer, heartbeat }
   let unsub = null;                       // Realtime abmelden
   let hbTimer = null;                     // Heartbeat-Intervall
@@ -300,6 +301,7 @@ export function spielLaufendView() {
     try {
       syncMod = await import('../backend/sync.js');
       meGeraet = await syncMod.ensureGeraet();
+      meKonto = await syncMod.kontoId();
       const fresh = await syncMod.pullGame(game.remoteId);
       owners = fresh.spielerOwners || owners;
       if (fresh.erfassung && Array.isArray(fresh.erfassung.bloecke)) {
@@ -324,6 +326,7 @@ export function spielLaufendView() {
       game.erfassung = state;
       const res = await syncMod.linkGame(game);
       meGeraet = await syncMod.ensureGeraet();
+      meKonto = await syncMod.kontoId();
       game.linked = true; game.remoteId = res.remoteId; game.beitrittsCode = res.beitrittsCode;
       linked = true;
       owners = {};
@@ -371,7 +374,7 @@ export function spielLaufendView() {
         const pid = owners[sp] && owners[sp].id;
         if (!pid) return;
         rows.push({
-          spiel_id: game.remoteId, spieler_id: pid, profil_id: meGeraet,
+          spiel_id: game.remoteId, spieler_id: pid, profil_id: meKonto,
           gesamt: p.gesamt, schnitt_satz: p.schnittSatz, schnitt_wurf: p.schnittWurf,
           bester_satz: p.bester, neuner: p.neuner, fehl: p.fehl, wurf_count: p.wurfCount, rang: p.rang,
         });

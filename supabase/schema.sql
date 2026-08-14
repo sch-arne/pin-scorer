@@ -10,11 +10,27 @@
 -- Satz als eine Zeile (satz_block.block_json) — 1:1 wie die heutige lokale
 -- Struktur erfassung.bloecke[spieler][satz].
 --
--- Geräte-Identität = anonyme Supabase-Auth-uid (Anonymous Sign-In). Beim späteren
--- Account-Schritt wird der anonyme Nutzer per Magic-Link zu einem echten Account
--- aufgewertet; die uid bleibt gleich, deshalb ist auth.uid() gleichzeitig das
--- "Gerät" (Spielbetrieb) UND die Person (Statistik-Historie).
+-- Geräte-Identität ist ENTKOPPELT vom Account: jedes Gerät hat eine eigene, vom
+-- Client erzeugte UUID (Tabelle `geraet`), unabhängig davon, wer eingeloggt ist.
+--   * auth.uid()  = Person / Account  -> spiel.besitzer, profil, Statistik (profil_id)
+--   * geraet.id   = dieses Gerät      -> Mitgliedschaft (spiel_geraet), Spieler-Lock
+-- So können MEHRERE Geräte GLEICHZEITIG im selben Account erfassen (verschiedene
+-- Geräte-IDs => der Besitz-Lock trennt sie sauber). Die RLS vertraut nur der
+-- serverseitigen Bindung geraet.konto = auth.uid().
 -- =============================================================================
+
+-- Geräte-Register: bindet eine (client-seitig erzeugte) Geräte-ID an einen Account.
+-- Primärschlüssel (id, konto): dasselbe Gerät kann über die Zeit an mehrere Accounts
+-- gebunden sein (anonym -> Account, oder Kontowechsel auf demselben Browser).
+create table if not exists geraet (
+  id            uuid not null,               -- vom Client erzeugt (localStorage), NICHT auth.uid()
+  konto         uuid not null references auth.users(id) on delete cascade,
+  name          text,
+  erstellt_am   timestamptz not null default now(),
+  gesehen_am    timestamptz not null default now(),
+  primary key (id, konto)
+);
+create index if not exists idx_geraet_konto on geraet(konto);
 
 -- 1:1 zu auth.users. Wird erst im Account-Schritt befüllt (anon-Nutzer haben keins).
 create table if not exists profil (
