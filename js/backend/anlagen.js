@@ -100,11 +100,9 @@ export async function updateAnlage(id, felder) {
   if (error) throw error;
 }
 
-// Anlage löschen (Bahnen kaskadieren). Nur eigene — RLS erzwingt es.
-export async function deleteAnlage(id) {
-  const { error } = await supabase.from('anlage').delete().eq('id', id);
-  if (error) throw error;
-}
+// Hinweis: Anlagen werden bewusst NICHT über die App gelöscht (kein deleteAnlage).
+// Reale Anlagen bleiben erhalten; Korrekturen laufen über „Bearbeiten"/„Bahnen".
+// (Der interne Orphan-Rollback in createAnlage ist kein Nutzer-Löschen.)
 
 // Bahnen einer Anlage (aufsteigend nach Nummer).
 export async function listBahnen(anlageId) {

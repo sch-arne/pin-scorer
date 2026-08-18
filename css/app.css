@@ -630,6 +630,10 @@ button.mini-pin { cursor: pointer; }
   border: 1px solid var(--border);
   border-radius: 12px;
 }
+/* Kompakte Variante (z. B. „1. Bahn"-Auswahl neben den Bahnen-Chips). */
+.select-full.sm { min-height: 40px; padding: 6px 10px; font-size: 0.95rem; }
+/* Unaufdringlicher Zusatz im Feld-Label, z. B. „· optional" / „· aus Anlage". */
+.field-note { font-weight: 400; font-size: 0.78rem; color: var(--text-dim); }
 
 .btn-primary {
   min-height: 54px;
@@ -1613,6 +1617,9 @@ button.mini-pin { cursor: pointer; }
 .anl-new { width: auto; margin: 0; padding: 6px 4px; }
 .anl-inline-link, .anl-inline-link:visited { color: var(--accent); text-decoration: none; }
 
+.anl-search { margin: 8px 0 0; }
+.anl-search .join-input { margin: 0; }
+.anlage-search { margin: 0 0 6px; }
 .anl-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .anl-card { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 10px 12px; }
 .anl-card-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

@@ -88,12 +88,19 @@ async function renderList(ctx) {
     return;
   }
 
-  host.innerHTML = '<ul class="anl-list"></ul>';
+  // Suchfeld nur, wenn sich Filtern lohnt. Filtert die Karten live nach Name/Ort/Straße/PLZ.
+  const searchHtml = liste.length > 3
+    ? `<div class="anl-search">
+         <input type="search" id="anl-search" class="join-input acc-text" placeholder="Anlage suchen …" aria-label="Anlagen durchsuchen" autocomplete="off" />
+       </div>`
+    : '';
+  host.innerHTML = `${searchHtml}<ul class="anl-list"></ul><p class="anl-search-empty join-hint" hidden>Keine Anlage gefunden.</p>`;
   const ul = host.querySelector('ul');
   for (const a of liste) {
     const li = document.createElement('li');
     li.className = 'anl-card';
     const ortLine = [a.strasse, [a.plz, a.ort].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    li.dataset.search = [a.name, a.strasse, a.plz, a.ort].filter(Boolean).join(' ').toLowerCase();
     li.innerHTML = `
       <div class="anl-card-main">
         <span class="anl-name">${esc(a.name)}</span>
@@ -104,19 +111,28 @@ async function renderList(ctx) {
       <div class="anl-actions">
         <button type="button" class="acc-link" data-act="edit">Bearbeiten</button>
         <button type="button" class="acc-link" data-act="bahnen">Bahnen</button>
-        <button type="button" class="acc-link acc-link-danger" data-act="del">Löschen</button>
       </div>` : '<span class="anl-badge">fremd</span>'}`;
 
     if (a.mein) {
       li.querySelector('[data-act="edit"]').addEventListener('click', () => renderEditStamm(ctx, a));
       li.querySelector('[data-act="bahnen"]').addEventListener('click', () => renderBahnen(ctx, a));
-      li.querySelector('[data-act="del"]').addEventListener('click', async () => {
-        if (!confirm(`Anlage „${a.name}" mit allen Bahnen löschen?`)) return;
-        try { await mod.deleteAnlage(a.id); renderList(ctx); }
-        catch (e) { body.querySelector('#anl-msg').textContent = 'Löschen fehlgeschlagen.'; }
-      });
     }
     ul.appendChild(li);
+  }
+
+  const search = host.querySelector('#anl-search');
+  if (search) {
+    const empty = host.querySelector('.anl-search-empty');
+    search.addEventListener('input', () => {
+      const q = search.value.trim().toLowerCase();
+      let treffer = 0;
+      ul.querySelectorAll('.anl-card').forEach((li) => {
+        const match = !q || (li.dataset.search || '').includes(q);
+        li.hidden = !match;
+        if (match) treffer++;
+      });
+      empty.hidden = treffer > 0;
+    });
   }
 }
 

@@ -108,6 +108,7 @@ export async function linkGame(game) {
       spielart: game.spiel || 'sportkegler-wk',
       status: game.status || 'setup',
       config_json: config,
+      anlage_id: config.anlageId || null,
     })
     .select('id, beitritts_code, erstellt_am, aktualisiert_am, spielart, status, config_json')
     .single();

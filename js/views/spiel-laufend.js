@@ -385,6 +385,16 @@ export function spielLaufendView() {
   function block(sp, st) { return state.bloecke[sp][st]; }
   function current() { return block(state.aktiverSpieler, state.aktiverSatz); }
   function laneOf(sp, st) { return c.bahnplan?.[sp]?.[st] ?? (c.ersteBahn + st); }
+  // Reale Bahn (aus der gewählten Anlage) zu einer Bahnnummer — { id, bahnart } oder null.
+  function bahnInfo(nummer) { return c.bahnZuordnung?.[nummer] || null; }
+  const ART_LABEL = { classic: 'Classic', bohle: 'Bohle', schere: 'Schere' };
+  // Bespielte Bahnnummern des Spiels: die frei gewählte Liste (Anlage) oder der fortlaufende
+  // Bereich ersteBahn … ersteBahn+bahnen-1. Für die Bahn-Tabs/Übersicht (auch nicht fortlaufend).
+  function gameLanes() {
+    return Array.isArray(c.bahnListe) && c.bahnListe.length
+      ? c.bahnListe.slice().sort((a, b) => a - b)
+      : Array.from({ length: c.bahnen }, (_, i) => c.ersteBahn + i);
+  }
   function playerName(sp) { return c.spielerListe[sp].name || ('Spieler ' + (sp + 1)); }
   function playerTotal(sp) { return state.bloecke[sp].reduce((s, blk) => s + satzHolz(blk, ranges), 0); }
 
@@ -1087,7 +1097,7 @@ export function spielLaufendView() {
             <button type="button" class="icon-btn" data-act="lane-settings-close" aria-label="Schließen">✕</button>
           </div>
           <div class="erf-settings-body">
-            <p class="erf-lane-sub">Bahn ${laneOf(sp, st)} · ${esc(playerName(sp))} · Satz ${st + 1}</p>
+            <p class="erf-lane-sub">Bahn ${laneOf(sp, st)}${(() => { const bi = bahnInfo(laneOf(sp, st)); return bi && bi.bahnart ? ` (${esc(ART_LABEL[bi.bahnart] || bi.bahnart)})` : ''; })()} · ${esc(playerName(sp))} · Satz ${st + 1}</p>
             <div class="erf-lane-actions">
               <button type="button" class="erf-btn ${satzDone ? 'is-on' : 'done'}" data-act="end-satz">${satzDone ? '↺ Satz wieder öffnen' : '✓ Satz beenden'}</button>
               <button type="button" class="erf-btn ${allDone ? 'is-on' : 'danger'}" data-act="end-game">${allDone ? '↺ Spiel wieder öffnen' : '⏹ Spiel beenden (nur dieser Spieler)'}</button>
@@ -1104,9 +1114,12 @@ export function spielLaufendView() {
     return `
       <div class="summary">
         <div class="sum-row"><span>Spielart</span><strong>Sportkegeln-Training</strong></div>
+        ${c.anlageName ? `<div class="sum-row"><span>Anlage</span><strong>${esc(c.anlageName)}</strong></div>` : ''}
         <div class="sum-row"><span>Bahnart</span><strong>${c.preset ? c.preset : '—'}</strong></div>
         <div class="sum-row"><span>Spieler</span><strong>${c.spieler}</strong></div>
-        <div class="sum-row"><span>Bahnen</span><strong>${c.bahnen}${c.ersteBahn ? ` <small>(Bahn ${c.ersteBahn}–${c.ersteBahn + c.bahnen - 1})</small>` : ''}</strong></div>
+        <div class="sum-row"><span>Bahnen</span><strong>${c.bahnListe && c.bahnListe.length
+          ? `${c.bahnListe.length} <small>(Bahn ${gameLanes().join(', ')})</small>`
+          : `${c.bahnen}${c.ersteBahn ? ` <small>(Bahn ${c.ersteBahn}–${c.ersteBahn + c.bahnen - 1})</small>` : ''}`}</strong></div>
         <div class="sum-row"><span>Sätze</span><strong>${c.saetze}</strong></div>
         <div class="sum-row"><span>Würfe pro Satz</span><strong>${c.wuerfeProSatz}</strong></div>
         <div class="sum-row"><span>Gesamtwürfe</span><strong>${c.gesamtwuerfe}</strong></div>
@@ -1143,13 +1156,13 @@ export function spielLaufendView() {
   function renderBahnTabs(bs) {
     // Alle Bahnen des Spiels zeigen; bis zu 4 füllen die Breite komplett,
     // ab der 5. entsteht horizontaler Scroll (CSS .erf-ptab min-width).
-    const anzahl = c.bahnen;
+    const lanes = gameLanes();
     const belegung = {};
     bs.forEach((s, sp) => { belegung[s.lane] = sp; });
 
     const tabs = [];
-    for (let i = 0; i < anzahl; i++) {
-      const bahn = c.ersteBahn + i;
+    for (let i = 0; i < lanes.length; i++) {
+      const bahn = lanes[i];
       const sp = belegung[bahn];
       if (sp == null) {
         tabs.push(`<div class="erf-ptab is-frei" aria-label="Bahn ${bahn}, frei">
