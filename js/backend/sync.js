@@ -90,19 +90,38 @@ export function istFremdAktiv(owner, meineUid) {
 // Lokales Spiel in Supabase spiegeln. Gibt {remoteId, beitrittsCode, posToId} zurueck.
 // Das erstellende Geraet uebernimmt zunaechst alle Spieler (es hat sie lokal bereits
 // bespielt); Freigeben/Uebernehmen fuer weitere Geraete laeuft ueber die UI.
-export async function linkGame(game) {
+//
+// opts.wettkampfRemoteId: wenn gesetzt, wird das Spiel als DURCHGANG eines Wettkampfs
+// verknuepft (spiel.wettkampf_id + durchgang_nr). Bei Einzelspielen bleiben diese Spalten
+// ungenannt — so bleibt das Einzelspiel-Sharing auch auf einer DB ohne die Wettkampf-
+// Migration lauffaehig (PostgREST wuerde sonst eine unbekannte Spalte melden).
+export async function linkGame(game, opts = {}) {
+  const { wettkampfRemoteId = null } = opts;
   const geraet = await ensureGeraet();
+  // Besitzer des Spiels ist der ACCOUNT (auth.uid()), NICHT das Geraet: die RLS
+  // (spiel_insert/update/delete/select) prueft `besitzer = auth.uid()`. Die Geraete-ID
+  // wird darunter fuer Mitgliedschaft (spiel_geraet) und Besitz-Lock (besitzer_geraet)
+  // genutzt. ensureGeraet() hat die Session bereits sichergestellt, kontoId() ist gesetzt.
+  const konto = await kontoId();
+  if (!konto) throw new Error('nicht angemeldet');
   const now = new Date().toISOString();
   const config = game.config || {};
 
+  const insertRow = {
+    besitzer: konto,
+    spielart: game.spiel || 'sportkegler-wk',
+    status: game.status || 'setup',
+    config_json: config,
+    anlage_id: config.anlageId || null,
+  };
+  if (wettkampfRemoteId) {
+    insertRow.wettkampf_id = wettkampfRemoteId;
+    insertRow.durchgang_nr = game.durchgangNr ?? null;
+  }
+
   const { data: sp, error: e1 } = await supabase
     .from('spiel')
-    .insert({
-      besitzer: geraet,
-      spielart: game.spiel || 'sportkegler-wk',
-      status: game.status || 'setup',
-      config_json: config,
-    })
+    .insert(insertRow)
     .select('id, beitritts_code, erstellt_am, aktualisiert_am, spielart, status, config_json')
     .single();
   if (e1) throw e1;
@@ -171,6 +190,181 @@ export async function joinGame(code) {
   return pullGame(remoteId);
 }
 
+// --- Wettkampf: Klammer über mehrere Durchgang-Spiele -----------------------
+//
+// Ein Wettkampf ist eine dünne Klammer: die `wettkampf`-Zeile hält Stammdaten +
+// die gesamte lokale Struktur (Mannschaften, Programm, spielerJeMannschaft) in
+// config_json; die Durchgänge sind normale `spiel`-Zeilen mit wettkampf_id. Ein
+// zweites Gerät tritt EINMAL dem Wettkampf bei (wettkampf_beitreten) und sieht/
+// beschreibt darüber automatisch alle Durchgänge (auch später ergänzte).
+
+// Lokalen Wettkampf + seine Durchgänge in Supabase spiegeln.
+// games = die lokalen Durchgang-Spiele (aus getWettkampfGames). Gibt
+// {remoteId, beitrittsCode} zurück; die Durchgänge werden per linkGame gespiegelt.
+export async function linkWettkampf(wettkampf, games) {
+  const geraet = await ensureGeraet();
+  const konto = await kontoId();
+  if (!konto) throw new Error('nicht angemeldet');
+
+  // config_json = die lokale Wettkampf-Struktur OHNE Remote-/Laufzeit-Felder und ohne
+  // die (geräte-lokalen) Durchgang-IDs — die Durchgänge werden relational rekonstruiert.
+  const { remoteId, beitrittsCode, linked, updatedAt, durchgaenge, id, ...rest } = wettkampf;
+  const config = { ...rest };
+
+  const { data: w, error: e1 } = await supabase
+    .from('wettkampf')
+    .insert({
+      besitzer: konto,
+      name: wettkampf.name || null,
+      datum: wettkampf.datum || null,
+      anlage_id: wettkampf.anlageId || null,
+      status: wettkampf.status || 'setup',
+      config_json: config,
+    })
+    .select('id, beitritts_code')
+    .single();
+  if (e1) throw e1;
+  const remoteWkId = w.id;
+
+  const { error: e2 } = await supabase
+    .from('wettkampf_geraet').insert({ wettkampf_id: remoteWkId, geraet });
+  if (e2) throw e2;
+
+  // Jeden Durchgang als normales Spiel spiegeln (mit wettkampf_id + durchgang_nr).
+  const links = [];
+  for (const g of games) {
+    const res = await linkGame(g, { wettkampfRemoteId: remoteWkId });
+    links.push({ gameId: g.id, remoteId: res.remoteId, beitrittsCode: res.beitrittsCode });
+  }
+
+  return { remoteId: remoteWkId, beitrittsCode: w.beitritts_code, links };
+}
+
+// Vollständigen Remote-Wettkampf laden und als { wettkampf, games } (App-Struktur)
+// zusammenbauen. Die Durchgänge werden über spiel.wettkampf_id gefunden und einzeln
+// als lokale Spiele geladen (pullGame). Lokale IDs werden stabil aus den Remote-IDs
+// abgeleitet (wettkampf: 'rw-'+id, Spiele: 'r-'+id), sodass mehrfaches Pullen idempotent
+// dieselben lokalen Objekte trifft.
+export async function pullWettkampf(remoteId) {
+  const [{ data: w, error: e1 }, { data: spiele, error: e2 }] = await Promise.all([
+    supabase.from('wettkampf').select('*').eq('id', remoteId).single(),
+    supabase.from('spiel').select('id, durchgang_nr, status').eq('wettkampf_id', remoteId),
+  ]);
+  if (e1) throw e1;
+  if (e2) throw e2;
+
+  const localWkId = 'rw-' + w.id;
+  const rows = (spiele || []).slice().sort((a, b) => (a.durchgang_nr || 0) - (b.durchgang_nr || 0));
+  const games = [];
+  const durchgaenge = [];
+  for (const row of rows) {
+    const g = await pullGame(row.id);   // assembliertes lokales Spiel (id 'r-'+row.id)
+    g.wettkampfId = localWkId;
+    g.durchgangNr = row.durchgang_nr;
+    games.push(g);
+    durchgaenge.push({ nr: row.durchgang_nr, gameId: g.id, status: row.status || g.status });
+  }
+
+  const base = w.config_json || {};
+  const wettkampf = {
+    ...base,
+    id: localWkId,
+    remoteId: w.id,
+    linked: true,
+    beitrittsCode: w.beitritts_code,
+    typ: 'sportkegler-wettkampf',
+    status: w.status,
+    name: w.name != null ? w.name : base.name,
+    datum: w.datum || base.datum,
+    anlageId: w.anlage_id || base.anlageId,
+    durchgaenge,
+    createdAt: base.createdAt || w.erstellt_am,
+    updatedAt: w.aktualisiert_am,
+  };
+  return { wettkampf, games };
+}
+
+// Einem Wettkampf per Beitritts-Code beitreten (RPC), dann vollständig laden.
+export async function joinWettkampf(code) {
+  const geraet = await ensureGeraet();
+  const { data: remoteId, error } = await supabase.rpc('wettkampf_beitreten', {
+    p_code: (code || '').trim(), p_geraet: geraet,
+  });
+  if (error) throw error;
+  return pullWettkampf(remoteId);
+}
+
+// Wettkampf-Status setzen (nur der Ersteller darf das laut RLS).
+export async function pushWettkampfStatus(remoteId, status) {
+  const { error } = await supabase.from('wettkampf').update({ status }).eq('id', remoteId);
+  if (error) throw error;
+}
+
+// Wettkampf-Config (Stammdaten-Struktur: Mannschaften inkl. Logos, Programm …) aktualisieren.
+// Laut RLS darf das NUR der Ersteller (wettkampf.besitzer); auf anderen Geräten schlägt es
+// still fehl (lokale Anzeige bleibt), analog zu pushConfig für Durchgänge.
+export async function pushWettkampfConfig(remoteId, config) {
+  const { error } = await supabase.from('wettkampf').update({ config_json: config }).eq('id', remoteId);
+  if (error) throw error;
+}
+
+// Read-only Schnappschuss eines geteilten Wettkampfs per Beitritts-Code (RPC) — für das
+// OBS-Overlay. Braucht KEIN angemeldetes Gerät (die RPC ist an anon ge-grantet). Baut das
+// Ergebnis in die App-Struktur { wettkampf, games } um, wie sie computeWettkampfStats erwartet.
+// Gibt null zurück, wenn der Code unbekannt ist.
+export async function fetchOverlay(code) {
+  const { data, error } = await supabase.rpc('wettkampf_overlay', { p_code: (code || '').trim() });
+  if (error) throw error;
+  if (!data) return null;
+
+  const base = (data.wettkampf && data.wettkampf.config) || {};
+  const wettkampf = {
+    ...base,
+    name: (data.wettkampf && data.wettkampf.name) != null ? data.wettkampf.name : base.name,
+    status: data.wettkampf && data.wettkampf.status,
+    durchgaenge: [],
+  };
+  const games = [];
+  (data.spiele || []).forEach((s, i) => {
+    const config = s.config || {};
+    const nSaetze = config.saetze || 0;
+    const nSp = (config.spielerListe || []).length;
+    const bloecke = Array.from({ length: nSp }, () =>
+      Array.from({ length: nSaetze }, () => emptyBlock(config)));
+    (s.bloecke || []).forEach((b) => {
+      if (bloecke[b.position] && b.satz != null && bloecke[b.position][b.satz] !== undefined) {
+        bloecke[b.position][b.satz] = b.block || emptyBlock(config);
+      }
+    });
+    const id = 'ov-' + (s.durchgang_nr ?? i);
+    games.push({ id, spiel: 'sportkegler-wk', status: s.status, config, erfassung: { bloecke } });
+    wettkampf.durchgaenge.push({ nr: s.durchgang_nr ?? i + 1, gameId: id });
+  });
+  return { wettkampf, games };
+}
+
+// Auf Änderungen eines Wettkampfs lauschen: die wettkampf-Zeile selbst (Status/Config),
+// neue/entfernte Durchgänge (spiel mit wettkampf_id) und die Würfe der bekannten
+// Durchgänge (satz_block je spiel_id). onChange(art) wird bei jeder Änderung gerufen
+// ('wettkampf' | 'durchgang' | 'block'); der Aufrufer entprellt und lädt neu.
+// durchgangIds = aktuell bekannte Durchgang-Remote-IDs (für die satz_block-Filter).
+export function subscribeWettkampf(remoteId, durchgangIds = [], { onChange } = {}) {
+  const ch = supabase.channel('wk:' + remoteId + ':' + Math.random().toString(36).slice(2, 7));
+  ch.on('postgres_changes',
+    { event: '*', schema: 'public', table: 'wettkampf', filter: `id=eq.${remoteId}` },
+    () => onChange && onChange('wettkampf'));
+  ch.on('postgres_changes',
+    { event: '*', schema: 'public', table: 'spiel', filter: `wettkampf_id=eq.${remoteId}` },
+    () => onChange && onChange('durchgang'));
+  (durchgangIds || []).forEach((id) => {
+    ch.on('postgres_changes',
+      { event: '*', schema: 'public', table: 'satz_block', filter: `spiel_id=eq.${id}` },
+      () => onChange && onChange('block'));
+  });
+  ch.subscribe();
+  return () => { supabase.removeChannel(ch); };
+}
+
 // --- Besitz-Lock ------------------------------------------------------------
 
 // Spieler uebernehmen. Rueckgabe false = von der DB verweigert (fremd + aktiv).
@@ -225,6 +419,14 @@ export async function pushBlock(remoteId, spielerId, satz, block) {
 // Status des Spiels setzen (nur der Ersteller darf das laut RLS).
 export async function pushStatus(remoteId, status) {
   const { error } = await supabase.from('spiel').update({ status }).eq('id', remoteId);
+  if (error) throw error;
+}
+
+// Setup/Config eines Spiels aktualisieren (z.B. Spielernamen + Startbahnen der Aufstellung
+// im Wettkampf-Hub). Laut RLS darf das NUR der Ersteller (spiel.besitzer) — bei anderen
+// Geraeten schlaegt es fehl; der Aufrufer faengt das ab (lokale Anzeige, kein harter Fehler).
+export async function pushConfig(remoteId, config) {
+  const { error } = await supabase.from('spiel').update({ config_json: config }).eq('id', remoteId);
   if (error) throw error;
 }
 

@@ -33,6 +33,15 @@ export function computeGameStats(config, bloecke, ranges) {
       };
     });
     const gesamt = saetze.reduce((s, x) => s + x.holz, 0);
+    // Abräum-Holz je Spieler: Summe der Teilsätze im Abräum-Modus (Abräumen / Kranz-Abräumen)
+    // über alle Sätze. Dient u. a. als Feinwertung (z. B. EWP-Gleichstand innerhalb einer
+    // Mannschaft) — bei reinen Volle-Programmen (Bohle) bleibt es 0.
+    const abraeum = arr.reduce((tot, b) => tot + ranges.reduce((s, r, i) => {
+      if (!isAbraeumMode(r.modus)) return s;
+      const ov = Array.isArray(b.overrides) ? b.overrides[i] : null;
+      const val = ov != null ? ov : (Array.isArray(b.wuerfe) ? b.wuerfe.slice(r.start, r.end).reduce((a, w) => a + w, 0) : 0);
+      return s + val;
+    }, 0), 0);
     const wuerfe = arr.flatMap((b) => (Array.isArray(b.wuerfe) ? b.wuerfe : []));
     // Kränze je Spieler — deckungsgleich mit der ♔-Markierung an den Wurf-Chips: im Kranz-
     // Abräumen aus dem Lauf-Scan (Wurf lässt nur den König 5 stehen), in der Volle über
@@ -94,6 +103,7 @@ export function computeGameStats(config, bloecke, ranges) {
       index: i,
       name: sp.name || ('Spieler ' + (i + 1)),
       gesamt,
+      abraeum,                                        // Abräum-Holz (Feinwertung, z. B. EWP-Gleichstand)
       saetze,
       bester: saetze.reduce((m, x) => Math.max(m, x.holz), 0),
       schnittSatz: saetze.length ? gesamt / saetze.length : 0,

@@ -41,6 +41,31 @@ test('lanePlan: 1 Bahn -> immer fest, auch bei Duo-Modus', () => {
   assert.deepEqual(lanePlan(setup('classic', [1], { bahnen: 1 })), [[1, 1, 1, 1]]);
 });
 
+// ── Freie Bahnauswahl (Anlage): bahnListe statt fortlaufendem Bereich ─────────
+
+// Bei gewählter Anlage werden beliebige (auch nicht fortlaufende) Bahnen bespielt. Der
+// Bahnwechsel rechnet über den INDEX in der sortierten bahnListe -> gleiche Semantik.
+function setupListe(mode, startLanes, bahnListe, saetze = 2) {
+  return { saetze, bahnwechsel: mode, bahnListe, spielerData: startLanes.map((startBahn) => ({ startBahn })) };
+}
+
+test('lanePlan bahnListe: fortlaufend ab höherer Nummer (plus1)', () => {
+  assert.deepEqual(lanePlan(setupListe('plus1', [3, 4], [3, 4])), [[3, 4], [4, 3]]);
+});
+
+test('lanePlan bahnListe: nicht fortlaufende Bahnen [1,3,5] rotieren im Kreis', () => {
+  assert.deepEqual(lanePlan(setupListe('plus1', [1], [1, 3, 5], 3)), [[1, 3, 5]]);
+  assert.deepEqual(lanePlan(setupListe('plus1', [3], [1, 3, 5], 3)), [[3, 5, 1]]);
+});
+
+test('lanePlan bahnListe: Duo (bohle) auf gewähltem Paar', () => {
+  assert.deepEqual(lanePlan(setupListe('bohle', [3, 4], [3, 4], 4)), [[3, 4, 3, 4], [4, 3, 4, 3]]);
+});
+
+test('lanePlan bahnListe: feste Bahn nutzt die gewählte Nummer', () => {
+  assert.deepEqual(lanePlan(setupListe('fest', [5], [2, 5])), [[5, 5]]);
+});
+
 // ── computeBahnState (dynamische Belegung mit Gating) ────────────────────────
 
 // Bahn-Zuordnung aus einem statischen Plan (wie im View: laneOf via bahnplan).

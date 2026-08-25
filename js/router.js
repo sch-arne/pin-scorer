@@ -21,8 +21,15 @@ export function navigate(path) {
 }
 
 export function currentPath() {
-  const raw = location.hash.replace(/^#/, '');
+  const raw = location.hash.replace(/^#/, '').split('?')[0];
   return raw || '/menu';
+}
+
+// Query-Parameter aus dem Hash (z.B. "#/import/sportwinner?src=…") als URLSearchParams.
+// Erlaubt Deeplinks mit Parametern, ohne dass das Routing (nur Pfad) davon betroffen ist.
+export function currentQuery() {
+  const q = location.hash.replace(/^#/, '').split('?').slice(1).join('?');
+  return new URLSearchParams(q);
 }
 
 function render() {

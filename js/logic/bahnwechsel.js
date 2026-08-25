@@ -8,23 +8,34 @@
 //  fest         : bleibt auf der Startbahn
 //  classic      : Duo (Nachbarpaar) — tauschen, dann Block +2, dann tauschen (swap/block/swap ...)
 //  bohle        : Duo — tauschen, dann Block +2 MIT Tausch (gerade/ungerade wechseln)
+// Geordnete Liste der bespielten Bahnnummern. Bei freier Bahnauswahl (Anlage) ist das die
+// explizit gewählte Liste `bahnListe` (auch nicht fortlaufend erlaubt); sonst der klassische
+// fortlaufende Bereich ersteBahn … ersteBahn+bahnen-1. Alle Bahn-Berechnungen laufen über
+// den INDEX in dieser Liste, sodass Bahnwechsel auch bei beliebiger Bahnauswahl greift.
+export function laneListOf(s) {
+  if (Array.isArray(s.bahnListe) && s.bahnListe.length) return s.bahnListe.slice().sort((a, b) => a - b);
+  return Array.from({ length: s.bahnen }, (_, i) => s.ersteBahn + i);
+}
+
 export function lanePlan(s) {
-  const B = s.bahnen;
+  const laneList = laneListOf(s);
+  const B = laneList.length;
   const mode = s.bahnwechsel;
   return s.spielerData.map((pl) => {
-    const startIdx = pl.startBahn - s.ersteBahn; // 0-basiert im Bahnbereich
+    let startIdx = laneList.indexOf(pl.startBahn); // Index der Startbahn in der Liste
+    if (startIdx < 0) startIdx = 0;                // Startbahn nicht (mehr) in der Liste -> erste
     const lanes = [];
 
     if (mode === 'classic' || mode === 'bohle') {
       const numDuos = Math.floor(B / 2);
       if (numDuos < 1) { // 1 Bahn -> kein Duo, bleibt fest
-        for (let set = 0; set < s.saetze; set++) lanes.push(s.ersteBahn + startIdx);
+        for (let set = 0; set < s.saetze; set++) lanes.push(laneList[startIdx]);
         return lanes;
       }
       let duo = Math.floor(startIdx / 2) % numDuos;
       let pos = startIdx % 2;
       for (let set = 0; set < s.saetze; set++) {
-        lanes.push(s.ersteBahn + duo * 2 + pos);
+        lanes.push(laneList[duo * 2 + pos]);
         if (set % 2 === 0) {
           pos = 1 - pos;                       // Tausch im Duo
         } else {
@@ -38,7 +49,7 @@ export function lanePlan(s) {
     const step = mode === 'plus1' ? 1 : mode === 'minus1' ? -1 : 0;
     for (let set = 0; set < s.saetze; set++) {
       const idx = (((startIdx + step * set) % B) + B) % B;
-      lanes.push(s.ersteBahn + idx);
+      lanes.push(laneList[idx]);
     }
     return lanes;
   });

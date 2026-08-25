@@ -1,12 +1,12 @@
-// Hauptmenue — Startbildschirm mit 4 Kacheln.
-// "Spieler" und "Anlagen" sind vorerst deaktiviert (brauchen spaeter Server/Account).
+// Hauptmenue — Startbildschirm mit Kacheln. "Spieler" und "Anlagen" brauchen eine
+// Verbindung/Account; die Views laden ihr Backend lazy und degradieren offline sauber.
 
 const TILES = [
   { label: 'Neues Spiel', desc: 'Ein Spiel starten und Würfe erfassen', icon: '🎳', route: '/neues-spiel' },
   { label: 'Spiel beitreten', desc: 'Mit Code einem geteilten Spiel beitreten', icon: '🔗', route: '/beitreten' },
   { label: 'Statistiken', desc: 'Ergebnisse und Auswertungen', icon: '📊', route: '/statistiken' },
   { label: 'Spieler', desc: 'Account & Profil (geräteübergreifend)', icon: '👤', route: '/spieler' },
-  { label: 'Anlagen', desc: 'Kegelbahnen verknüpfen — folgt', icon: '📍', disabled: true },
+  { label: 'Anlagen', desc: 'Kegelanlagen anlegen & verwalten', icon: '📍', route: '/anlagen' },
 ];
 
 export function menuView() {

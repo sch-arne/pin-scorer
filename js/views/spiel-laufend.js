@@ -11,10 +11,15 @@
 //   - Holz je Satz = Summe Teilsaetze; Spieler-Gesamt ueber alle Saetze
 //   - Satz-Status pending/live/done, Bahn je Satz aus bahnplan
 
-import { getActiveGame, getGame, saveGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings } from '../store.js';
+import { getActiveGame, getGame, saveGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings, getWettkampf, getWettkampfGames } from '../store.js';
 import { esc } from '../util.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
 import { computeGameStats } from '../logic/statistik.js';
+import { buildSportwinnerPush } from '../logic/sportwinner-ergebnis.js';
+import { buildKonflikte } from '../logic/sportwinner-konflikte.js';
+import {
+  getBruecke, pushErgebnis, holeStatus, holeSportwinnerLive, brueckeStatusInfo, brueckePushText,
+} from '../backend/sw-bruecke.js';
 import {
   fullPins, isAbraeumMode, rangeOfThrow, defaultKegel,
   abraeumScan, abraeumStateBefore, volleKranz,
@@ -176,6 +181,9 @@ export function spielLaufendView() {
   }
 
   const c = game.config;
+  // Gehört das Spiel zu einem Wettkampf, führt „Zurück" in dessen Hub statt in die Spielauswahl.
+  const backHref = game.wettkampfId ? '#/wettkampf' : '#/neues-spiel';
+  const backLabel = game.wettkampfId ? 'Zum Wettkampf' : 'Neues Spiel';
   const ranges = teilsatzRanges(c);
   const state = normalizeErfassung(game.erfassung, c);
   let editIdx = null; // lokaler Korrektur-Index (nicht persistiert)
@@ -189,6 +197,16 @@ export function spielLaufendView() {
   let overrideSt = null; // Satz-Index, dessen Ergebnis-Sheet offen ist (null = zu); bearbeitet wird aus der Übersicht
   let overrideTs = null; // Teilsatz-Index im Sheet (null = ganzes Satz-Ergebnis eingeben -> auf offenen Teilsatz verteilen)
   let overrideDraft = ''; // im Override-Sheet eingetippte Ziffern
+  // Zell-Cursor der Mehr-Spieler-Übersicht (nur Kontrollzentrum): { sp, r, ci } — Spieler,
+  // sichtbare Zeile (nach Bahn sortiert) und Spalte (Teilsatz-Index 0.. oder letzte = Holz).
+  // Pfeiltasten bewegen ihn, Enter öffnet die markierte Zelle zum Bearbeiten. null = kein Cursor.
+  let cursor = null;
+
+  // Desktop-PC (breiter Bildschirm) → Kontrollzentrum-Erfassung (Bahn-Monitor, Mehr-Spieler-
+  // Übersicht, breitere Eingabe). Automatisch per Bildschirmbreite, live bei Größenänderung
+  // (Listener am Ende, Aufräumen in teardownSync). Passt zum CSS-Breakpoint 900px.
+  const kzMedia = window.matchMedia('(min-width: 900px)');
+  const istDesktop = () => kzMedia.matches;
   let standardbilder = normalizeStandardbilder(getStandardbilder()); // globale Schnellauswahl-Bilder (Zahl -> Liste { pins, slot })
   let pinPick = null; // offenes Schnellauswahl-Pop-up: { idx, n, combos } (null = zu)
   let sbEditN = 1; // in den Einstellungen gerade bearbeitete Holzzahl (1-8)
@@ -200,10 +218,99 @@ export function spielLaufendView() {
   function persist() {
     if (saveErfassung(gameId, state) === null) toast('Speichern fehlgeschlagen — Speicher voll?');
     pushDirty();
+    pushToBruecke();
   }
   // Wie persist(), aber ohne Hochschreiben — für lokal übernommene Remote-Änderungen
   // (die dürfen nicht als eigener Push zurücklaufen).
-  function persistLocalOnly() { saveErfassung(gameId, state); }
+  function persistLocalOnly() { saveErfassung(gameId, state); pushToBruecke(); }
+
+  // ── Sportwinner-Rückschreiben (nur Vereins-PC) ───────────────────────────────
+  // Gehört das Spiel zu einem aus Sportwinner importierten Wettkampf UND wurde die App von der
+  // Brücke mit `?push=…` geöffnet, schickt DIESES Gerät die Ergebnisse (Volle/Abräumen/Fehler je
+  // Slot/Bahn) bei jeder Änderung direkt an die lokale Brücke — unabhängig davon, ob der
+  // Wettkampf-Hub gerade offen ist. So wird sofort bei der Eingabe geschrieben, nicht erst beim
+  // nächsten Hub-Render. Andere Geräte kennen den Push-Endpoint nicht und schreiben nichts.
+  let bpushTimer = null;
+  let bpushLast = '';
+  let bstatusTimer = null; // pollt den echten Schnittstellen-Status der Brücke
+  // Zuletzt bekannter Brücken-Status — als View-State gehalten, damit ein Re-Render (jeder Wurf
+  // baut das Template neu) die Statuszeile NICHT zurücksetzt und eine Push-Bestätigung stehen bleibt.
+  let swBadge = { state: 'checking', label: 'Prüfe …' };
+  let swMsg = 'Status wird geprüft …';
+
+  // Ist das Rückschreiben in DIESER Ansicht überhaupt möglich? (Sportwinner-Import + von der
+  // Brücke geöffnet = Vereins-PC). Steuert Statuszeile UND Push.
+  function swActive() {
+    if (!game.wettkampfId || !getBruecke()) return false;
+    const w = getWettkampf(game.wettkampfId);
+    return !!(w && w.sportwinner);
+  }
+
+  // Status-Punkt in der Kopfzeile aus dem View-State färben (nach jedem Render aufgerufen).
+  // Farbe = Zustand, Tooltip/aria = Klartext (per Tippen als Toast, siehe wire()).
+  function paintSw() {
+    const dot = root.querySelector('[data-bruecke-status]');
+    if (dot) { dot.className = 'sw-dot is-' + swBadge.state; dot.title = swMsg; dot.setAttribute('aria-label', 'Sportwinner: ' + swMsg); }
+  }
+
+  // Live-Status der Brücke abfragen. Badge immer aktualisieren; die Hinweis-Zeile nur, wenn
+  // gerade keine frische Push-Bestätigung stehen soll (msgToo=false direkt nach einem Push).
+  async function pollBrueckeStatus({ msgToo = true } = {}) {
+    if (!getBruecke()) return;
+    const info = brueckeStatusInfo(await holeStatus());
+    swBadge = { state: info.state, label: info.label };
+    if (msgToo) swMsg = info.hint;
+    paintSw();
+  }
+
+  // ── Sportwinner-Konflikte (Erkennung + Freeze; Entscheidung im Wettkampf-Hub) ─────────────
+  // Diese Ansicht erkennt Abweichungen (Ergebnisse/Aufstellung) und friert die betroffenen
+  // Ergebnis-Zellen im Rückschreiben ein, damit die Brücke einen direkten Sportwinner-Eintrag
+  // nicht überschreibt. Gelöst werden die Konflikte im Wettkampf-Hub (voller Entscheidungs-Dialog);
+  // hier führt ein Banner dorthin.
+  let swKonfliktTimer = null;
+  let swKonfliktKeys = new Set(); // eingefrorene Ergebnis-Zellen (ergKey)
+  let swKonfliktN = 0;            // Anzahl offener Abweichungen (Ergebnis + Aufstellung)
+
+  async function pollKonflikte() {
+    if (!swActive()) return;
+    const live = await holeSportwinnerLive();
+    if (!live) return;
+    const w = getWettkampf(game.wettkampfId);
+    // Aktuellen Erfassungsstand (state) für DIESES Spiel einsetzen, sonst vergliche man den
+    // zuletzt gespeicherten Stand statt der Live-Eingabe.
+    const games = getWettkampfGames(w.id).map((g) => (g.id === gameId ? { ...g, erfassung: state } : g));
+    const all = buildKonflikte(w, games, live);
+    swKonfliktKeys = new Set(all.ergebnis.map((k) => k.key));
+    swKonfliktN = all.ergebnis.length + all.aufstellung.length;
+    paintKonfliktBanner();
+  }
+
+  function paintKonfliktBanner() {
+    const box = root.querySelector('[data-sw-konflikt-banner]');
+    if (!box) return;
+    box.innerHTML = swKonfliktN
+      ? `<a class="swk-banner" href="#/wettkampf">⚠ ${swKonfliktN} Sportwinner-${swKonfliktN === 1 ? 'Abweichung' : 'Abweichungen'} — im Wettkampf lösen →</a>`
+      : '';
+  }
+
+  function pushToBruecke() {
+    if (!swActive()) return;
+    const w = getWettkampf(game.wettkampfId);
+    // Offene Konflikt-Zellen einfrieren (nicht überschreiben, bis im Hub entschieden).
+    const payload = buildSportwinnerPush(w, getWettkampfGames(w.id), { excludeKeys: swKonfliktKeys });
+    if (!payload || !payload.updates.length) return;
+    const json = JSON.stringify(payload);
+    if (json === bpushLast) return;
+    clearTimeout(bpushTimer);
+    bpushTimer = setTimeout(async () => {
+      bpushLast = json;
+      const res = await pushErgebnis(payload);
+      swMsg = res ? brueckePushText(res) : 'Brücke nicht erreichbar — läuft die Brücke auf diesem PC?';
+      paintSw();
+      pollBrueckeStatus({ msgToo: false }); // Badge frisch ziehen, Bestätigung stehen lassen
+    }, 350);
+  }
 
   // ── Mehrgeräte-Sync (nur bei einem mit der DB verknüpften Spiel) ─────────────
   // Local-first bleibt: ein unverknüpftes Spiel läuft rein lokal wie bisher. Bei einem
@@ -285,6 +392,11 @@ export function spielLaufendView() {
   function teardownSync() {
     if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
     if (unsub) { try { unsub(); } catch (e) {} unsub = null; }
+    clearTimeout(bpushTimer);
+    clearInterval(bstatusTimer);
+    clearInterval(swKonfliktTimer);
+    window.removeEventListener('keydown', onKey);
+    kzMedia.removeEventListener('change', render);
     window.removeEventListener('hashchange', teardownSync);
   }
   function startRealtime() {
@@ -385,6 +497,16 @@ export function spielLaufendView() {
   function block(sp, st) { return state.bloecke[sp][st]; }
   function current() { return block(state.aktiverSpieler, state.aktiverSatz); }
   function laneOf(sp, st) { return c.bahnplan?.[sp]?.[st] ?? (c.ersteBahn + st); }
+  // Reale Bahn (aus der gewählten Anlage) zu einer Bahnnummer — { id, bahnart } oder null.
+  function bahnInfo(nummer) { return c.bahnZuordnung?.[nummer] || null; }
+  const ART_LABEL = { classic: 'Classic', bohle: 'Bohle', schere: 'Schere' };
+  // Bespielte Bahnnummern des Spiels: die frei gewählte Liste (Anlage) oder der fortlaufende
+  // Bereich ersteBahn … ersteBahn+bahnen-1. Für die Bahn-Tabs/Übersicht (auch nicht fortlaufend).
+  function gameLanes() {
+    return Array.isArray(c.bahnListe) && c.bahnListe.length
+      ? c.bahnListe.slice().sort((a, b) => a - b)
+      : Array.from({ length: c.bahnen }, (_, i) => c.ersteBahn + i);
+  }
   function playerName(sp) { return c.spielerListe[sp].name || ('Spieler ' + (sp + 1)); }
   function playerTotal(sp) { return state.bloecke[sp].reduce((s, blk) => s + satzHolz(blk, ranges), 0); }
 
@@ -512,6 +634,69 @@ export function spielLaufendView() {
     state.aktiverSatz = st; editIdx = null;
     overrideSt = null; overrideTs = null; overrideDraft = '';
     persist(); render();
+  }
+
+  // Tastatur (Desktop): zur vorigen/nächsten BESETZTEN Bahn wechseln (in Bahn-Reihenfolge).
+  function stepLane(dir) {
+    const bs = computeBahnState();
+    const belegung = {};
+    bs.forEach((s, sp) => { belegung[s.lane] = sp; });
+    const occupied = gameLanes().map((l) => belegung[l]).filter((sp) => sp != null);
+    if (!occupied.length) return;
+    const cur = occupied.indexOf(state.aktiverSpieler);
+    const next = cur < 0 ? 0 : (cur + dir + occupied.length) % occupied.length;
+    if (occupied[next] !== state.aktiverSpieler) selectPlayer(occupied[next]);
+  }
+  // Tastatur (Desktop): Satz hoch/runter (in Grenzen des Spielers).
+  function stepSatz(dir) {
+    const n = state.bloecke[state.aktiverSpieler].length;
+    const next = state.aktiverSatz + dir;
+    if (next >= 0 && next < n) selectSatz(next);
+  }
+
+  // ── Zell-Cursor der Mehr-Spieler-Übersicht (Kontrollzentrum) ─────────────────
+  function ensureCursor() { if (!cursor) cursor = { sp: state.aktiverSpieler || 0, r: 0, ci: 0 }; }
+  // Flache Spaltenliste über alle Spieler × editierbare Spalten (für ←/→ über Spieler hinweg).
+  function cursorColumns() {
+    const cols = overviewCols();
+    const list = [];
+    state.bloecke.forEach((_, sp) => cols.forEach((_, ci) => list.push({ sp, ci })));
+    return list;
+  }
+  // Aktiven Spieler + Satz an die Cursor-Zelle koppeln (Ziffernblock/Statuszeile/Markierung folgen).
+  function syncCursorSelection() {
+    state.aktiverSpieler = cursor.sp;
+    const sorted = sortedRows(cursor.sp);
+    const row = sorted[Math.min(cursor.r, sorted.length - 1)];
+    if (row) state.aktiverSatz = row.st;
+  }
+  function moveCursor(dx, dy) {
+    ensureCursor();
+    if (dy !== 0) cursor.r = Math.min(c.saetze - 1, Math.max(0, cursor.r + dy));
+    if (dx !== 0) {
+      const list = cursorColumns();
+      const idx = list.findIndex((e) => e.sp === cursor.sp && e.ci === cursor.ci);
+      const next = Math.min(list.length - 1, Math.max(0, (idx < 0 ? 0 : idx) + dx));
+      cursor.sp = list[next].sp; cursor.ci = list[next].ci;
+    }
+    syncCursorSelection();
+    render();
+  }
+  // Cursor an eine per Klick gewählte Zelle setzen (col = Teilsatz-Index oder 'holz').
+  function setCursorTo(sp, st, col) {
+    const r = sortedRows(sp).findIndex((x) => x.st === st);
+    const ci = overviewCols().indexOf(col);
+    cursor = { sp, r: r < 0 ? 0 : r, ci: ci < 0 ? 0 : ci };
+  }
+  // Enter auf der markierten Zelle: das passende Override-Sheet öffnen (dann Ziffern + Enter).
+  function editCursorCell() {
+    ensureCursor();
+    const sorted = sortedRows(cursor.sp);
+    const row = sorted[Math.min(cursor.r, sorted.length - 1)];
+    if (!row) return;
+    state.aktiverSpieler = cursor.sp;
+    const col = overviewCols()[cursor.ci];
+    if (col === 'holz') openSatzOverride(row.st); else openOverride(row.st, col);
   }
 
   // koenigFlag (nur Kranz, per Langdruck): der Wurf fällt N Kranz-Kegel, der König (5)
@@ -803,11 +988,15 @@ export function spielLaufendView() {
   // ── Render ──
   function render() {
     maybeFinish();
+    // Desktop-PC → Kontrollzentrum: die Erfassung verbreitert sich und zeigt oben den Live-Monitor
+    // aller Bahnen (siehe CSS .erf-kz). Automatisch per Bildschirmbreite; Handy bleibt mobil-first.
+    root.classList.toggle('erf-kz', istDesktop());
     root.innerHTML = template();
     wire();
     keepThrowVisible();
     fitBoard();
     positionPinPick();
+    paintKonfliktBanner();
   }
 
   // Kegel-Raute so groß machen, wie der freie Platz in der Satz-Box zulässt — damit alles
@@ -916,20 +1105,23 @@ export function spielLaufendView() {
 
     return `
       <header class="page-header">
-        <a class="back-btn" href="#/neues-spiel" aria-label="Zurück">←</a>
+        <a class="back-btn" href="${backHref}" aria-label="Zurück">←</a>
         <h1 class="page-title brand">Pin-Scorer</h1>
+        ${swActive() ? `<span class="sw-dot is-${swBadge.state}" data-bruecke-status data-act="sw-info" role="img" aria-label="Sportwinner-Status" title="${esc(swMsg)}"></span>` : ''}
         ${allGamesDone() ? `<button type="button" class="icon-btn settings-btn" data-act="show-stats" aria-label="Statistik anzeigen">🏁</button>` : ''}
         <button type="button" class="icon-btn${allGamesDone() ? '' : ' settings-btn'}" data-act="settings" aria-label="Einstellungen">⚙</button>
       </header>
 
+      <div data-sw-konflikt-banner></div>
+      ${istDesktop() ? laneMonitor(bs) : ''}
       ${bahnTabs(bs)}
 
       ${satzTabs()}
 
       ${satzOverviewOpen ? `
       <div class="erf-satz erf-satz-ueber">
-        ${spielerUebersichtPanel()}
-        ${ueberTab === 'uebersicht' ? overviewNumpad() : ''}
+        ${istDesktop() ? allPlayersOverview() : spielerUebersichtPanel()}
+        ${(!istDesktop() && ueberTab === 'uebersicht') ? overviewNumpad() : ''}
       </div>` : `
       <div class="erf-satz">
         ${linked && !canEdit(state.aktiverSpieler) ? lockBanner() : ''}
@@ -1021,7 +1213,7 @@ export function spielLaufendView() {
           ${cards}
           <div class="stats-actions">
             <button type="button" class="erf-btn" data-act="stats-close">↩ Weiter bearbeiten</button>
-            <a class="erf-btn done" href="#/neues-spiel">Neues Spiel</a>
+            <a class="erf-btn done" href="${backHref}">${esc(backLabel)}</a>
           </div>
         </div>
       </div>`;
@@ -1087,7 +1279,7 @@ export function spielLaufendView() {
             <button type="button" class="icon-btn" data-act="lane-settings-close" aria-label="Schließen">✕</button>
           </div>
           <div class="erf-settings-body">
-            <p class="erf-lane-sub">Bahn ${laneOf(sp, st)} · ${esc(playerName(sp))} · Satz ${st + 1}</p>
+            <p class="erf-lane-sub">Bahn ${laneOf(sp, st)}${(() => { const bi = bahnInfo(laneOf(sp, st)); return bi && bi.bahnart ? ` (${esc(ART_LABEL[bi.bahnart] || bi.bahnart)})` : ''; })()} · ${esc(playerName(sp))} · Satz ${st + 1}</p>
             <div class="erf-lane-actions">
               <button type="button" class="erf-btn ${satzDone ? 'is-on' : 'done'}" data-act="end-satz">${satzDone ? '↺ Satz wieder öffnen' : '✓ Satz beenden'}</button>
               <button type="button" class="erf-btn ${allDone ? 'is-on' : 'danger'}" data-act="end-game">${allDone ? '↺ Spiel wieder öffnen' : '⏹ Spiel beenden (nur dieser Spieler)'}</button>
@@ -1104,9 +1296,12 @@ export function spielLaufendView() {
     return `
       <div class="summary">
         <div class="sum-row"><span>Spielart</span><strong>Sportkegeln-Training</strong></div>
+        ${c.anlageName ? `<div class="sum-row"><span>Anlage</span><strong>${esc(c.anlageName)}</strong></div>` : ''}
         <div class="sum-row"><span>Bahnart</span><strong>${c.preset ? c.preset : '—'}</strong></div>
         <div class="sum-row"><span>Spieler</span><strong>${c.spieler}</strong></div>
-        <div class="sum-row"><span>Bahnen</span><strong>${c.bahnen}${c.ersteBahn ? ` <small>(Bahn ${c.ersteBahn}–${c.ersteBahn + c.bahnen - 1})</small>` : ''}</strong></div>
+        <div class="sum-row"><span>Bahnen</span><strong>${c.bahnListe && c.bahnListe.length
+          ? `${c.bahnListe.length} <small>(Bahn ${gameLanes().join(', ')})</small>`
+          : `${c.bahnen}${c.ersteBahn ? ` <small>(Bahn ${c.ersteBahn}–${c.ersteBahn + c.bahnen - 1})</small>` : ''}`}</strong></div>
         <div class="sum-row"><span>Sätze</span><strong>${c.saetze}</strong></div>
         <div class="sum-row"><span>Würfe pro Satz</span><strong>${c.wuerfeProSatz}</strong></div>
         <div class="sum-row"><span>Gesamtwürfe</span><strong>${c.gesamtwuerfe}</strong></div>
@@ -1143,13 +1338,13 @@ export function spielLaufendView() {
   function renderBahnTabs(bs) {
     // Alle Bahnen des Spiels zeigen; bis zu 4 füllen die Breite komplett,
     // ab der 5. entsteht horizontaler Scroll (CSS .erf-ptab min-width).
-    const anzahl = c.bahnen;
+    const lanes = gameLanes();
     const belegung = {};
     bs.forEach((s, sp) => { belegung[s.lane] = sp; });
 
     const tabs = [];
-    for (let i = 0; i < anzahl; i++) {
-      const bahn = c.ersteBahn + i;
+    for (let i = 0; i < lanes.length; i++) {
+      const bahn = lanes[i];
       const sp = belegung[bahn];
       if (sp == null) {
         tabs.push(`<div class="erf-ptab is-frei" aria-label="Bahn ${bahn}, frei">
@@ -1187,6 +1382,64 @@ export function spielLaufendView() {
     return `<div class="erf-ptabs" role="tablist">${tabs.join('')}</div>`;
   }
 
+  // Live-Monitor aller Bahnen (nur Vereins-PC/Desktop, siehe CSS .erf-kz — ersetzt dort den
+  // kompakten Bahn-Tab-Streifen). Je Bahn eine Karte mit Name, Gesamt, aktuellem Satz + Bahn,
+  // laufenden Teilsatz-Summen und dem letzten Wurf. Antippen wählt die Bahn (data-player →
+  // dieselbe Verdrahtung wie die Bahn-Tabs), die aktive Bahn ist hervorgehoben.
+  function laneMonitor(bs) {
+    const lanes = gameLanes();
+    const belegung = {};
+    bs.forEach((s, sp) => { belegung[s.lane] = sp; });
+    const tsLabels = teilsatzLabels();
+    const showTs = ranges.length > 1;
+    const statusLbl = (st) => (st === 'wartet' ? 'wartet' : st === 'done' ? 'fertig' : st === 'live' ? 'läuft' : 'offen');
+
+    const cards = lanes.map((bahn) => {
+      const sp = belegung[bahn];
+      if (sp == null) {
+        return `<div class="elm-card is-frei" aria-label="Bahn ${bahn}, frei">
+          <div class="elm-top"><span class="elm-bahn">Bahn ${bahn}</span></div>
+          <div class="elm-frei">frei</div>
+        </div>`;
+      }
+      const s = bs[sp];
+      const st = s.pos;
+      const blk = block(sp, st);
+      const status = s.waiting ? 'wartet' : satzStatus(blk);
+      const done = status === 'done';
+      const realN = blk.wuerfe.length;
+      const lastThrow = realN ? blk.wuerfe[realN - 1] : '–';
+      const tsRow = showTs
+        ? `<div class="elm-ts">${ranges.map((_, i) => {
+          const t = teilsatzStats(blk, ranges, i, done);
+          const touched = t.count > 0 || t.manual;
+          return `<span class="elm-ts-cell${t.manual ? ' is-manual' : ''}"><span class="elm-ts-lbl">${esc(tsLabels[i])}</span><span class="elm-ts-val">${touched ? t.val : '·'}</span></span>`;
+        }).join('')}</div>`
+        : '';
+      const active = sp === state.aktiverSpieler;
+      return `<button type="button" role="tab" aria-selected="${active}" class="elm-card is-${status}${active ? ' is-active' : ''}" data-player="${sp}">
+        <div class="elm-top">
+          <span class="elm-bahn">Bahn ${bahn}</span>
+          ${s.waiting ? '<span class="elm-flag" title="wartet auf Bahnwechsel">⏳</span>' : ''}
+          ${fremdAktiv(sp) ? '<span class="elm-flag" title="wird auf anderem Gerät erfasst">🔒</span>' : ''}
+          <span class="elm-status">${statusLbl(status)}</span>
+          <span class="elm-total" title="Gesamtergebnis">${playerTotal(sp)}</span>
+        </div>
+        <div class="elm-name">${esc(playerName(sp))}</div>
+        <div class="elm-mid">
+          <span class="elm-satz">Satz ${st + 1} · Bahn ${bahn}</span>
+          <span class="elm-satzholz" title="Gesamt Bahn">${status === 'pending' ? '–' : satzHolz(blk, ranges)}</span>
+        </div>
+        ${tsRow}
+        <div class="elm-bot">
+          <span class="elm-wurf">Wurf ${wuerfeCount(blk)}/${c.wuerfeProSatz}</span>
+          <span class="elm-cur" title="letzter Wurf">${lastThrow}</span>
+        </div>
+      </button>`;
+    });
+    return `<div class="erf-lane-monitor" role="tablist" aria-label="Bahnen-Übersicht">${cards.join('')}</div>`;
+  }
+
   function satzTabs() {
     const sp = state.aktiverSpieler;
     const tabs = state.bloecke[sp].map((blk, st) => {
@@ -1203,51 +1456,55 @@ export function spielLaufendView() {
     return `<div class="erf-stabs" role="tablist">${overviewBtn}${tabs}</div>`;
   }
 
-  // Spieler-Übersicht (inline, ersetzt die Wurferfassung; die Bahn- und Satz-Leiste bleiben oben
-  // stehen): alle spielerspezifischen Daten des AKTIVEN Spielers auf einen Blick —
-  //   • Statistik-Kacheln (Gesamt, Ø/Satz, bester Satz, Ø/Wurf, Alle Neune, Fehlwürfe, Würfe)
-  //   • alle Sätze NACH BAHN sortiert, je Satz die Teilsatz-Ergebnisse + deren Summe (Holz)
-  //   • Fußzeile mit den Spalten-Summen (Teilsätze) und dem Gesamt-Holz
-  // Ein Tipp auf eine Zeile wählt den Satz (die Satz-Leiste oben spiegelt das); der ▦-Button
-  // schaltet zurück zur Erfassung.
-  function spielerUebersichtPanel() {
-    const sp = state.aktiverSpieler;
+  // Sätze eines Spielers, nach Bahn (dann Satz-Nr) sortiert — die Zeilen-Reihenfolge der Übersicht.
+  function sortedRows(sp) {
+    return state.bloecke[sp]
+      .map((blk, st) => ({ st, blk, bahn: laneOf(sp, st), status: satzStatus(blk) }))
+      .sort((a, b) => a.bahn - b.bahn || a.st - b.st);
+  }
+  // Editierbare Spalten der Übersicht: Teilsatz-Indizes (nur bei >1 Teilsatz) + 'holz' ganz rechts.
+  function overviewCols() {
+    return ranges.length > 1 ? [...ranges.map((_, i) => i), 'holz'] : ['holz'];
+  }
+
+  // Editierbare Satz-Tabelle EINES Spielers (Bahn/Satz/Teilsätze/Holz, Zellen antippbar).
+  // `multi` = Teil der Mehr-Spieler-Übersicht (Kontrollzentrum): dann trägt jede Zelle die
+  // Spieler-Nr (data-edit-…="sp:…") und die per Pfeiltasten markierte Cursor-Zelle wird
+  // hervorgehoben. Die is-editing-Markierung gilt nur beim aktiven Spieler.
+  function overviewTableFor(sp, { multi = false } = {}) {
     const arr = state.bloecke[sp];
-    const stats = computeGameStats(c, state.bloecke, ranges).players[sp];
-
     const tsLabels = teilsatzLabels();
-    // Nur bei mehr als einem Teilsatz eigene Spalten zeigen — sonst wäre der Teilsatz = Satz-Holz.
     const showTs = ranges.length > 1;
-
-    // Sätze nach Bahn sortieren (bei gleicher Bahn nach Satz-Nummer).
-    const infos = arr.map((blk, st) => ({ st, blk, bahn: laneOf(sp, st), status: satzStatus(blk) }));
-    const sorted = infos.slice().sort((a, b) => a.bahn - b.bahn || a.st - b.st);
+    const cols = overviewCols();
+    const sorted = sortedRows(sp);
+    const activeSp = sp === state.aktiverSpieler;
+    const onCursor = (r, colVal) => !!(cursor && cursor.sp === sp && cursor.r === r && cols[cursor.ci] === colVal);
 
     const tsHead = showTs
       ? tsLabels.map((l, i) => `<th class="ub-h-ts" title="${esc(MODUS_LABEL[ranges[i].modus] || '')}">${esc(l)}</th>`).join('')
       : '';
 
-    const rows = sorted.map(({ st, blk, bahn, status }) => {
+    const rows = sorted.map(({ st, blk, bahn, status }, r) => {
       const empty = status === 'pending';
-      const active = st === state.aktiverSatz;
+      const active = st === state.aktiverSatz && activeSp;
       const tsCells = showTs
         ? ranges.map((_, i) => {
           const t = teilsatzStats(blk, ranges, i, status === 'done');
           const touched = t.count > 0 || t.manual;
           // Wird diese Teilsatz-Zelle gerade per Ziffernblock bearbeitet? -> Entwurf live zeigen.
-          const editing = overrideSt === st && overrideTs === i;
+          const editing = activeSp && overrideSt === st && overrideTs === i;
           const cell = editing ? (overrideDraft || '–') : (touched ? t.val : '·');
-          return `<td class="ub-ts ub-edit${t.manual ? ' is-manual' : ''}${t.mark ? ' is-mark' : ''}${editing ? ' is-editing' : ''}" data-edit-ts="${st}:${i}" role="button" tabindex="0" aria-label="${esc(tsLabels[i])}, Satz ${st + 1} bearbeiten">${cell}${!editing && t.mark ? ' ⚠' : ''}</td>`;
+          return `<td class="ub-ts ub-edit${t.manual ? ' is-manual' : ''}${t.mark ? ' is-mark' : ''}${editing ? ' is-editing' : ''}${onCursor(r, i) ? ' is-cursor' : ''}" data-edit-ts="${sp}:${st}:${i}" role="button" tabindex="0" aria-label="${esc(tsLabels[i])}, Satz ${st + 1} bearbeiten">${cell}${!editing && t.mark ? ' ⚠' : ''}</td>`;
         }).join('')
         : '';
       // Satz-Holz-Zelle: bearbeitet wird das ganze Satz-Ergebnis (overrideTs === null).
-      const editingSatz = overrideSt === st && overrideTs === null;
+      const editingSatz = activeSp && overrideSt === st && overrideTs === null;
       const holzCell = editingSatz ? (overrideDraft || '–') : (empty ? '–' : satzHolz(blk, ranges));
-      return `<tr class="ub-row is-${status}${active ? ' is-active' : ''}" data-satz="${st}">
+      return `<tr class="ub-row is-${status}${active ? ' is-active' : ''}"${multi ? '' : ` data-satz="${st}"`}>
         <td class="ub-bahn">B${bahn}</td>
         <td class="ub-satz">Satz ${st + 1}</td>
         ${tsCells}
-        <td class="ub-holz ub-edit${editingSatz ? ' is-editing' : ''}" data-edit-satz="${st}" role="button" tabindex="0" aria-label="Satz ${st + 1} Ergebnis bearbeiten">${holzCell}</td>
+        <td class="ub-holz ub-edit${editingSatz ? ' is-editing' : ''}${onCursor(r, 'holz') ? ' is-cursor' : ''}" data-edit-satz="${sp}:${st}" role="button" tabindex="0" aria-label="Satz ${st + 1} Ergebnis bearbeiten">${holzCell}</td>
       </tr>`;
     }).join('');
 
@@ -1257,11 +1514,7 @@ export function spielLaufendView() {
         `<td class="ub-ts">${arr.reduce((s, blk) => s + teilsatzStats(blk, ranges, i, satzStatus(blk) === 'done').val, 0)}</td>`).join('')
       : '';
 
-    const metric = (val, lbl) => `<div class="stats-metric"><span class="stats-metric-val">${val}</span><span class="stats-metric-lbl">${lbl}</span></div>`;
-
-    // Inhalt „Übersicht": die editierbare Bahnen-Tabelle (Teilsatz-/Satz-Ergebnisse antippbar).
-    const uebersichtTab = `
-      <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an und ändere es unten mit dem Ziffernblock.</p>
+    return `
       <div class="ueber-tablewrap">
         <table class="ub-table">
           <thead>
@@ -1283,6 +1536,45 @@ export function spielLaufendView() {
           </tfoot>
         </table>
       </div>`;
+  }
+
+  // Mehr-Spieler-Übersicht (nur Kontrollzentrum): die Satztabelle ALLER Spieler nebeneinander,
+  // volle Bildschirmbreite. Ein Zell-Cursor (Pfeiltasten) läuft über alle Spalten/Spieler; Enter
+  // öffnet die markierte Zelle zum Bearbeiten (unten mit dem Ziffernblock / per Tastatur).
+  function allPlayersOverview() {
+    const n = state.bloecke.length;
+    const cols = state.bloecke.map((_, sp) => {
+      const stats = computeGameStats(c, state.bloecke, ranges).players[sp];
+      return `
+        <div class="eum-col${sp === state.aktiverSpieler ? ' is-active' : ''}">
+          <div class="ueber-head">
+            <span class="ueber-name">${esc(playerName(sp))}</span>
+            <span class="ueber-total">${stats.gesamt}</span>
+          </div>
+          ${overviewTableFor(sp, { multi: true })}
+        </div>`;
+    }).join('');
+    return `
+      <div class="erf-ueber erf-ueber-multi">
+        <p class="ueber-edithint">Pfeiltasten bewegen die Markierung · Enter öffnet die Zelle · Ziffern + Enter übernehmen.</p>
+        <div class="eum-grid" style="grid-template-columns: repeat(${n}, minmax(0, 1fr));">${cols}</div>
+      </div>`;
+  }
+
+  // Spieler-Übersicht (inline, ein Spieler; Bahn-/Satz-Leiste bleibt oben): Satztabelle +
+  // Statistik-Kacheln + Wurf-Bild in Tabs. Der ▦-Button schaltet zurück zur Erfassung.
+  function spielerUebersichtPanel() {
+    const sp = state.aktiverSpieler;
+    const arr = state.bloecke[sp];
+    const stats = computeGameStats(c, state.bloecke, ranges).players[sp];
+    const showTs = ranges.length > 1;
+
+    const metric = (val, lbl) => `<div class="stats-metric"><span class="stats-metric-val">${val}</span><span class="stats-metric-lbl">${lbl}</span></div>`;
+
+    // Inhalt „Übersicht": die editierbare Bahnen-Tabelle (Teilsatz-/Satz-Ergebnisse antippbar).
+    const uebersichtTab = `
+      <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an und ändere es unten mit dem Ziffernblock.</p>
+      ${overviewTableFor(sp, { multi: false })}`;
 
     // Inhalt „Statistik": die Kennzahl-Kacheln. Kränze nur, wenn Kranz-Abräumen gespielt wird.
     const hasKranz = ranges.some((r) => r.modus === 'kranz-abraeumen');
@@ -1668,13 +1960,18 @@ export function spielLaufendView() {
     root.querySelectorAll('[data-edit-ts]').forEach((el) =>
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        const [st, i] = el.dataset.editTs.split(':').map((x) => parseInt(x, 10));
+        const [sp, st, i] = el.dataset.editTs.split(':').map((x) => parseInt(x, 10));
+        state.aktiverSpieler = sp;
+        setCursorTo(sp, st, i);
         openOverride(st, i);
       }));
     root.querySelectorAll('[data-edit-satz]').forEach((el) =>
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        openSatzOverride(parseInt(el.dataset.editSatz, 10));
+        const [sp, st] = el.dataset.editSatz.split(':').map((x) => parseInt(x, 10));
+        state.aktiverSpieler = sp;
+        setCursorTo(sp, st, 'holz');
+        openSatzOverride(st);
       }));
 
     const act = (name, fn) => {
@@ -1686,6 +1983,7 @@ export function spielLaufendView() {
     act('cancel-edit', () => { editIdx = null; render(); });
     act('settings', () => { settingsOpen = true; render(); });
     act('lane-settings', () => { laneSettingsOpen = true; render(); });
+    act('sw-info', () => toast(swMsg)); // Status-Punkt antippen -> Klartext als Toast
     act('end-satz', toggleDone);
     act('end-game', endPlayerGame);
     act('toggle-vorschlaege', toggleVorschlaege);
@@ -1704,6 +2002,8 @@ export function spielLaufendView() {
       satzOverviewOpen = !satzOverviewOpen;
       // Beim Verlassen der Übersicht eine ggf. angefangene Zellen-Bearbeitung verwerfen.
       overrideSt = null; overrideTs = null; overrideDraft = '';
+      // Im Kontrollzentrum den Zell-Cursor initialisieren (Pfeiltasten-Navigation), sonst löschen.
+      cursor = (satzOverviewOpen && istDesktop()) ? { sp: state.aktiverSpieler || 0, r: 0, ci: 0 } : null;
       render();
     });
 
@@ -1928,7 +2228,69 @@ export function spielLaufendView() {
   };
   window.addEventListener('resize', onResize);
 
+  // ── Tastatureingabe am Desktop-PC ────────────────────────────────────────────
+  // 0–9 = Wurf für die aktive/fokussierte Bahn · Backspace = letzter Wurf zurück ·
+  // ←/→ = Bahn wechseln · ↑/↓ = Satz wechseln · Enter = manuelles Ergebnis übernehmen ·
+  // Esc = offenes Pop-up/Sheet schließen bzw. Korrektur abbrechen. Auf Touch-Geräten ohne
+  // Tastatur feuert das nie — daher überall aktiv (kein eigenes Gating nötig).
+  function onKey(e) {
+    if (!root.isConnected) { window.removeEventListener('keydown', onKey); return; }
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+
+    const key = e.key;
+    const digit = /^[0-9]$/.test(key) ? parseInt(key, 10) : null;
+
+    // Vollbild-Statistik: nur Schließen per Esc.
+    if (statsOpen) { if (key === 'Escape') { statsOpen = false; render(); e.preventDefault(); } return; }
+    // Einstellungs-Sheets: nur Schließen per Esc.
+    if (settingsOpen) { if (key === 'Escape') { settingsOpen = false; render(); e.preventDefault(); } return; }
+    if (laneSettingsOpen) { if (key === 'Escape') { laneSettingsOpen = false; render(); e.preventDefault(); } return; }
+    // Schnellauswahl-Pop-up: Ziffer = Bild an dieser Position wählen, Enter/Esc = schließen.
+    if (pinPick) {
+      if (key === 'Escape' || key === 'Enter') { pinPick = null; render(); e.preventDefault(); return; }
+      if (digit != null) { const ci = pinPick.combos.findIndex((cb) => cb.slot === digit); if (ci >= 0) { choosePinImage(ci); e.preventDefault(); } return; }
+      return;
+    }
+    // Manuelles Ergebnis (Übersicht): Ziffern/⌫/Enter/Esc bedienen den Entwurf.
+    if (overrideSt !== null) {
+      if (digit != null) { overrideKey(String(digit)); e.preventDefault(); return; }
+      if (key === 'Backspace') { overrideKey('back'); e.preventDefault(); return; }
+      if (key === 'Enter') { applyOverride(); e.preventDefault(); return; }
+      if (key === 'Escape') { overrideSt = null; overrideTs = null; overrideDraft = ''; render(); e.preventDefault(); return; }
+      return;
+    }
+    // Mehr-Spieler-Übersicht (Kontrollzentrum): Zell-Cursor per Pfeiltasten, Enter öffnet die Zelle.
+    if (satzOverviewOpen && istDesktop()) {
+      if (key === 'ArrowLeft') { moveCursor(-1, 0); e.preventDefault(); return; }
+      if (key === 'ArrowRight') { moveCursor(1, 0); e.preventDefault(); return; }
+      if (key === 'ArrowUp') { moveCursor(0, -1); e.preventDefault(); return; }
+      if (key === 'ArrowDown') { moveCursor(0, 1); e.preventDefault(); return; }
+      if (key === 'Enter') { editCursorCell(); e.preventDefault(); return; }
+      if (key === 'Escape') { satzOverviewOpen = false; cursor = null; render(); e.preventDefault(); return; }
+      if (digit != null || key === 'Backspace') { e.preventDefault(); return; } // keine Würfe in der Übersicht
+      return;
+    }
+    // Normale Wurferfassung.
+    if (digit != null) { tapNumber(digit); e.preventDefault(); return; }
+    if (key === 'Backspace') { undo(); e.preventDefault(); return; }
+    if (key === 'ArrowLeft') { stepLane(-1); e.preventDefault(); return; }
+    if (key === 'ArrowRight') { stepLane(1); e.preventDefault(); return; }
+    if (key === 'ArrowUp') { stepSatz(-1); e.preventDefault(); return; }
+    if (key === 'ArrowDown') { stepSatz(1); e.preventDefault(); return; }
+    if (key === 'Escape' && editIdx !== null) { editIdx = null; render(); e.preventDefault(); }
+  }
+  window.addEventListener('keydown', onKey);
+  kzMedia.addEventListener('change', render); // Desktop⇄Handy live umschalten
+
   render();
   initSync();
+  if (swActive()) {
+    pollBrueckeStatus();
+    bstatusTimer = setInterval(pollBrueckeStatus, 3000);
+    pollKonflikte();
+    swKonfliktTimer = setInterval(pollKonflikte, 3000);
+  }
   return root;
 }
