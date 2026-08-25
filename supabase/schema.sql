@@ -170,6 +170,46 @@ create table if not exists spiel_ergebnis (
   unique (spiel_id, spieler_id)
 );
 
+-- --- Wettkampf: Klammer über mehrere Durchgänge ------------------------------
+-- Ein Wettkampf bündelt mehrere Durchgänge (jeder Durchgang = ein normales `spiel`,
+-- verknüpft über spiel.wettkampf_id). Die gesamte lokale Wettkampf-Struktur
+-- (Mannschaften inkl. Bahnen, Programm-Vorlage, spielerJeMannschaft, …) liegt in
+-- config_json — genau wie spiel.config_json das Setup eines Spiels hält. Die
+-- Durchgang-Liste wird NICHT aus config_json gelesen, sondern relational über die
+-- `spiel`-Zeilen (wettkampf_id, durchgang_nr) rekonstruiert, damit später ergänzte
+-- Durchgänge automatisch bei allen beigetretenen Geräten auftauchen.
+create table if not exists wettkampf (
+  id             uuid primary key default gen_random_uuid(),
+  besitzer       uuid references auth.users(id) on delete set null,
+  name           text,
+  datum          date,
+  anlage_id      uuid references anlage(id) on delete set null,
+  status         text not null default 'setup' check (status in ('setup','laufend','beendet')),
+  config_json    jsonb not null default '{}'::jsonb,
+  beitritts_code text unique default upper(substr(md5(random()::text), 1, 6)),
+  erstellt_am    timestamptz not null default now(),
+  aktualisiert_am timestamptz not null default now()
+);
+
+-- Mitgliedschaft: welches Gerät ist welchem Wettkampf beigetreten. Analog zu
+-- spiel_geraet, aber auf Wettkampf-Ebene: die Mitgliedschaft öffnet den Lese-/
+-- Schreibzugriff auf ALLE Durchgang-Spiele des Wettkampfs (siehe policies.sql:
+-- pins_ist_mitglied prüft zusätzlich die Wettkampf-Mitgliedschaft).
+create table if not exists wettkampf_geraet (
+  wettkampf_id   uuid not null references wettkampf(id) on delete cascade,
+  geraet         uuid not null,
+  beigetreten_am timestamptz not null default now(),
+  primary key (wettkampf_id, geraet)
+);
+create index if not exists idx_wettkampf_geraet_geraet on wettkampf_geraet(geraet);
+
+-- Ein Durchgang gehört zu genau einem Wettkampf (oder zu keinem = Einzelspiel).
+-- ON DELETE CASCADE: einen Wettkampf löschen entfernt serverseitig seine Durchgänge
+-- (spiegelt die lokale deleteWettkampf-Semantik). durchgang_nr = 1-basierte Reihenfolge.
+alter table spiel add column if not exists wettkampf_id uuid references wettkampf(id) on delete cascade;
+alter table spiel add column if not exists durchgang_nr int;
+create index if not exists idx_spiel_wettkampf on spiel(wettkampf_id);
+
 -- --- Indizes ----------------------------------------------------------------
 create index if not exists idx_spiel_geraet_geraet   on spiel_geraet(geraet);
 create index if not exists idx_spiel_spieler_spiel    on spiel_spieler(spiel_id);
@@ -199,6 +239,10 @@ drop trigger if exists trg_anlage_touch on anlage;
 create trigger trg_anlage_touch before update on anlage
   for each row execute function pins_touch_aktualisiert_am();
 
+drop trigger if exists trg_wettkampf_touch on wettkampf;
+create trigger trg_wettkampf_touch before update on wettkampf
+  for each row execute function pins_touch_aktualisiert_am();
+
 -- --- Realtime: satz_block + spiel_spieler in die Realtime-Publication ---------
 -- (Live-Sync der Würfe und des Besitz-Locks an alle beigetretenen Geräte.)
 do $$
@@ -206,4 +250,5 @@ begin
   begin execute 'alter publication supabase_realtime add table satz_block';    exception when duplicate_object then null; end;
   begin execute 'alter publication supabase_realtime add table spiel_spieler';  exception when duplicate_object then null; end;
   begin execute 'alter publication supabase_realtime add table spiel';          exception when duplicate_object then null; end;
+  begin execute 'alter publication supabase_realtime add table wettkampf';       exception when duplicate_object then null; end;
 end $$;

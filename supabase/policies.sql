@@ -31,7 +31,27 @@ set search_path = public as $$
   );
 $$;
 
+-- Helfer: Ist der aktuelle Account (über EINES seiner Geräte) einem WETTKAMPF beigetreten?
+-- security definer, damit die Policy wettkampf_geraet lesen darf, ohne selbst RLS auszulösen.
+create or replace function pins_ist_wettkampf_mitglied(p_wettkampf uuid)
+returns boolean
+language sql security definer stable
+set search_path = public as $$
+  select exists (
+    select 1
+    from wettkampf_geraet wg
+    join geraet g on g.id = wg.geraet
+    where wg.wettkampf_id = p_wettkampf and g.konto = auth.uid()
+  );
+$$;
+
 -- Helfer: Ist der aktuelle Account (über EINES seiner Geräte) dem Spiel beigetreten?
+-- Zwei Wege zur Mitgliedschaft:
+--   1) direkt am Spiel (spiel_geraet) — der klassische Einzelspiel-Beitritt, ODER
+--   2) am WETTKAMPF, zu dem das Spiel als Durchgang gehört (spiel.wettkampf_id).
+-- Weg 2 öffnet automatisch auch später ergänzte Durchgänge, ohne pro Durchgang neu
+-- beizutreten. Wirkt auf alle Policies, die pins_ist_mitglied nutzen (select der
+-- spiel/spiel_spieler/satz_block/spiel_ergebnis sowie das Übernehmen von Spielern).
 create or replace function pins_ist_mitglied(p_spiel uuid)
 returns boolean
 language sql security definer stable
@@ -41,6 +61,12 @@ set search_path = public as $$
     from spiel_geraet sg
     join geraet g on g.id = sg.geraet
     where sg.spiel_id = p_spiel and g.konto = auth.uid()
+  ) or exists (
+    select 1
+    from spiel s
+    join wettkampf_geraet wg on wg.wettkampf_id = s.wettkampf_id
+    join geraet g on g.id = wg.geraet
+    where s.id = p_spiel and g.konto = auth.uid()
   );
 $$;
 
@@ -84,8 +110,77 @@ $$;
 
 grant execute on function spiel_beitreten(text, uuid) to anon, authenticated;
 
+-- Einem WETTKAMPF per Beitritts-Code beitreten (RPC). Wie spiel_beitreten, aber trägt
+-- das Gerät in wettkampf_geraet ein. Über pins_ist_mitglied öffnet das automatisch alle
+-- Durchgang-Spiele des Wettkampfs (auch später ergänzte) — kein Beitritt je Durchgang nötig.
+drop function if exists wettkampf_beitreten(text, uuid);
+create or replace function wettkampf_beitreten(p_code text, p_geraet uuid)
+returns uuid
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_id uuid;
+begin
+  if not exists (select 1 from geraet where id = p_geraet and konto = auth.uid()) then
+    raise exception 'Unbekanntes Gerät (nicht zu diesem Account registriert)';
+  end if;
+  select id into v_id from wettkampf where beitritts_code = upper(p_code);
+  if v_id is null then
+    raise exception 'Ungültiger Beitritts-Code';
+  end if;
+  insert into wettkampf_geraet (wettkampf_id, geraet)
+    values (v_id, p_geraet)
+    on conflict (wettkampf_id, geraet) do nothing;
+  return v_id;
+end;
+$$;
+
+grant execute on function wettkampf_beitreten(text, uuid) to anon, authenticated;
+
+-- Read-only Schnappschuss eines Wettkampfs per Beitritts-Code — für das OBS-Livestream-
+-- Overlay. security definer + anon-grant, damit eine OBS-Browser-Quelle (ein eigener,
+-- NICHT angemeldeter Browser, evtl. auf einem anderen PC) die Ergebnisse live zeigen kann,
+-- OHNE dem Wettkampf als Gerät beizutreten. Gibt AUSSCHLIESSLICH lesbare Ergebnis-Daten
+-- zurück (kein Besitz, keine Geräte, keine fremden Profildaten) und nur, wer den Code kennt.
+-- Liefert null bei unbekanntem Code. Wirft nichts, schreibt nichts.
+drop function if exists wettkampf_overlay(text);
+create or replace function wettkampf_overlay(p_code text)
+returns jsonb
+language sql security definer stable
+set search_path = public as $$
+  with wk as (
+    select id, name, status, config_json
+    from wettkampf where beitritts_code = upper(p_code)
+  )
+  select case when not exists (select 1 from wk) then null else
+    jsonb_build_object(
+      'wettkampf', (select jsonb_build_object(
+        'name', w.name, 'status', w.status, 'config', w.config_json) from wk w),
+      'spiele', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'durchgang_nr', s.durchgang_nr,
+          'status', s.status,
+          'config', s.config_json,
+          'bloecke', coalesce((
+            select jsonb_agg(jsonb_build_object(
+              'position', sp.position, 'satz', b.satz, 'block', b.block_json))
+            from satz_block b
+            join spiel_spieler sp on sp.id = b.spieler_id
+            where b.spiel_id = s.id
+          ), '[]'::jsonb)
+        ) order by s.durchgang_nr)
+        from spiel s where s.wettkampf_id = (select id from wk)
+      ), '[]'::jsonb)
+    )
+  end;
+$$;
+
+grant execute on function wettkampf_overlay(text) to anon, authenticated;
+
 -- --- RLS aktivieren ----------------------------------------------------------
 alter table geraet          enable row level security;
+alter table wettkampf       enable row level security;
+alter table wettkampf_geraet enable row level security;
 alter table profil          enable row level security;
 alter table anlage          enable row level security;
 alter table bahn            enable row level security;
@@ -186,6 +281,47 @@ create policy spiel_geraet_insert on spiel_geraet for insert
 
 drop policy if exists spiel_geraet_delete on spiel_geraet;
 create policy spiel_geraet_delete on spiel_geraet for delete
+  using (pins_ist_mein_geraet(geraet));
+
+-- =============================================================================
+-- wettkampf — Mitglieder lesen; nur der Ersteller ändert Stammdaten/Status
+-- (Config der Durchgänge bleibt am jeweiligen spiel; hier nur die Klammer.)
+-- =============================================================================
+drop policy if exists wettkampf_select on wettkampf;
+create policy wettkampf_select on wettkampf for select
+  using (pins_ist_wettkampf_mitglied(id) or besitzer = auth.uid());
+
+drop policy if exists wettkampf_insert on wettkampf;
+create policy wettkampf_insert on wettkampf for insert
+  with check (besitzer = auth.uid());
+
+drop policy if exists wettkampf_update on wettkampf;
+create policy wettkampf_update on wettkampf for update
+  using (besitzer = auth.uid()) with check (besitzer = auth.uid());
+
+drop policy if exists wettkampf_delete on wettkampf;
+create policy wettkampf_delete on wettkampf for delete
+  using (besitzer = auth.uid());
+
+-- =============================================================================
+-- wettkampf_geraet — Wettkampf-Mitgliedschaft (pro Gerät)
+--  * Ersteller trägt eines seiner Geräte selbst ein; Beitritt anderer via wettkampf_beitreten.
+--  * Jeder sieht die Mitglieder von Wettkämpfen, in denen er selbst (irgendein Gerät) ist.
+--  * Jeder kann die Mitgliedschaft eines EIGENEN Geräts wieder verlassen.
+-- =============================================================================
+drop policy if exists wettkampf_geraet_select on wettkampf_geraet;
+create policy wettkampf_geraet_select on wettkampf_geraet for select
+  using (pins_ist_mein_geraet(geraet) or pins_ist_wettkampf_mitglied(wettkampf_id));
+
+drop policy if exists wettkampf_geraet_insert on wettkampf_geraet;
+create policy wettkampf_geraet_insert on wettkampf_geraet for insert
+  with check (
+    pins_ist_mein_geraet(geraet)
+    and exists (select 1 from wettkampf where id = wettkampf_id and besitzer = auth.uid())
+  );
+
+drop policy if exists wettkampf_geraet_delete on wettkampf_geraet;
+create policy wettkampf_geraet_delete on wettkampf_geraet for delete
   using (pins_ist_mein_geraet(geraet));
 
 -- =============================================================================
@@ -404,8 +540,12 @@ begin
     raise exception 'nicht angemeldet';
   end if;
 
-  -- 1) Eigene Spiele -> kaskadiert spiel_geraet, spiel_spieler, satz_block,
-  --    spiel_ergebnis dieser Spiele (alle ON DELETE CASCADE auf spiel_id).
+  -- 1a) Eigene Wettkämpfe -> kaskadiert wettkampf_geraet UND die Durchgang-Spiele
+  --     (spiel.wettkampf_id ON DELETE CASCADE) inkl. deren spiel_spieler/satz_block/…
+  delete from wettkampf where besitzer = v_uid;
+
+  -- 1b) Restliche eigene (Einzel-)Spiele -> kaskadiert spiel_geraet, spiel_spieler,
+  --     satz_block, spiel_ergebnis dieser Spiele (alle ON DELETE CASCADE auf spiel_id).
   delete from spiel where besitzer = v_uid;
 
   -- 2) Eigene Ergebnis-Snapshots in FREMDEN Spielen vollständig entfernen

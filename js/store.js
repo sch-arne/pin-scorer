@@ -13,6 +13,8 @@ const KEY_GAMES = 'pins-scorer:games';
 const KEY_ACTIVE = 'pins-scorer:active-game';
 const KEY_STANDARDBILDER = 'pins-scorer:standardbilder';
 const KEY_SETTINGS = 'pins-scorer:settings';
+const KEY_WETTKAEMPFE = 'pins-scorer:wettkaempfe';
+const KEY_ACTIVE_WK = 'pins-scorer:active-wettkampf';
 
 // App-Einstellungen: global, spieluebergreifend. Neue Optionen einfach hier als
 // Default ergaenzen — getSettings mischt sie ueber gespeicherte Werte.
@@ -77,6 +79,54 @@ export function setActiveGame(id) {
 
 export function getActiveGame() {
   return read(KEY_ACTIVE, null);
+}
+
+// ── Wettkämpfe ──────────────────────────────────────────────────────────────
+// Ein Wettkampf ist eine Klammer über mehrere Durchgänge (jeweils ein normales
+// Spiel in KEY_GAMES, verknüpft über game.wettkampfId). Der Wettkampf selbst hält
+// nur Stammdaten, Mannschaften, eine Setup-Vorlage und die Liste seiner Durchgänge.
+export function getWettkaempfe() {
+  return read(KEY_WETTKAEMPFE, []);
+}
+
+export function getWettkampf(id) {
+  return getWettkaempfe().find((w) => w.id === id) || null;
+}
+
+// Durchgang-Spiele eines Wettkampfs (echte Spielobjekte aus KEY_GAMES).
+export function getWettkampfGames(wettkampfId) {
+  return getGames().filter((g) => g.wettkampfId === wettkampfId);
+}
+
+export function saveWettkampf(w) {
+  w.updatedAt = new Date().toISOString();
+  const list = getWettkaempfe();
+  const idx = list.findIndex((x) => x.id === w.id);
+  if (idx >= 0) list[idx] = w;
+  else list.push(w);
+  return write(KEY_WETTKAEMPFE, list) ? w : null;
+}
+
+// Wettkampf löschen — inklusive seiner Durchgang-Spiele (die nur im Wettkampf sinnvoll sind).
+export function deleteWettkampf(id) {
+  write(KEY_WETTKAEMPFE, getWettkaempfe().filter((w) => w.id !== id));
+  write(KEY_GAMES, getGames().filter((g) => g.wettkampfId !== id));
+  if (getActiveWettkampf() === id) write(KEY_ACTIVE_WK, null); // toten Zeiger nicht stehen lassen
+}
+
+// Fortsetzbare Wettkämpfe (Setup begonnen oder laufend), zuletzt bearbeitete zuerst.
+export function getResumableWettkaempfe() {
+  return getWettkaempfe()
+    .filter((w) => w.status === 'setup' || w.status === 'laufend')
+    .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+}
+
+export function setActiveWettkampf(id) {
+  write(KEY_ACTIVE_WK, id);
+}
+
+export function getActiveWettkampf() {
+  return read(KEY_ACTIVE_WK, null);
 }
 
 // Standard-Kegelbilder: globale, spielübergreifende Voreinstellung. Map von Holzzahl (1-8)

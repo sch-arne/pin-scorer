@@ -9,38 +9,19 @@
 // (Zusammenfassung erscheint dann auf der Folgeseite).
 
 import { navigate } from '../router.js';
-import { saveGame, setActiveGame } from '../store.js';
+import {
+  saveGame, setActiveGame,
+  getWettkampf, getActiveWettkampf, saveWettkampf,
+} from '../store.js';
 import { esc } from '../util.js';
 import { divisors, nearestDivisor, throwsPerPart } from '../logic/teilsaetze.js';
 import { lanePlan, laneListOf } from '../logic/bahnwechsel.js';
+import { MODI, BAHNEN_OPTS, BAHNWECHSEL, PRESETS } from '../logic/sportkegeln-presets.js';
 
 const TAB_ORDER = ['modus', 'optionen', 'spieler'];
 
 // Format-Version des gespeicherten Spiels — Ankerpunkt für spätere Migrationen (Server-Sync).
 const SCHEMA_VERSION = 1;
-
-const MODI = [
-  { key: 'volle', label: 'Volle' },
-  { key: 'abraeumen', label: 'Abräumen' },
-  { key: 'kranz-abraeumen', label: 'Kranz-Abräumen' },
-];
-
-const BAHNEN_OPTS = [1, 2, 4, 6, 8, 10, 12];
-
-const BAHNWECHSEL = [
-  { key: 'plus1', label: 'Reihum (+1)' },
-  { key: 'minus1', label: 'Reihum (−1)' },
-  { key: 'classic', label: 'Classic-Duo' },
-  { key: 'bohle', label: 'Bohle-Duo' },
-  { key: 'fest', label: 'Feste Bahn' },
-];
-
-// Bahnart-Presets (inkl. Standard-Bahnwechsel je Disziplin)
-const PRESETS = {
-  bohle: { label: 'Bohle', saetze: 4, wuerfeProSatz: 30, teilsaetze: ['volle', 'volle'], bahnen: 4, bahnwechsel: 'bohle' },
-  schere: { label: 'Schere', saetze: 4, wuerfeProSatz: 30, teilsaetze: ['volle', 'kranz-abraeumen'], bahnen: 4, bahnwechsel: 'plus1' },
-  classic: { label: 'Classic', saetze: 4, wuerfeProSatz: 30, teilsaetze: ['volle', 'abraeumen'], bahnen: 4, bahnwechsel: 'classic' },
-};
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
@@ -66,6 +47,16 @@ function ensurePlayers(s) {
     pl.startBahn = lane;
     used.add(lane);
   });
+  // Wettkampf-Modus: jedem Spieler eine Mannschaft geben (rotierend über die Teams),
+  // solange er noch keiner gültigen zugeordnet ist.
+  if (Array.isArray(s.mannschaften) && s.mannschaften.length) {
+    const ids = new Set(s.mannschaften.map((m) => m.id));
+    arr.forEach((pl, i) => {
+      if (!pl.mannschaftId || !ids.has(pl.mannschaftId)) {
+        pl.mannschaftId = s.mannschaften[i % s.mannschaften.length].id;
+      }
+    });
+  }
 }
 
 function shuffleStartLanes(s) {
@@ -77,35 +68,72 @@ function shuffleStartLanes(s) {
   s.spielerData.forEach((pl, i) => { pl.startBahn = nums[i]; }); // spieler <= bahnen
 }
 
-function defaultState() {
+// seed (optional): Wettkampf-Vorlage — übernimmt Programm/Bahnen des letzten Durchgangs,
+// damit das Setup nur noch „dupliziert" und mit neuen Spielern gestartet werden muss.
+// Setup-Zustand als Wettkampf-Vorlage sichern (Programm + Bahnen für den nächsten Durchgang).
+function snapshotVorlage(s) {
+  return {
+    preset: s.preset,
+    spieler: s.spieler,
+    bahnen: s.bahnen,
+    ersteBahn: s.ersteBahn,
+    saetze: s.saetze,
+    wuerfeProSatz: s.wuerfeProSatz,
+    teilsaetze: [...s.teilsaetze],
+    bahnwechsel: s.bahnwechsel,
+    anlageId: s.anlageId,
+    bahnListe: [...s.bahnListe],
+  };
+}
+
+function defaultState(seed) {
   const p = PRESETS.bohle;
+  const s = seed || {};
   return {
     tab: 'modus',
-    preset: 'bohle',
-    spieler: 1,
+    preset: s.preset ?? 'bohle',
+    spieler: s.spieler ?? 1,
     spielerData: [{ name: '', startBahn: 1 }],
-    bahnen: p.bahnen,
-    ersteBahn: 1,
-    saetze: p.saetze,
-    wuerfeProSatz: p.wuerfeProSatz,
-    teilsaetze: [...p.teilsaetze],
-    bahnwechsel: p.bahnwechsel,
+    bahnen: s.bahnen ?? p.bahnen,
+    ersteBahn: s.ersteBahn ?? 1,
+    saetze: s.saetze ?? p.saetze,
+    wuerfeProSatz: s.wuerfeProSatz ?? p.wuerfeProSatz,
+    teilsaetze: Array.isArray(s.teilsaetze) ? [...s.teilsaetze] : [...p.teilsaetze],
+    bahnwechsel: s.bahnwechsel ?? p.bahnwechsel,
     // Anlage (optional): ist eine gewählt, stammen die bespielten Bahnen aus ihren echten
     // Bahnen (Nummer + Bahnart). Ohne Anlage / offline bleibt alles wie bisher.
     anlagen: [],          // geladene Auswahl-Liste [{ id, name, ort }]
     anlageSearch: '',     // Filtertext für die Anlagen-Auswahl
-    anlageId: null,       // gewählte Anlage (null = ohne Anlage)
+    anlageId: null,       // gewählte Anlage (null = ohne Anlage) — im Wettkampf async nachgewählt
     anlageBahnen: [],     // Bahnen der gewählten Anlage [{ id, nummer, bahnart }], nach Nummer sortiert
-    bahnListe: [],        // mit Anlage: frei gewählte Bahnnummern (beliebige Anzahl/Auswahl)
+    bahnListe: Array.isArray(s.bahnListe) ? [...s.bahnListe] : [], // mit Anlage: frei gewählte Bahnnummern
     anlageLoading: false,
     anlageError: '',
+    // Wettkampf-Kontext (nur gesetzt, wenn dieser Durchgang zu einem Wettkampf gehört):
+    istWettkampf: false,  // Wettkampf-Modus aktiv?
+    wettkampfId: null,    // zugehöriger Wettkampf
+    durchgangNr: 1,       // Nummer dieses Durchgangs
+    mannschaften: null,   // Teams des Wettkampfs [{ id, name }] (null = kein Wettkampf)
   };
 }
 
-export function setupWkView() {
+// opts.wettkampf === true -> dieser Durchgang gehört zum aktiven Wettkampf: das Setup
+// wird aus dessen Vorlage vorbelegt, im Spieler-Tab kommt die Mannschafts-Zuordnung dazu,
+// und start() verknüpft das Spiel mit dem Wettkampf statt es einzeln zu speichern.
+export function setupWkView(opts = {}) {
   const root = document.createElement('div');
   root.className = 'view view-page';
-  const state = defaultState();
+  const wettkampf = opts.wettkampf ? getWettkampf(getActiveWettkampf()) : null;
+  const state = defaultState(wettkampf ? (wettkampf.vorlage || wettkampf.programm) : null);
+  if (wettkampf) {
+    state.istWettkampf = true;
+    state.wettkampfId = wettkampf.id;
+    state.durchgangNr = (wettkampf.durchgaenge?.length || 0) + 1;
+    state.mannschaften = wettkampf.mannschaften || [];
+  }
+  // Anlage, die nach dem Laden vorgewählt werden soll (Vorlage bzw. Wettkampf-Anlage).
+  const seedProg = wettkampf ? (wettkampf.vorlage || wettkampf.programm || {}) : {};
+  const seedAnlageId = wettkampf ? (seedProg.anlageId || wettkampf.anlageId || null) : null;
 
   // Anlagen-Liste lazy laden (wie in views/anlagen.js). Offline / Fehler -> Liste bleibt
   // leer, im Setup steht dann nur „Ohne Anlage" — der Rest funktioniert unverändert.
@@ -240,7 +268,11 @@ export function setupWkView() {
       config: {
         preset: state.preset,
         spieler: state.spieler,
-        spielerListe: state.spielerData.map((p, i) => ({ name: p.name.trim() || ('Spieler ' + (i + 1)), startBahn: p.startBahn })),
+        spielerListe: state.spielerData.map((p, i) => {
+          const sp = { name: p.name.trim() || ('Spieler ' + (i + 1)), startBahn: p.startBahn };
+          if (state.istWettkampf) sp.mannschaftId = p.mannschaftId || null; // Team-Zuordnung für die Wertung
+          return sp;
+        }),
         bahnen: state.bahnen,
         ersteBahn: state.ersteBahn,
         saetze: state.saetze,
@@ -264,6 +296,20 @@ export function setupWkView() {
       game.config.anlageName = anlage ? anlage.name : '';
       game.config.bahnZuordnung = zuordnung;
       game.config.bahnListe = laneNumbers(state); // frei gewählte Bahnen (auch nicht fortlaufend)
+    }
+    // Wettkampf-Durchgang: Spiel mit dem Wettkampf verknüpfen und dort als Durchgang anhängen.
+    // Die Vorlage merkt sich das Programm/die Bahnen für den nächsten Durchgang („duplizieren").
+    if (state.istWettkampf && state.wettkampfId) {
+      game.wettkampfId = state.wettkampfId;
+      game.durchgangNr = state.durchgangNr;
+      const w = getWettkampf(state.wettkampfId);
+      if (w) {
+        w.durchgaenge = w.durchgaenge || [];
+        w.durchgaenge.push({ nr: state.durchgangNr, gameId: game.id, status: 'setup' });
+        w.vorlage = snapshotVorlage(state);
+        if (w.status === 'setup') w.status = 'laufend';
+        saveWettkampf(w);
+      }
     }
     saveGame(game);
     setActiveGame(game.id);
@@ -339,6 +385,8 @@ export function setupWkView() {
     // Spieler-Tab
     root.querySelectorAll('.player-name').forEach((inp) =>
       inp.addEventListener('input', () => { state.spielerData[parseInt(inp.dataset.player, 10)].name = inp.value; }));
+    root.querySelectorAll('.player-team').forEach((sel) =>
+      sel.addEventListener('change', () => { state.spielerData[parseInt(sel.dataset.player, 10)].mannschaftId = sel.value; }));
     root.querySelectorAll('.player-lane').forEach((sel) =>
       sel.addEventListener('change', () => {
         const i = parseInt(sel.dataset.player, 10);
@@ -360,7 +408,9 @@ export function setupWkView() {
   }
 
   update();
-  loadAnlagen(); // Anlagen-Auswahl asynchron nachladen (blockiert das Setup nicht)
+  // Anlagen-Auswahl asynchron nachladen (blockiert das Setup nicht). Im Wettkampf danach
+  // die Vorlagen-/Wettkampf-Anlage vorwählen, damit der Durchgang direkt auf ihr liegt.
+  loadAnlagen().then(() => { if (seedAnlageId) selectAnlage(seedAnlageId); });
   return root;
 }
 
@@ -531,18 +581,26 @@ function tabOptionen(s) {
 
 function tabSpieler(s) {
   const nums = laneNumbers(s);
-  const rows = s.spielerData.map((pl, i) => `
-    <div class="player-row">
+  const teams = Array.isArray(s.mannschaften) ? s.mannschaften : null;
+  const rows = s.spielerData.map((pl, i) => {
+    const teamSel = teams && teams.length ? `
+      <select class="player-team" data-player="${i}" aria-label="Mannschaft Spieler ${i + 1}">
+        ${teams.map((m) => `<option value="${esc(m.id)}"${pl.mannschaftId === m.id ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}
+      </select>` : '';
+    return `
+    <div class="player-row${teamSel ? ' player-row--wk' : ''}">
       <span class="player-idx">${i + 1}</span>
       <input class="player-name" data-player="${i}" type="text" placeholder="Spieler ${i + 1}" value="${esc(pl.name)}" />
       <select class="player-lane" data-player="${i}">
         ${nums.map((n) => `<option value="${n}"${pl.startBahn === n ? ' selected' : ''}>Bahn ${n}</option>`).join('')}
       </select>
-    </div>`).join('');
+      ${teamSel}
+    </div>`;
+  }).join('');
   return `
     <section class="field">
       <div class="field-row">
-        <label class="field-label">Spieler & Startbahn</label>
+        <label class="field-label">Spieler & Startbahn${teams ? ' & Mannschaft' : ''}</label>
         <button type="button" class="btn-mini" data-action="shuffle">🎲 Zufällig</button>
       </div>
       <div class="players">${rows}</div>
@@ -582,10 +640,12 @@ function template(s) {
     : s.tab === 'optionen' ? tabOptionen(s)
     : tabSpieler(s);
   const isLast = s.tab === 'spieler';
+  const backHref = s.istWettkampf ? '#/wettkampf' : '#/neues-spiel';
+  const titel = s.istWettkampf ? `Durchgang ${s.durchgangNr}` : 'Sportkegeln-Training';
   return `
     <header class="page-header">
-      <a class="back-btn" href="#/neues-spiel" aria-label="Zurück">←</a>
-      <h1 class="page-title">Sportkegeln-Training</h1>
+      <a class="back-btn" href="${backHref}" aria-label="Zurück">←</a>
+      <h1 class="page-title">${esc(titel)}</h1>
     </header>
 
     <div class="tabs" role="tablist">

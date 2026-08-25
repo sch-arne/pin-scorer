@@ -4,3 +4,6 @@ Thumbs.db
 
 # Lokale Entwicklungs-Config (Test-DB-Zugangsdaten) — nie deployen
 js/backend/config.local.js
+
+# Lokaler Sportwinner-Test-Roster (nicht deployen)
+roster.json
