@@ -8,7 +8,7 @@ import {
   getGame, saveGame, saveErfassung, setActiveGame, deleteGame, setActiveWettkampf, deleteWettkampf,
 } from '../store.js';
 import { computeWettkampfStats, durchgangStatusList } from '../logic/wettkampf.js';
-import { computeWertung, assignEwp, fmtPunkte } from '../logic/wettkampf-wertung.js';
+import { computeWertung, assignEwp } from '../logic/wettkampf-wertung.js';
 import { buildSportwinnerPush } from '../logic/sportwinner-ergebnis.js';
 import { adoptAufstellung } from '../logic/sportwinner-konflikte.js';
 import { createKonfliktPanel } from './sportwinner-konflikt-panel.js';
@@ -16,6 +16,7 @@ import {
   getBruecke, pushErgebnis, holeStatus, holeSportwinnerLive, brueckeStatusInfo, brueckePushText,
 } from '../backend/sw-bruecke.js';
 import { lanePlan } from '../logic/bahnwechsel.js';
+import { teamUebersichtSection } from './wettkampf-teams.js';
 import { esc } from '../util.js';
 
 const STATUS_LBL = { vorbereitung: 'Vorbereitung', laufend: 'Läuft', offen: 'Offen', fertig: 'Fertig' };
@@ -84,7 +85,12 @@ export function wettkampfHubView() {
       const { wettkampf: w2, game: g2 } = adoptAufstellung(w, game, k);
       saveWettkampf(w2);
       saveGame(g2);
+      // Die Übernahme ändert BEIDES: den Spielernamen im Durchgang (spiel.config) UND
+      // Pass/extId in der Sportwinner-Zuordnung des Wettkampfs (wettkampf.config.sportwinner).
+      // Beide müssen zum Server — sonst überschreibt der Realtime-Reload (pullWettkampf) die
+      // Übernahme mit den alten Pässen aus config_json und die Abweichung taucht wieder auf.
       if (g2.remoteId && syncMod) syncMod.pushConfig(g2.remoteId, g2.config).catch(() => {});
+      pushWettkampfConfigNow(w2);
       render();
     },
     onKeepAufstellung: () => { render(); },
@@ -171,6 +177,33 @@ export function wettkampfHubView() {
     paintSw(); // gehaltenen Brücken-Status ins frisch gerenderte DOM malen
     konfliktPanel.paint(); // offene Konflikte ins frisch gerenderte DOM malen
     pushToBruecke(wettkampf, games);
+    scheduleFit(); // Zahlen in den Ergebnistabellen an ihre Spaltenbreite anpassen
+  }
+
+  // Zahlen in den Ergebnistabellen, die für ihre (fixe) Spaltenbreite zu breit sind, kleiner
+  // setzen statt sie mit „…" abzuschneiden. Läuft nach jedem Render und bei Größenänderung —
+  // gemessen wird erst im nächsten Frame, wenn die Tabelle im DOM hängt und ihre Breite kennt.
+  let fitRaf = 0;
+  function scheduleFit() {
+    cancelAnimationFrame(fitRaf);
+    fitRaf = requestAnimationFrame(fitTableNumbers);
+  }
+  function fitTableNumbers() {
+    root.querySelectorAll('.wk-tbl td, .wk-tbl th').forEach((cell) => {
+      cell.style.fontSize = ''; // erst zurücksetzen (Neu-Messung bei Resize)
+      if (cell.querySelector('input, select')) return; // Eingabefelder nicht verkleinern
+      const base = parseFloat(getComputedStyle(cell).fontSize);
+      if (!base) return;
+      let size = base;
+      // Nur eine SANFTE Anpassung (bis 85 %) als Sicherheitsnetz für ungewöhnlich lange Werte —
+      // die eigentliche Lesbarkeit sichert die Mindest-Spaltenbreite (min-width der Tabelle, siehe
+      // ergebnisTabelle): reicht der Platz nicht, werden die Spalten breiter und die Tabelle scrollt,
+      // statt die Zahlen klein zu schrumpfen.
+      while (cell.scrollWidth > cell.clientWidth + 1 && size > base * 0.85) {
+        size -= 0.5;
+        cell.style.fontSize = `${size}px`;
+      }
+    });
   }
 
   // Spielernamen der Aufstellung (Mannschaft + Position) im richtigen Durchgang-Spiel setzen.
@@ -322,7 +355,9 @@ export function wettkampfHubView() {
     clearInterval(statusTimer);
     clearInterval(swLiveTimer);
     if (unsub) { try { unsub(); } catch (e) {} unsub = null; }
+    cancelAnimationFrame(fitRaf);
     kzMedia.removeEventListener('change', render);
+    window.removeEventListener('resize', scheduleFit);
     window.removeEventListener('hashchange', teardown);
   }
 
@@ -434,6 +469,7 @@ export function wettkampfHubView() {
 
   render();
   window.addEventListener('hashchange', teardown);
+  window.addEventListener('resize', scheduleFit); // Zahlen bei Größenänderung neu einpassen
   kzMedia.addEventListener('change', render); // Desktop⇄Handy live umschalten
   initSync();
   if (getBruecke()) {
@@ -443,227 +479,6 @@ export function wettkampfHubView() {
     swLiveTimer = setInterval(pollKonflikte, 3000);
   }
   return root;
-}
-
-// Führende Mannschaft ermitteln: bei aktiver Duell-Wertung die mit den höheren Spielpunkten,
-// sonst die (eindeutig) auf Gesamtholz-Rang 1 stehende. Gleichstand -> keine Führung markiert.
-function leadTeamId(stats, wertung) {
-  if (wertung && wertung.home && wertung.away && wertung.home.spielpunkte !== wertung.away.spielpunkte) {
-    return wertung.home.spielpunkte > wertung.away.spielpunkte ? wertung.homeId : wertung.awayId;
-  }
-  const played = (stats.mannschaften || []).filter((t) => (t.gesamt || 0) > 0);
-  const firsts = played.filter((t) => t.rang === 1);
-  return firsts.length === 1 ? firsts[0].mannschaftId : null;
-}
-
-// Mannschafts-Übersicht (linke Spalte): je Mannschaft eine Tafel mit integrierter Aufstellung.
-// Oben Kopf (Name, Spielpunkte bei aktiver Duell/EWP-Wertung, Führungs-Markierung) und die
-// Team-Summen (Gesamtholz, EWP, Aufschlüsselung). Darunter die Spieler:
-//   • solange die Mannschaft noch keine Ergebnisse hat: Aufstellung (Name + Startbahn wählbar),
-//   • sobald Ergebnisse vorliegen: eine bahnweise Ergebnistabelle je Spieler (Ergebnis pro Bahn)
-//     mit Ges. Volle, Ges. Abräumen, Gesamtholz und EWP, plus einer Mannschafts-Summenzeile.
-function teamUebersichtSection(wettkampf, games, stats, wertung, kz) {
-  const teams = wettkampf.mannschaften || [];
-  if (!teams.length) return '';
-  const lead = leadTeamId(stats, wertung);
-  // Namen/Startbahnen der Aufstellung aus den Durchgang-Spielen (für die Bearbeitung im Setup).
-  const nameOf = {}; const laneOf = {};
-  (games || []).forEach((g) => (g.config?.spielerListe || []).forEach((p) => {
-    if (p.mannschaftId && p.teamPos) {
-      nameOf[`${p.mannschaftId}|${p.teamPos}`] = p.name || '';
-      laneOf[`${p.mannschaftId}|${p.teamPos}`] = p.startBahn;
-    }
-  }));
-  const anyResults = (stats.mannschaften || []).some((t) => (t.gesamt || 0) > 0);
-  // Gegenüberstellung (Scoreboard): bei genau zwei Mannschaften auf breitem Schirm stehen sie
-  // nebeneinander, die zweite gespiegelt — die Zahlen beider Teams zeigen so zur Mitte.
-  const facing = !!kz && teams.length === 2;
-  const cards = teams.map((m, ti) =>
-    teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults, facing && ti === 1)).join('');
-  return `
-    <section class="field kz-team-uebersicht${facing ? ' is-facing' : ''}">
-      <label class="field-label">Mannschafts-Übersicht</label>
-      <div class="wk-teams">${cards}</div>
-      <p class="field-hint">Namen und Startbahn (nur Team-Bahnen) werden direkt in die Durchgänge übernommen; die Startbahn bleibt änderbar, solange ein Spieler noch kein Ergebnis hat. Sobald Ergebnisse vorliegen, erscheinen die Bahn-Ergebnisse sowie Volle/Abräumen je Spieler.</p>
-    </section>`;
-}
-
-// Gesamtholz eines Spielers auf einer bestimmten Bahn (summiert, falls die Bahn mehrfach
-// gespielt wurde); null, wenn der Spieler auf dieser Bahn (noch) kein Ergebnis hat.
-function holzAufBahn(p, bahn) {
-  let sum = null;
-  ((p && p.saetze) || []).forEach((s) => { if (s.bahn === bahn) sum = (sum || 0) + (s.holz || 0); });
-  return sum;
-}
-
-// Startbahn-Steuerung eines (noch ergebnislosen) Spielers: Auswahl innerhalb der Team-Bahnen,
-// bei nur einer Bahn die feste Anzeige. Änderungen laufen über die roster-lane-Verdrahtung.
-function startbahnCtrl(m, pos, teamLanes, laneOf) {
-  const cur = laneOf[`${m.id}|${pos}`];
-  return teamLanes.length > 1
-    ? `<select class="wk-lane roster-lane" data-team="${esc(m.id)}" data-pos="${pos}" aria-label="Startbahn">
-         ${teamLanes.map((n) => `<option value="${n}"${cur === n ? ' selected' : ''}>Bahn ${n}</option>`).join('')}
-       </select>`
-    : `<span class="wk-lane-fix">Bahn ${cur ?? (teamLanes[0] ?? '–')}</span>`;
-}
-
-function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults, mirror) {
-  const P = wettkampf.spielerJeMannschaft || 0;
-  const teamLanes = (m.lanes || []).slice().sort((a, b) => a - b);
-  const st = (stats.mannschaften || []).find((t) => t.mannschaftId === m.id)
-    || { gesamt: 0, spieler: 0, schnitt: 0 };
-  const w = wertung && wertung.teams && wertung.teams[m.id];
-  const isLead = lead === m.id;
-
-  // Spieler dieses Teams nach Position (1 … P), jeweils mit ihrem Ergebnis-Objekt (falls vorhanden).
-  const byPos = {};
-  (stats.einzel || []).forEach((p) => { if (p.mannschaftId === m.id && p.teamPos) byPos[p.teamPos] = p; });
-  const rows = Array.from({ length: P }, (_, k) => ({ pos: k + 1, p: byPos[k + 1] || null }));
-  const teamHasResults = rows.some((r) => r.p && (r.p.gesamt || 0) > 0);
-  const ewpSum = rows.reduce((s, r) => s + (r.p ? (r.p.ewp || 0) : 0), 0);
-
-  // Kopfzeile mit Spielpunkten (nur bei aktiver Duell/EWP-Wertung UND sobald überhaupt Ergebnisse
-  // vorliegen — im reinen Setup ist der Punktestand aus 0-Holz-Gleichstand nicht aussagekräftig).
-  const spBox = w && anyResults
-    ? `<span class="wk-team-sp" title="Spielpunkte">${fmtPunkte(w.spielpunkte)}<small>Punkte</small></span>`
-    : '';
-  const head = `
-    <div class="wk-team-head">
-      <span class="wk-team-rank">${isLead ? '🥇' : ''}</span>
-      <span class="wk-team-name">${esc(m.name)}</span>
-      <small class="wk-team-lanes">Bahn ${teamLanes.join(', ') || '—'}</small>
-      ${spBox}
-    </div>`;
-
-  // Team-Summen nur zeigen, sobald Ergebnisse vorliegen (im reinen Setup irrelevant/0).
-  const drittStat = w
-    ? `<span class="wk-team-stat"><b>${fmtPunkte(w.mannschaftspunkte)}<span class="wk-plus">+</span>${fmtPunkte(w.ewpPunkt)}</b><small>Holz + EWP</small></span>`
-    : `<span class="wk-team-stat"><b>${st.schnitt.toFixed(0)}</b><small>Ø / Spieler</small></span>`;
-  const stats3 = teamHasResults ? `
-    <div class="wk-team-stats">
-      <span class="wk-team-stat"><b>${st.gesamt}</b><small>Gesamtholz</small></span>
-      <span class="wk-team-stat"><b>${ewpSum}</b><small>EWP</small></span>
-      ${drittStat}
-    </div>` : '';
-
-  const body = teamHasResults
-    ? ergebnisTabelle(m, rows, st, ewpSum, teamLanes, laneOf, mirror)
-    : aufstellungListe(m, rows, teamLanes, nameOf, laneOf, mirror);
-
-  return `
-    <div class="wk-team-card${isLead ? ' is-lead' : ''}${mirror ? ' is-mirror' : ''}">
-      ${head}
-      ${stats3}
-      ${body}
-    </div>`;
-}
-
-// Nullen unterdrücken: 0/null/undefined werden leer dargestellt (bessere Lesbarkeit der Tabelle).
-function nz(v) { return v ? v : ''; }
-
-// Bahnweise Ergebnistabelle: Pos, Name, Wurf (Startbahn — bei noch ergebnislosen Spielern wählbar),
-// je eine Spalte pro gespielter Bahn, dann Volle/Abräumen/Gesamt/EWP. Je Spieler eine Zeile (Name
-// editierbar). Mannschaft als Fußzeile: je Bahn der Mannschafts-Durchschnitt, rechts die Summen.
-// Bei `mirror` (gegenüberstehendes Team) werden die Spalten-Blöcke gespiegelt (Zahlen zur Mitte) —
-// der Bahn-Block bleibt dabei ein zusammenhängender Segment und damit auf beiden Seiten aufsteigend.
-function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, laneOf, mirror) {
-  // Bahn-Spalten = sortierte Vereinigung aller im Team gespielten Bahnen.
-  const bahnSet = new Set();
-  rows.forEach((r) => ((r.p && r.p.saetze) || []).forEach((s) => { if (s.bahn != null) bahnSet.add(s.bahn); }));
-  const bahnen = [...bahnSet].sort((a, b) => a - b);
-  // Die Bahn-Zellen als EIN Segment führen → beim Spiegeln bleibt ihre Reihenfolge aufsteigend.
-  const ord = (cells) => (mirror ? cells.slice().reverse() : cells).join('');
-  const bahnBlock = (mk) => bahnen.map(mk).join('');
-
-  // Drei gleich breite Blöcke: (Nr + Name) | (W + Bahnen) | (Volle … EWP). Spaltenbreiten fix
-  // über den Kopf (table-layout: fixed); reisen beim Spiegeln mit der jeweiligen Spalte mit.
-  const T = 100 / 3;
-  const nB = Math.max(1, bahnen.length);
-  const wPos = 6;
-  const wName = (T - wPos).toFixed(2);
-  const wWurf = 12;
-  const wBahn = ((T - wWurf) / nB).toFixed(2);
-  const wNum = (T / 4).toFixed(2);
-
-  const headCells = [
-    `<th class="wk-c-pos" style="width:${wPos}%"></th>`,
-    `<th class="wk-c-name" style="width:${wName}%"></th>`,
-    `<th class="wk-c-wurf" style="width:${wWurf}%">W</th>`,
-    bahnBlock((b) => `<th class="wk-c-bahn" style="width:${wBahn}%" title="Bahn ${b}">${b}</th>`),
-    `<th class="wk-c-num" style="width:${wNum}%">Volle</th>`,
-    `<th class="wk-c-num" style="width:${wNum}%">Abr.</th>`,
-    `<th class="wk-c-num wk-c-ges" style="width:${wNum}%">Ges.</th>`,
-    `<th class="wk-c-num wk-c-ewp" style="width:${wNum}%">EWP</th>`,
-  ];
-
-  const volleSum = rows.reduce((s, r) => s + (r.p ? (r.p.gesamt || 0) - (r.p.abraeum || 0) : 0), 0);
-  const abrSum = rows.reduce((s, r) => s + (r.p ? (r.p.abraeum || 0) : 0), 0);
-
-  const bodyRows = rows.map((r) => {
-    const p = r.p;
-    const played = !!(p && (p.gesamt || 0) > 0);
-    const nameCell = `<td class="wk-c-name"><input class="wk-name roster-name" data-team="${esc(m.id)}" data-pos="${r.pos}" type="text" placeholder="${esc(m.name)} ${r.pos}" value="${esc((p && p.name) || '')}" /></td>`;
-    // W-Spalte: hat der Spieler begonnen → seine bisherige Wurfanzahl; sonst die (noch änderbare)
-    // Startbahn zur Auswahl.
-    const wurfCell = played
-      ? `<td class="wk-c-wurf">${nz(p.wurfCount)}</td>`
-      : `<td class="wk-c-wurf">${startbahnCtrl(m, r.pos, teamLanes, laneOf)}</td>`;
-    const bahnCells = bahnBlock((b) => `<td class="wk-c-bahn">${played ? nz(holzAufBahn(p, b)) : ''}</td>`);
-    const volle = played ? (p.gesamt || 0) - (p.abraeum || 0) : null;
-    const cells = [
-      `<td class="wk-c-pos">${r.pos}</td>`,
-      nameCell,
-      wurfCell,
-      bahnCells,
-      `<td class="wk-c-num">${nz(volle)}</td>`,
-      `<td class="wk-c-num">${played ? nz(p.abraeum) : ''}</td>`,
-      `<td class="wk-c-num wk-c-ges">${played ? nz(p.gesamt) : ''}</td>`,
-      `<td class="wk-c-num wk-c-ewp">${played ? nz(p.ewp) : ''}</td>`,
-    ];
-    return `<tr>${ord(cells)}</tr>`;
-  });
-
-  const footCells = [
-    '<td class="wk-c-pos"></td>',
-    '<td class="wk-c-name">Ø Mannschaft</td>',
-    '<td class="wk-c-wurf"></td>',
-    // Je Bahn der Durchschnitt der Mannschaft — nur über die tatsächlich gespielten Ergebnisse
-    // (Holz > 0); noch nicht gespielte Bahnen zählen nicht in den Nenner.
-    bahnBlock((b) => {
-      let sum = 0; let cnt = 0;
-      rows.forEach((r) => { const h = holzAufBahn(r.p, b); if (h) { sum += h; cnt += 1; } });
-      return `<td class="wk-c-bahn">${cnt ? nz(Math.round(sum / cnt)) : ''}</td>`;
-    }),
-    `<td class="wk-c-num">${nz(volleSum)}</td>`,
-    `<td class="wk-c-num">${nz(abrSum)}</td>`,
-    `<td class="wk-c-num wk-c-ges">${nz(st.gesamt)}</td>`,
-    `<td class="wk-c-num wk-c-ewp">${nz(ewpSum)}</td>`,
-  ];
-
-  return `
-    <div class="wk-tbl-wrap">
-      <table class="wk-tbl${mirror ? ' wk-mirror' : ''}">
-        <thead><tr>${ord(headCells)}</tr></thead>
-        <tbody>${bodyRows.join('')}</tbody>
-        <tfoot><tr class="wk-tbl-sum">${ord(footCells)}</tr></tfoot>
-      </table>
-    </div>`;
-}
-
-// Aufstellung (reines Setup, noch keine Ergebnisse im Team): je Position ein Namensfeld und –
-// innerhalb der Team-Bahnen – die Startbahn. Bei `mirror` liegen die Namen außen (Zahlen/Bahn
-// zur Mitte). Namen und Startbahn werden direkt in die Durchgang-Spiele geschrieben (siehe wire()).
-function aufstellungListe(m, rows, teamLanes, nameOf, laneOf, mirror) {
-  const lis = rows.map((r) => {
-    const val = nameOf[`${m.id}|${r.pos}`] || '';
-    return `
-      <div class="wk-lu-row${mirror ? ' is-mirror' : ''}">
-        <span class="wk-c-pos">${r.pos}</span>
-        <input class="wk-name roster-name" data-team="${esc(m.id)}" data-pos="${r.pos}" type="text" placeholder="${esc(m.name)} ${r.pos}" value="${esc(val)}" />
-        ${startbahnCtrl(m, r.pos, teamLanes, laneOf)}
-      </div>`;
-  }).join('');
-  return `<div class="wk-lineup">${lis}</div>`;
 }
 
 // Overlay-URL des Wettkampfs (Hash-Route + Beitritts-Code) — von einer OBS-Browser-Quelle
@@ -807,7 +622,6 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz) {
 
   const durchgaengeSection = durchgaenge || '<p class="field-hint">Noch keine Durchgänge.</p>';
 
-  const meta = `<p class="stats-sub">${esc(metaLine)}</p>`;
   const secMehr = mehrgeraeteSection(wettkampf, syncMsg);
   const secDurch = `
       <section class="field kz-durchgaenge">
@@ -826,16 +640,18 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz) {
   // Desktop-/Vereins-PC-Funktion (Livestream läuft dort) — daher nur im Kontrollzentrum-Layout.
   const secOverlay = kz ? overlaySection(wettkampf) : '';
   const inner = kz
-    ? `${meta}
-       ${secTeam}
+    ? `${secTeam}
        <div class="kz-main">${secDurch}</div>
        <div class="kz-side">${secMehr}${secOverlay}</div>`
-    : `${meta}${secTeam}${secDurch}${secMehr}`;
+    : `${secTeam}${secDurch}${secMehr}`;
 
   return `
-    <header class="page-header">
+    <header class="page-header wk-hub-header">
       <a class="back-btn" href="#/neues-spiel" aria-label="Zurück">←</a>
-      <h1 class="page-title">${esc(wettkampf.name || 'Wettkampf')}</h1>
+      <div class="wk-hub-heading">
+        <h1 class="page-title">${esc(wettkampf.name || 'Wettkampf')}</h1>
+        ${metaLine ? `<p class="wk-hub-meta">${esc(metaLine)}</p>` : ''}
+      </div>
     </header>
 
     <div class="setup">

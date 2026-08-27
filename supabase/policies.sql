@@ -70,6 +70,50 @@ set search_path = public as $$
   );
 $$;
 
+-- Helfer: Ist der aktuelle Account (auth.uid()) der ERSTELLER des Spiels?
+-- Getrennt von der Mitgliedschaft (pins_ist_mitglied): der Ersteller darf seine EIGENEN
+-- Spiele auf JEDEM seiner Geräte vollständig lesen (Aufstellung + Würfe + Ergebnisse),
+-- auch ohne dass dieses Gerät dem Spiel je beigetreten ist. So erscheinen beendete
+-- Spiele geräteübergreifend in den Statistiken und lassen sich dort wieder aufrufen.
+-- security definer, damit die Policy `spiel` lesen darf, ohne selbst RLS auszulösen.
+create or replace function pins_ist_spiel_besitzer(p_spiel uuid)
+returns boolean
+language sql security definer stable
+set search_path = public as $$
+  select exists (
+    select 1 from spiel where id = p_spiel and besitzer = auth.uid()
+  );
+$$;
+
+-- Helfer: die LizenzID/Passnummer des aktuellen Accounts (profil.passnummer von auth.uid()).
+-- Ein Spieler darf SEINE Ergebniszeilen (spiel_ergebnis.passnummer) auch in fremd erfassten
+-- Spielen lesen, ohne dem Spiel beigetreten zu sein — Grundlage für die Statistik „meine
+-- Ergebnisse aus fremden Spielen". Gibt NULL zurück, wenn kein Profil / keine Passnummer.
+-- security definer, damit die Policy profil lesen darf, ohne selbst RLS auszulösen.
+create or replace function pins_meine_passnummer()
+returns text
+language sql security definer stable
+set search_path = public as $$
+  select passnummer from profil where id = auth.uid();
+$$;
+
+-- Helfer: Ist meine LizenzID (profil.passnummer) in DIESEM Spiel als Spieler geführt?
+-- Basis ist der Ergebnis-Snapshot (spiel_ergebnis.passnummer, bei Spielende geschrieben) —
+-- also nur für BEENDETE Spiele wirksam. Erlaubt es einem Spieler, ein fremd erfasstes Spiel,
+-- in dem er selbst gespielt hat, vollständig zu ÖFFNEN (Auswertung/Wurfprotokoll aller
+-- Mitspieler), ohne ihm beigetreten zu sein. security definer, um RLS-Rekursion zu vermeiden.
+create or replace function pins_lizenz_im_spiel(p_spiel uuid)
+returns boolean
+language sql security definer stable
+set search_path = public as $$
+  select exists (
+    select 1 from spiel_ergebnis e
+    where e.spiel_id = p_spiel
+      and e.passnummer is not null
+      and e.passnummer = pins_meine_passnummer()
+  );
+$$;
+
 -- Helfer: Ist der aktuelle Account für die erweiterten Anlagen-Funktionen freigeschaltet?
 -- (Whitelist `freischaltung`, vom Betreiber per SQL gepflegt.) security definer, damit die
 -- Policy/Frontend die Tabelle prüfen kann, ohne selbst RLS auszulösen. Wird in dieser Etappe
@@ -177,6 +221,51 @@ $$;
 
 grant execute on function wettkampf_overlay(text) to anon, authenticated;
 
+-- Verbindung eines SPIELS kappen, OHNE das Spiel zu löschen. Entwertet den Beitritts-Code
+-- (kein Beitreten mehr) und entfernt ALLE Geräte-Mitgliedschaften (auch fremder Accounts) —
+-- dafür security definer, weil die normale RLS (spiel_geraet_delete) nur eigene Geräte-Zeilen
+-- löschen ließe. Die Wurf-/Aufstellungs-/Ergebnisdaten (spiel_spieler, satz_block,
+-- spiel_ergebnis) BLEIBEN erhalten. Nur der Ersteller (spiel.besitzer) darf.
+drop function if exists spiel_verbindung_kappen(uuid);
+create or replace function spiel_verbindung_kappen(p_spiel uuid)
+returns void
+language plpgsql security definer
+set search_path = public as $$
+begin
+  if not exists (select 1 from spiel where id = p_spiel and besitzer = auth.uid()) then
+    raise exception 'Nicht berechtigt';
+  end if;
+  update spiel set beitritts_code = null where id = p_spiel;
+  delete from spiel_geraet where spiel_id = p_spiel;
+end;
+$$;
+
+grant execute on function spiel_verbindung_kappen(uuid) to anon, authenticated;
+
+-- Verbindung eines WETTKAMPFS kappen, OHNE ihn zu löschen. Entwertet den Wettkampf-Code
+-- (kein Beitreten, kein Overlay mehr) und entfernt alle wettkampf_geraet-Mitgliedschaften.
+-- Zusätzlich für JEDEN Durchgang: dessen Code entwerten + spiel_geraet leeren — sonst blieben
+-- Durchgänge über die Wettkampf-Mitgliedschaft (pins_ist_mitglied, Weg 2) erreichbar. Alle
+-- Ergebnisdaten bleiben erhalten. Nur der Ersteller (wettkampf.besitzer) darf.
+drop function if exists wettkampf_verbindung_kappen(uuid);
+create or replace function wettkampf_verbindung_kappen(p_wettkampf uuid)
+returns void
+language plpgsql security definer
+set search_path = public as $$
+begin
+  if not exists (select 1 from wettkampf where id = p_wettkampf and besitzer = auth.uid()) then
+    raise exception 'Nicht berechtigt';
+  end if;
+  update wettkampf set beitritts_code = null where id = p_wettkampf;
+  delete from wettkampf_geraet where wettkampf_id = p_wettkampf;
+  update spiel set beitritts_code = null where wettkampf_id = p_wettkampf;
+  delete from spiel_geraet
+    where spiel_id in (select id from spiel where wettkampf_id = p_wettkampf);
+end;
+$$;
+
+grant execute on function wettkampf_verbindung_kappen(uuid) to anon, authenticated;
+
 -- --- RLS aktivieren ----------------------------------------------------------
 alter table geraet          enable row level security;
 alter table wettkampf       enable row level security;
@@ -248,7 +337,7 @@ grant select on profil_public to anon, authenticated;
 -- =============================================================================
 drop policy if exists spiel_select on spiel;
 create policy spiel_select on spiel for select
-  using (pins_ist_mitglied(id) or besitzer = auth.uid());
+  using (pins_ist_mitglied(id) or besitzer = auth.uid() or pins_lizenz_im_spiel(id));
 
 drop policy if exists spiel_insert on spiel;
 create policy spiel_insert on spiel for insert
@@ -333,7 +422,7 @@ create policy wettkampf_geraet_delete on wettkampf_geraet for delete
 -- =============================================================================
 drop policy if exists spiel_spieler_select on spiel_spieler;
 create policy spiel_spieler_select on spiel_spieler for select
-  using (pins_ist_mitglied(spiel_id));
+  using (pins_ist_mitglied(spiel_id) or pins_ist_spiel_besitzer(spiel_id) or pins_lizenz_im_spiel(spiel_id));
 
 drop policy if exists spiel_spieler_insert on spiel_spieler;
 create policy spiel_spieler_insert on spiel_spieler for insert
@@ -378,7 +467,7 @@ create policy spiel_spieler_delete on spiel_spieler for delete
 -- =============================================================================
 drop policy if exists satz_block_select on satz_block;
 create policy satz_block_select on satz_block for select
-  using (pins_ist_mitglied(spiel_id));
+  using (pins_ist_mitglied(spiel_id) or pins_ist_spiel_besitzer(spiel_id) or pins_lizenz_im_spiel(spiel_id));
 
 drop policy if exists satz_block_insert on satz_block;
 create policy satz_block_insert on satz_block for insert
@@ -422,7 +511,13 @@ create policy satz_block_delete on satz_block for delete
 -- =============================================================================
 drop policy if exists spiel_ergebnis_select on spiel_ergebnis;
 create policy spiel_ergebnis_select on spiel_ergebnis for select
-  using (pins_ist_mitglied(spiel_id) or profil_id = auth.uid());
+  using (
+    pins_ist_mitglied(spiel_id)
+    or pins_ist_spiel_besitzer(spiel_id)
+    or profil_id = auth.uid()
+    or (passnummer is not null and passnummer = pins_meine_passnummer())
+    or pins_lizenz_im_spiel(spiel_id)
+  );
 
 drop policy if exists spiel_ergebnis_insert on spiel_ergebnis;
 create policy spiel_ergebnis_insert on spiel_ergebnis for insert
