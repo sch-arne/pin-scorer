@@ -4,7 +4,13 @@
 
 import { navigate, currentQuery } from '../router.js';
 import { saveGame, setActiveGame, saveWettkampf, setActiveWettkampf } from '../store.js';
-import { setBruecke } from '../backend/sw-bruecke.js';
+import { setBruecke, getBruecke, vergissWettkampf } from '../backend/sw-bruecke.js';
+
+// Ist der Fehler ein „Code unbekannt/deaktiviert" (RPC wirft 'Ungültiger Beitritts-Code'),
+// also KEIN Verbindungsproblem? Nur dann ist der Code sicher tot; bei offline nicht.
+function istCodeTot(e) {
+  return /ung(ü|ue|.)?ltig|unbekannt|not.?found|invalid/i.test((e && e.message) || '');
+}
 
 export function beitretenView() {
   const root = document.createElement('div');
@@ -32,7 +38,9 @@ export function beitretenView() {
     input.setSelectionRange(pos, pos);
   });
 
-  async function go() {
+  // auto=true: von der Brücke ausgelöster Auto-Wiederbeitritt (Deeplink mit code+push). Nur
+  // dann heilen wir einen toten Code selbst (Brücke vergessen lassen + Import zeigen).
+  async function go(auto = false) {
     const code = input.value.trim();
     if (!code) { msg.textContent = 'Bitte Code eingeben.'; return; }
     btn.disabled = true;
@@ -40,7 +48,8 @@ export function beitretenView() {
     try {
       const sync = await import('../backend/sync.js');
       // Ein Code kann zu einem Wettkampf ODER einem Einzelspiel gehören. Erst als
-      // Wettkampf versuchen; schlägt das fehl (unbekannter Code), als Einzelspiel.
+      // Wettkampf versuchen; schlägt das mit einem Verbindungsfehler fehl, nicht weiter als
+      // Einzelspiel probieren (sonst verschluckt der innere catch den Offline-Fall).
       try {
         const { wettkampf, games } = await sync.joinWettkampf(code);
         games.forEach((g) => saveGame(g));
@@ -48,19 +57,35 @@ export function beitretenView() {
         setActiveWettkampf(wettkampf.id);
         navigate('/wettkampf');
         return;
-      } catch (_) { /* kein Wettkampf-Code → als Einzelspiel versuchen */ }
+      } catch (ew) {
+        if (!istCodeTot(ew)) throw ew; // echter Fehler (offline) → außen behandeln
+        /* Code ist kein Wettkampf-Code → als Einzelspiel versuchen */
+      }
       const game = await sync.joinGame(code);
       saveGame(game);
       setActiveGame(game.id);
       navigate('/spiel-laufend');
     } catch (e) {
-      msg.textContent = 'Beitritt fehlgeschlagen — Code prüfen und online sein.';
+      const tot = istCodeTot(e);
+      // Toter Code aus einem Brücken-Auto-Wiederbeitritt: der Wettkampf wurde gelöscht bzw.
+      // sein Link gekappt. Die Brücke dieses Match vergessen lassen (damit sie es beim nächsten
+      // Öffnen nicht wieder findet) und zum frischen Sportwinner-Import wechseln.
+      const base = getBruecke();
+      if (auto && tot && base) {
+        try { await vergissWettkampf({ code }); } catch (_) { /* Brücke evtl. weg */ }
+        const src = encodeURIComponent(base + '/roster.json');
+        navigate('/import/sportwinner?src=' + src + '&push=' + encodeURIComponent(base));
+        return;
+      }
+      msg.textContent = tot
+        ? 'Unbekannter oder deaktivierter Code.'
+        : 'Beitritt fehlgeschlagen — Code prüfen und online sein.';
       btn.disabled = false;
     }
   }
 
-  btn.addEventListener('click', go);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  btn.addEventListener('click', () => go(false));
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(false); });
 
   // Deeplink `#/beitreten?code=…&push=…` — von der Sportwinner-Brücke beim Neustart geöffnet,
   // wenn dieses Match bereits existiert: Push-Endpoint merken, Code vorbelegen und automatisch
@@ -70,7 +95,7 @@ export function beitretenView() {
   const preCode = (q.get('code') || '').trim();
   if (preCode) {
     input.value = preCode.toUpperCase();
-    go();
+    go(true);
   }
 
   return root;

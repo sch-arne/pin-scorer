@@ -179,6 +179,31 @@ export async function pullGame(remoteId) {
   return assembleLocalGame(sp, spieler || [], blocks || []);
 }
 
+// Beendete EINZELSPIELE des angemeldeten Accounts geraeteuebergreifend laden.
+// Grundlage ist die RLS: der Ersteller (spiel.besitzer = auth.uid()) darf seine eigenen
+// Spiele auf JEDEM Geraet vollstaendig lesen (pins_ist_spiel_besitzer). So erscheinen
+// beendete Spiele in den Statistiken auch auf einem Geraet, das dem Spiel nie beigetreten
+// ist, und lassen sich von dort wieder aufrufen. Wettkampf-Durchgaenge (wettkampf_id gesetzt)
+// bleiben aussen vor — sie gehoeren in den Wettkampf-Hub, nicht in die Einzelspiel-Historie.
+// Gibt vollstaendige lokale Spiel-Objekte zurueck (id 'r-'+remoteId), zuletzt gespielt zuerst.
+export async function pullAccountFinishedGames() {
+  const konto = await kontoId();
+  if (!konto) return [];
+  const { data: rows, error } = await supabase
+    .from('spiel')
+    .select('id, aktualisiert_am')
+    .eq('besitzer', konto)
+    .eq('status', 'beendet')
+    .is('wettkampf_id', null)
+    .order('aktualisiert_am', { ascending: false });
+  if (error) throw error;
+  const games = [];
+  for (const row of rows || []) {
+    try { games.push(await pullGame(row.id)); } catch { /* ein defektes Spiel ueberspringt die Liste nicht */ }
+  }
+  return games;
+}
+
 // Einem Spiel per Beitritts-Code beitreten (RPC), dann vollstaendig laden.
 // p_geraet = eigene Geraete-ID (RLS prueft, dass sie zu meinem Account gehoert).
 export async function joinGame(code) {
@@ -437,6 +462,24 @@ export async function pushResults(rows) {
   const { error } = await supabase
     .from('spiel_ergebnis')
     .upsert(rows, { onConflict: 'spiel_id,spieler_id' });
+  if (error) throw error;
+}
+
+// --- Verbindung kappen (ohne zu löschen) ------------------------------------
+
+// Die Verbindung eines Spiels lösen: Beitritts-Code entwerten + alle Geräte-Mitgliedschaften
+// entfernen. Danach ist das Spiel weder beitretbar noch (über den Code) sichtbar, und schon
+// verbundene Geräte verlieren den Zugriff — das Spiel selbst und alle Wurf-/Ergebnisdaten
+// bleiben aber in der DB erhalten. Nur der Ersteller darf (die security-definer RPC prüft das).
+export async function cutGameLink(remoteId) {
+  const { error } = await supabase.rpc('spiel_verbindung_kappen', { p_spiel: remoteId });
+  if (error) throw error;
+}
+
+// Wie cutGameLink, aber für einen Wettkampf inkl. all seiner Durchgänge (schaltet auch das
+// OBS-Overlay ab, das am Wettkampf-Code hängt).
+export async function cutWettkampfLink(remoteId) {
+  const { error } = await supabase.rpc('wettkampf_verbindung_kappen', { p_wettkampf: remoteId });
   if (error) throw error;
 }
 

@@ -1092,6 +1092,11 @@ button.mini-pin { cursor: pointer; }
   flex-direction: column;
   gap: 8px;
 }
+/* Bahnansicht-Hauptspalte (Kegelbrett + Chips). Auf dem Handy transparent (display:contents) —
+   Kegelbrett/Chips/Ziffernblock stapeln wie bisher als direkte Flex-Kinder der .erf-satz-Spalte.
+   Im Kontrollzentrum (Desktop) wird sie zur echten Spalte NEBEN dem Ziffernblock, siehe unten. */
+.erf-play-main { display: contents; }
+
 .erf-satz-head { display: flex; align-items: center; gap: 10px; }
 .erf-bahn-badge {
   padding: 4px 12px;
@@ -1445,6 +1450,17 @@ button.mini-pin { cursor: pointer; }
 .stats-rank-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stats-rank-total { font-weight: 800; font-size: 1.1rem; color: var(--accent); }
 
+/* Wettkampf-Hub-Kopf: Titel + Spielinfos (Datum · Anlage · N Mannschaften) mittig zusammengefasst
+   und kompakt — der Zurück-Button liegt links über dem Kopf, sodass die Mannschaftsanzeige direkt
+   darunter nach oben rückt. */
+.wk-hub-header { position: relative; justify-content: center; padding: 4px 0 10px; }
+.wk-hub-header .back-btn { position: absolute; left: 0; top: 4px; }
+/* Beidseitig um die Breite des Zurück-Buttons einrücken, damit der mittige Titel ihn nicht
+   unterläuft (schmale Schirme mit langem Namen). */
+.wk-hub-heading { min-width: 0; text-align: center; padding: 0 calc(var(--tap) + 8px); }
+.wk-hub-heading .page-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wk-hub-meta { margin: 2px 0 0; font-size: 0.85rem; color: var(--text-dim); }
+
 /* ---------- Wettkampf-Hub: Mannschafts-Übersicht (Team-Tafeln) ---------- */
 /* Je Mannschaft eine Tafel: Kopf mit Name + Spielpunkten, darunter Gesamtholz/EWP/Aufschlüsselung
    und die eigenen Spieler (Holz + EWP). Ersetzt die frühere tabbasierte Mannschafts-Rangliste. */
@@ -1480,7 +1496,7 @@ button.mini-pin { cursor: pointer; }
    Auf schmalen Schirmen scrollt sie waagerecht im eigenen Container (Seite bleibt fix). */
 .wk-tbl-wrap { overflow-x: auto; margin: 0 -2px; }
 .wk-tbl { width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-.wk-tbl th, .wk-tbl td { padding: 5px 6px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wk-tbl th, .wk-tbl td { padding: 5px 4px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wk-tbl thead th, .wk-tbl.wk-mirror thead th {
   text-align: center;
   font-size: 0.64rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
@@ -1510,6 +1526,14 @@ button.mini-pin { cursor: pointer; }
 }
 .wk-name:focus { outline: none; border-color: var(--accent); background: var(--surface); }
 .wk-name::placeholder { color: var(--text-dim); font-weight: 500; }
+/* Schreibgeschützte Aufstellung (Live-Erfassung/Overlay): Name als reiner Text statt Eingabefeld,
+   gleiche Zeilenhöhe/Optik wie .wk-name, aber ohne Feld-Rahmen. */
+.wk-name-static {
+  display: inline-block; max-width: 100%; padding: 4px 6px; font-size: 0.9rem; font-weight: 600;
+  color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
+}
+.wk-name-static.is-empty { color: var(--text-dim); font-weight: 500; }
+.wk-lu-row .wk-name-static { flex: 1; min-width: 0; }
 
 /* Aufstellung (vor den Ergebnissen): Name + Startbahn je Position. */
 .wk-lineup { display: flex; flex-direction: column; gap: 6px; }
@@ -1529,6 +1553,7 @@ button.mini-pin { cursor: pointer; }
    zentriert (wie im normalen Team) — nur der Name liegt außen (rechts). */
 .wk-tbl.wk-mirror td.wk-c-name { text-align: right; }
 .wk-tbl.wk-mirror td.wk-c-name .wk-name { text-align: right; }
+.wk-tbl.wk-mirror td.wk-c-name .wk-name-static { text-align: right; }
 .wk-lu-row.is-mirror { flex-direction: row-reverse; }
 .wk-lu-row.is-mirror .wk-name { text-align: right; }
 
@@ -1634,6 +1659,20 @@ button.mini-pin { cursor: pointer; }
 
 .stats-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
 .stats-actions .erf-btn { width: 100%; display: flex; align-items: center; justify-content: center; text-decoration: none; }
+
+/* Wurfprotokoll-Export-Box im Statistik-Screen. */
+.wp-export {
+  margin: 16px 0 4px;
+  padding: 14px;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  border-radius: 12px;
+  background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+.wp-export-head { font-weight: 600; font-size: 0.95rem; margin-bottom: 10px; }
+.wp-export-players { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 12px; }
+.wp-export-player { display: flex; align-items: center; gap: 7px; font-size: 0.9rem; cursor: pointer; }
+.wp-export-player input { width: 17px; height: 17px; }
+.wp-export .erf-btn { width: 100%; display: flex; align-items: center; justify-content: center; }
 
 /* Übersicht-Button in der Satz-Zeile (▦): quadratisch, hebt sich von den Satz-Pills ab. */
 .erf-stab-more {
@@ -1754,6 +1793,12 @@ button.mini-pin { cursor: pointer; }
 }
 .ub-h-bahn, .ub-h-satz { text-align: left; }
 .ub-h-holz { color: var(--accent); }
+/* Klickbare Sortier-Kopfzellen (Bahn/Satz): Cursor + aktiver Zustand hervorgehoben. */
+.ub-h-sort { cursor: pointer; user-select: none; }
+.ub-h-sort:hover { color: var(--text); }
+.ub-h-sort.is-sorted { color: var(--accent); }
+.ub-h-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ub-sort-ar { margin-left: 2px; font-size: 0.9em; }
 .ub-table td { padding: 9px 6px; text-align: center; border-bottom: 1px solid var(--border); }
 .ub-row { cursor: pointer; }
 .ub-row:active { background: var(--surface-2); }
@@ -1817,6 +1862,83 @@ button.mini-pin { cursor: pointer; }
 .ueber-editreset:active { background: var(--surface); }
 .erf-ueber-numpad { flex: 0 0 auto; }
 .erf-ueber-numpad .erf-num[disabled] { opacity: 0.4; cursor: default; }
+
+/* Einschiebbarer Ziffernblock der Desktop-Satzübersicht (Tablet-Eingabe ohne Tastatur).
+   Der Block liegt als Seitenspalte fest am Rand; der Griff bleibt immer sichtbar. Beim Ausfahren
+   wird nicht überlagert, sondern NUR der Arbeitsbereich (Bahnkarten + Satz-Pills + Übersicht) per
+   Margin zur Seite geschoben (siehe .has-overpad-… unten) — der Block rückt in den freigemachten
+   Randstreifen. Der obere Rand (top) wird per JS auf die Oberkante der Bahnkarten gesetzt, damit
+   der Block NICHT bis in die Mannschaftsübersicht darüber reicht. Liegt unter den modalen
+   Overlays (Einstellungen z-index 50). */
+.erf-overpad {
+  position: fixed;
+  top: 0; bottom: 0;         /* top wird per JS auf die Bahnkarten-Oberkante gesetzt */
+  z-index: 40;
+  display: flex;
+  align-items: center;      /* Ziffernblock vertikal mittig in der Spalte */
+  pointer-events: none;     /* leere Spaltenfläche fängt keine Klicks; Kinder unten wieder aktiv */
+  transition: transform 0.25s ease;
+}
+.erf-overpad-handle,
+.erf-overpad-body { pointer-events: auto; }
+.erf-overpad-right { right: 0; flex-direction: row; transform: translateX(calc(100% - 36px)); }
+.erf-overpad-left  { left: 0;  flex-direction: row-reverse; transform: translateX(calc(-100% + 36px)); }
+.erf-overpad-right.is-open,
+.erf-overpad-left.is-open { transform: translateX(0); }
+
+.erf-overpad-handle {
+  flex: 0 0 36px;
+  width: 36px;
+  padding: 22px 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+.erf-overpad-right .erf-overpad-handle { border-radius: 12px 0 0 12px; border-right: 0; }
+.erf-overpad-left  .erf-overpad-handle { border-radius: 0 12px 12px 0; border-left: 0; }
+.erf-overpad-handle:active { background: var(--surface); }
+
+.erf-overpad-body {
+  width: 300px;
+  max-width: 42vw;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.erf-overpad-right .erf-overpad-body { border-radius: 14px 0 0 14px; }
+.erf-overpad-left  .erf-overpad-body { border-radius: 0 14px 14px 0; }
+/* Höher spezifiziert als die zentrierende Regel .erf-kz .erf-satz-ueber .erf-numpad. */
+.erf-kz .erf-satz-ueber .erf-overpad .erf-numpad { width: 100%; max-width: none; margin: 0; }
+
+/* Arbeitsbereich zur Seite schieben, damit der Block echten Platz einnimmt (statt zu überlagern).
+   Die Blöcke sind gestreckte Flex-Items bzw. width:100% — Margins verkleinern sie NICHT, wohl aber
+   die Container-Innenabstände (die die Content-Box schmaler machen). „has-overpad-…" reserviert nur
+   den Griff (~48px), „overpad-open" zusätzlich die Blockbreite (--overpad-w).
+   Die Mannschaftsübersicht (.kz-team-uebersicht) soll UNANGETASTET bleiben (volle Breite, oben):
+   Sie ist ein gestrecktes Flex-Item ohne feste Breite, daher zieht eine negative Margin ihre
+   gestreckte Breite wieder auf die volle Breite zurück (hebt das Padding exakt auf). Der obere Rand
+   des Blocks wird per JS unter die Mannschaftsübersicht gesetzt (anchorOverpad). */
+@media (min-width: 900px) {
+  .erf-screen.erf-kz.has-overpad-right,
+  .erf-screen.erf-kz.has-overpad-left { --overpad-w: 48px; }
+  .erf-screen.erf-kz.has-overpad-right.overpad-open,
+  .erf-screen.erf-kz.has-overpad-left.overpad-open { --overpad-w: 348px; }
+
+  .erf-screen.erf-kz.has-overpad-right { padding-right: var(--overpad-w); }
+  .erf-screen.erf-kz.has-overpad-left  { padding-left: var(--overpad-w); }
+
+  /* Team-Übersicht wieder auf volle Breite ziehen (Padding aufheben; Basis-Padding ist 20px). */
+  .erf-kz.has-overpad-right .kz-team-uebersicht { margin-right: calc(20px - var(--overpad-w)); }
+  .erf-kz.has-overpad-left  .kz-team-uebersicht { margin-left:  calc(20px - var(--overpad-w)); }
+}
 
 /* ── Mehrgeräte-Sync ─────────────────────────────────────────────────────── */
 /* Lock-Symbol im Bahn-Tab (fremd bespielter Spieler). */
@@ -1963,6 +2085,12 @@ button.mini-pin { cursor: pointer; }
 /* Statistik-Seite (lokale Historie + Konto-Überblick) */
 .stat-list { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 12px; }
 .stat-card { background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 10px 12px; }
+.stat-card.is-openable { cursor: pointer; transition: border-color 0.15s, transform 0.05s; }
+.stat-card.is-openable:hover { border-color: var(--accent); }
+.stat-card.is-openable:active { transform: scale(0.995); }
+.stat-card.is-openable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.stat-open-hint { margin-top: 6px; font-size: 0.75rem; color: var(--text-dim); text-align: right; }
+.stat-card.is-openable:hover .stat-open-hint { color: var(--accent); }
 .stat-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .stat-date { font-size: 0.8rem; color: var(--text-dim); }
 .stat-prow { display: flex; align-items: center; justify-content: space-between; padding: 3px 0; }
@@ -1973,6 +2101,18 @@ button.mini-pin { cursor: pointer; }
 .stat-acc-head { font-weight: 700; margin-bottom: 8px; }
 .stat-acc-empty { font-size: 0.85rem; color: var(--text-dim); margin: 4px 0 12px; }
 .stat-login-hint { display: block; text-align: center; padding: 10px; margin: 4px 0 12px; color: var(--accent); text-decoration: none; font-size: 0.9rem; border: 1px dashed rgba(245,166,35,0.4); border-radius: 12px; }
+.stat-fremd-box { background: var(--surface); border: 1px solid var(--border, #2c3340); border-radius: 12px; padding: 8px 12px; margin: 0 0 12px; }
+.stat-fremd-head { font-size: 0.85rem; font-weight: 700; margin-bottom: 4px; }
+.stat-fremd-hint { font-weight: 400; color: var(--text-dim); font-size: 0.78rem; }
+.stat-fremd-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--border, #2c3340); }
+.stat-fremd-row.is-openable { cursor: pointer; }
+.stat-fremd-row.is-openable:hover .stat-fremd-open,
+.stat-fremd-row.is-openable:hover .stat-fremd-date { color: var(--accent); }
+.stat-fremd-row.is-openable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.stat-fremd-date { font-size: 0.8rem; color: var(--text-dim); min-width: 5.5em; }
+.stat-fremd-meta { flex: 1; font-size: 0.8rem; color: var(--text-dim); }
+.stat-fremd-total { color: var(--accent); font-weight: 800; }
+.stat-fremd-open { color: var(--text-dim); font-weight: 700; padding-left: 2px; }
 
 /* ---------- Kontrollzentrum (Vereins-PC / Sportwinner-Deeplink) ---------- */
 /* Der Wettkampf-Hub wird auf dem Vereins-PC (App per Brücke mit ?push=… geöffnet) als
@@ -2044,6 +2184,15 @@ button.mini-pin { cursor: pointer; }
     margin-bottom: 12px;
     flex: 0 0 auto;
   }
+  /* Live-Mannschaftsübersicht des Wettkampfs ganz oben (über den Bahnkarten): feste Höhe deckeln
+     und intern scrollen, damit sie den Arbeitsbereich (Bahnkarten/Übersicht/Kegelbrett) im
+     100dvh-Layout nicht erdrückt. Volle Breite wie der Bahn-Monitor. */
+  .erf-kz .kz-team-uebersicht {
+    flex: 0 0 auto;
+    max-height: 40vh;
+    overflow: auto;
+    margin-bottom: 12px;
+  }
 }
 
 .elm-card {
@@ -2090,8 +2239,59 @@ button.mini-pin { cursor: pointer; }
   .erf-kz .erf-ueber-multi .eum-grid { flex: 1 1 auto; min-height: 0; overflow: auto; }
   .erf-kz .erf-satz-ueber .erf-numpad { width: 100%; max-width: 420px; margin-left: auto; margin-right: auto; }
 }
+
+/* Bahnansicht im Kontrollzentrum (Desktop): Kegelbrett + Chips und der Ziffernblock stehen
+   NEBENEINANDER statt untereinander. Die Seite des Ziffernblocks ist über die Einstellungen
+   wählbar (.erf-pad-links / .erf-pad-rechts). Gilt nur für die normale Bahnansicht, nicht für
+   die Mehr-Spieler-Übersicht (.erf-satz-ueber, eigenes Layout oben). */
+@media (min-width: 900px) {
+  .erf-kz .erf-satz:not(.erf-satz-ueber) {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 14px;
+    max-width: 1080px;
+  }
+  /* Hauptspalte materialisieren (überschreibt das mobile display:contents): eigene Flex-Spalte,
+     damit Kegelbrett wächst und die Chips darunter fest bleiben. */
+  .erf-kz .erf-satz:not(.erf-satz-ueber) .erf-play-main {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+  }
+  .erf-kz .erf-satz:not(.erf-satz-ueber) .erf-numpad {
+    flex: 0 0 auto;
+    align-self: center;
+    width: 300px;
+    max-width: 38%;
+  }
+  /* Ziffernblock links: per order vor die Hauptspalte ziehen (Reihenfolge im DOM bleibt gleich). */
+  .erf-kz .erf-satz.erf-pad-left:not(.erf-satz-ueber) .erf-numpad { order: -1; }
+}
+
+/* Segmentierte Auswahl (z. B. Ziffernblock-Seite Links/Rechts) in den Einstellungen. */
+.erf-seg { display: inline-flex; flex: 0 0 auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 2px; gap: 2px; }
+.erf-seg-btn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.erf-seg-btn:hover { color: var(--text); }
+.erf-seg-btn.is-on { background: var(--accent); color: #1a1205; }
 .erf-ueber-multi { display: flex; flex-direction: column; width: 100%; }
 .erf-ueber-multi .ueber-edithint { flex: 0 0 auto; }
+/* Kopfzeile der Spieler-Übersicht: Hinweis links, Hebel „Nach Bahn ordnen" rechts. */
+.eum-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; flex: 0 0 auto; }
+.eum-toolbar .ueber-edithint { margin: 0; }
+.eum-sync { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.eum-sync-lbl { font-size: 0.8rem; color: var(--text-dim); white-space: nowrap; }
 .eum-grid { display: grid; width: 100%; gap: 12px; align-items: start; }
 .eum-col {
   min-width: 0;

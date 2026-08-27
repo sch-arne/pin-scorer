@@ -49,6 +49,14 @@ export function meldeWettkampf(info) {
   return post('/wettkampf', info);
 }
 
+// Ein gemerktes Match bei der Brücke wieder vergessen lassen — z. B. wenn der Wettkampf
+// gelöscht bzw. sein Link gekappt wurde. Danach zeigt die Brücke beim nächsten Öffnen aus
+// Sportwinner wieder den Import, statt automatisch dem (nun toten) Code beizutreten. Die
+// Identifikation läuft bevorzugt über den Code (den die App sicher kennt); optional spielNr.
+export function vergissWettkampf(info) {
+  return post('/wettkampf', { vergessen: true, ...info });
+}
+
 // Ergebnis-Auftrag an die Brücke schicken. Leerer Auftrag -> nichts tun.
 export function pushErgebnis(payload) {
   if (!payload || !Array.isArray(payload.updates) || !payload.updates.length) return Promise.resolve(null);

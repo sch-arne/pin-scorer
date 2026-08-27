@@ -169,6 +169,11 @@ create table if not exists spiel_ergebnis (
   erstellt_am   timestamptz not null default now(),
   unique (spiel_id, spieler_id)
 );
+-- LizenzID/Passnummer des Spielers (Sportwinner-SpielerID) am Ergebnis mitschreiben, damit ein
+-- Spieler SEINE Ergebnisse auch in fremd erfassten Spielen (z.B. Vereins-PC) wiederfindet, ohne
+-- dem Spiel beigetreten zu sein — Abgleich gegen profil.passnummer (siehe policies.sql). Idempotent.
+alter table spiel_ergebnis add column if not exists passnummer text;
+create index if not exists idx_spiel_ergebnis_passnummer on spiel_ergebnis(passnummer);
 
 -- --- Wettkampf: Klammer über mehrere Durchgänge ------------------------------
 -- Ein Wettkampf bündelt mehrere Durchgänge (jeder Durchgang = ein normales `spiel`,
@@ -242,6 +247,26 @@ create trigger trg_anlage_touch before update on anlage
 drop trigger if exists trg_wettkampf_touch on wettkampf;
 create trigger trg_wettkampf_touch before update on wettkampf
   for each row execute function pins_touch_aktualisiert_am();
+
+-- --- LizenzID/Passnummer nur EINMAL setzbar ----------------------------------
+-- Die Passnummer verknüpft den Account mit allen Spielen, in denen sie als Spieler geführt
+-- wird (Statistik + Öffnen dieser Spiele). Damit niemand per nachträglicher Änderung fremde
+-- Spiele „an sich zieht", ist sie einmalig: null -> Wert ist erlaubt, jede spätere Änderung
+-- eines bereits gesetzten Werts (auch das Zurücksetzen auf null) wird serverseitig abgelehnt.
+create or replace function pins_passnummer_set_once()
+returns trigger language plpgsql as $$
+begin
+  if old.passnummer is not null and new.passnummer is distinct from old.passnummer then
+    raise exception 'LizenzID kann nicht geändert werden (nur einmalig setzbar).'
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_profil_passnummer_once on profil;
+create trigger trg_profil_passnummer_once before update on profil
+  for each row execute function pins_passnummer_set_once();
 
 -- --- Realtime: satz_block + spiel_spieler in die Realtime-Publication ---------
 -- (Live-Sync der Würfe und des Besitz-Locks an alle beigetretenen Geräte.)

@@ -20,6 +20,9 @@ const KEY_ACTIVE_WK = 'pins-scorer:active-wettkampf';
 // Default ergaenzen — getSettings mischt sie ueber gespeicherte Werte.
 const DEFAULT_SETTINGS = {
   vorschlaege: true, // Schnellauswahl-Pop-up (Standard-Kegelbilder) nach Zahleneingabe zeigen?
+  uebersichtBahnFolge: false, // Spieler-Übersicht (Kontrollzentrum): Spalten nach aktueller Bahn ordnen (folgt dem Bahnwechsel) statt in fester Spieler-Reihenfolge?
+  numpadSeite: 'rechts', // Desktop-Erfassung: Ziffernblock rechts oder links neben Kegelbrett/Bahnansicht ('rechts' | 'links')
+  overNumpad: false, // Desktop-Satzübersicht: einschiebbaren Ziffernblock (Tablet-Eingabe ohne Tastatur) offen halten?
 };
 
 function read(key, fallback) {

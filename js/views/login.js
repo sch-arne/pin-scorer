@@ -199,6 +199,10 @@ async function renderLoggedIn(auth, body, user) {
   let profil = null;
   try { profil = await auth.getProfil(); } catch (e) { /* ignore */ }
   const v = (k) => esc((profil && profil[k]) || '');
+  // LizenzID ist einmalig: ist sie bereits gesetzt, wird das Feld gesperrt (auch serverseitig
+  // per Trigger erzwungen — siehe schema.sql). So kann niemand nachträglich fremde Spiele „an
+  // sich ziehen".
+  const passLocked = !!(profil && profil.passnummer);
   body.innerHTML = `
     <p class="join-hint">Angemeldet als <strong>${esc(user.email)}</strong>.</p>
 
@@ -213,9 +217,11 @@ async function renderLoggedIn(auth, body, user) {
     <input id="acc-nachname" class="join-input acc-text" type="text" autocomplete="family-name" placeholder="optional" value="${v('nachname')}" />
     <label class="acc-label" for="acc-verein">Verein</label>
     <input id="acc-verein" class="join-input acc-text" type="text" placeholder="optional" value="${v('verein')}" />
-    <label class="acc-label" for="acc-passnummer">SpielerID / Passnummer</label>
-    <input id="acc-passnummer" class="join-input acc-text" type="text" inputmode="numeric" autocapitalize="off" spellcheck="false" placeholder="optional" value="${v('passnummer')}" />
-    <p class="acc-hint">Privat. Wird nur zum Abgleich mit Sportwinner genutzt.</p>
+    <label class="acc-label" for="acc-passnummer">SpielerID / Passnummer (LizenzID)</label>
+    <input id="acc-passnummer" class="join-input acc-text" type="text" inputmode="numeric" autocapitalize="off" spellcheck="false" placeholder="optional" value="${v('passnummer')}"${passLocked ? ' disabled' : ''} />
+    <p class="acc-hint">${passLocked
+      ? '🔒 Festgelegt — die LizenzID kann nur einmal gesetzt und danach nicht mehr geändert werden.'
+      : '⚠ Nur <strong>einmal</strong> setzbar und danach nicht änderbar. Verknüpft deinen Account mit allen Spielen, in denen diese LizenzID als Spieler geführt wird — du siehst und öffnest diese dann in den Statistiken.'}</p>
 
     <button type="button" id="acc-save" class="erf-btn done join-go">Speichern</button>
 
@@ -235,10 +241,35 @@ async function renderLoggedIn(auth, body, user) {
       vorname:     body.querySelector('#acc-vorname').value,
       nachname:    body.querySelector('#acc-nachname').value,
       verein:      body.querySelector('#acc-verein').value,
-      passnummer:  body.querySelector('#acc-passnummer').value,
     };
-    try { await auth.saveProfil(felder); msg.textContent = '✓ Gespeichert.'; }
-    catch (e) { msg.textContent = 'Speichern fehlgeschlagen.'; }
+    // LizenzID nur mitspeichern, solange sie noch NICHT gesetzt ist. Wird sie erstmalig auf
+    // einen Wert gesetzt, vorher warnen (einmalig + verknüpft den Account mit fremd erfassten
+    // Spielen). Nach Erfolg neu rendern -> Feld ist dann gesperrt.
+    let setzePass = false;
+    if (!passLocked) {
+      const pn = body.querySelector('#acc-passnummer').value.trim();
+      if (pn) {
+        const ok = window.confirm(
+          `⚠ LizenzID „${pn}" jetzt festlegen?\n\n`
+          + 'Sie kann nur EINMAL gesetzt und danach nicht mehr geändert werden.\n\n'
+          + 'Sie verknüpft deinen Account mit allen Spielen, in denen diese LizenzID als Spieler '
+          + 'geführt wird (auch von anderen erfasst) — du kannst diese Spiele dann in den '
+          + 'Statistiken sehen und öffnen.');
+        if (!ok) { msg.textContent = 'Abgebrochen — nichts gespeichert.'; return; }
+        setzePass = true;
+      }
+      felder.passnummer = pn; // '' ist erlaubt (bleibt ungesetzt); ein Wert wird festgeschrieben
+    }
+    try {
+      await auth.saveProfil(felder);
+      msg.textContent = '✓ Gespeichert.';
+      if (setzePass) { renderLoggedIn(auth, body, user); } // Feld ab jetzt gesperrt zeigen
+    } catch (e) {
+      const t = errText(e);
+      msg.textContent = /geändert werden|set_once|nur einmalig/i.test(t)
+        ? 'Die LizenzID ist bereits festgelegt und kann nicht mehr geändert werden.'
+        : 'Speichern fehlgeschlagen.';
+    }
   });
 
   body.querySelector('#acc-logout').addEventListener('click', async () => {
