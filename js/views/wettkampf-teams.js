@@ -21,10 +21,11 @@ function leadTeamId(stats, wertung) {
 }
 
 // Mannschafts-Übersicht: je Mannschaft eine Tafel mit integrierter Aufstellung. Oben Kopf (Name,
-// Spielpunkte bei aktiver Duell/EWP-Wertung, Führungs-Markierung). Darunter die Spieler:
-//   • solange die Mannschaft noch keine Ergebnisse hat: Aufstellung (Name + Startbahn),
-//   • sobald Ergebnisse vorliegen: eine bahnweise Ergebnistabelle je Spieler (Ergebnis pro Bahn)
-//     mit Ges. Volle, Ges. Abräumen, Gesamtholz und EWP, plus einer Mannschafts-Summenzeile.
+// Spielpunkte bei aktiver Duell/EWP-Wertung, Führungs-Markierung). Darunter die Spieler in der
+// bahnweisen Ergebnistabelle (Ergebnis pro Bahn, Ges. Volle/Abräumen/Gesamt/EWP, Mannschafts-
+// Summenzeile). Die Tabelle steht von Anfang an — auch OHNE Ergebnisse: dann sind Ergebnis- und
+// Bahnzellen leer, Name/Startbahn bleiben (im Hub) editierbar. So springt das Layout nicht um,
+// sobald der erste Wurf fällt, sondern ist bereits „wie mit Ergebnissen" aufgebaut.
 export function teamUebersichtSection(wettkampf, games, stats, wertung, kz, opts = {}) {
   const editable = opts.editable !== false; // Default: bearbeitbar (Hub)
   const teams = wettkampf.mannschaften || [];
@@ -82,7 +83,6 @@ function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults
   const byPos = {};
   (stats.einzel || []).forEach((p) => { if (p.mannschaftId === m.id && p.teamPos) byPos[p.teamPos] = p; });
   const rows = Array.from({ length: P }, (_, k) => ({ pos: k + 1, p: byPos[k + 1] || null }));
-  const teamHasResults = rows.some((r) => r.p && (r.p.gesamt || 0) > 0);
   const ewpSum = rows.reduce((s, r) => s + (r.p ? (r.p.ewp || 0) : 0), 0);
 
   // Kopfzeile mit Spielpunkten (nur bei aktiver Duell/EWP-Wertung UND sobald überhaupt Ergebnisse
@@ -99,10 +99,10 @@ function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults
     </div>`;
 
   // Die früheren drei Summen-Kacheln (Gesamtholz/EWP/Aufschlüsselung) entfallen — dieselben Zahlen
-  // stehen im Kopf (Spielpunkte) und in der Summenzeile der Tabelle (Ges./EWP).
-  const body = teamHasResults
-    ? ergebnisTabelle(m, rows, st, ewpSum, teamLanes, laneOf, mirror, editable)
-    : aufstellungListe(m, rows, teamLanes, nameOf, laneOf, mirror, editable);
+  // stehen im Kopf (Spielpunkte) und in der Summenzeile der Tabelle (Ges./EWP). Die Tabelle wird
+  // immer gerendert (auch ohne Ergebnisse), damit die Übersicht von Beginn an vollständig aufgebaut
+  // ist und beim ersten Ergebnis nicht umspringt.
+  const body = ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable);
 
   return `
     <div class="wk-team-card${isLead ? ' is-lead' : ''}${mirror ? ' is-mirror' : ''}">
@@ -130,9 +130,11 @@ function nameField(m, pos, value, editable) {
 // Mannschaft als Fußzeile: je Bahn der Mannschafts-Durchschnitt, rechts die Summen.
 // Bei `mirror` (gegenüberstehendes Team) werden die Spalten-Blöcke gespiegelt (Zahlen zur Mitte) —
 // der Bahn-Block bleibt dabei ein zusammenhängendes Segment und damit auf beiden Seiten aufsteigend.
-function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, laneOf, mirror, editable) {
-  // Bahn-Spalten = sortierte Vereinigung aller im Team gespielten Bahnen.
-  const bahnSet = new Set();
+function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable) {
+  // Bahn-Spalten = sortierte Vereinigung der Team-Bahnen und aller im Team gespielten Bahnen. Die
+  // Team-Bahnen sind von Anfang an dabei, damit die Tabelle schon vor dem ersten Ergebnis alle
+  // Bahn-Spalten zeigt (leer) und sich das Spaltengerüst später nicht mehr ändert.
+  const bahnSet = new Set(teamLanes);
   rows.forEach((r) => ((r.p && r.p.saetze) || []).forEach((s) => { if (s.bahn != null) bahnSet.add(s.bahn); }));
   const bahnen = [...bahnSet].sort((a, b) => a - b);
   // Die Bahn-Zellen als EIN Segment führen → beim Spiegeln bleibt ihre Reihenfolge aufsteigend.
@@ -166,7 +168,9 @@ function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, laneOf, mirror, editabl
   const bodyRows = rows.map((r) => {
     const p = r.p;
     const played = !!(p && (p.gesamt || 0) > 0);
-    const nameCell = `<td class="wk-c-name">${nameField(m, r.pos, p && p.name, editable)}</td>`;
+    // Name: gespielt → aus dem Ergebnis, sonst aus der (im Setup erfassten) Aufstellung.
+    const nameVal = (p && p.name) || nameOf[`${m.id}|${r.pos}`] || '';
+    const nameCell = `<td class="wk-c-name">${nameField(m, r.pos, nameVal, editable)}</td>`;
     // W-Spalte: hat der Spieler begonnen → seine bisherige Wurfanzahl; sonst die (noch änderbare)
     // Startbahn zur Auswahl.
     const wurfCell = played
@@ -223,18 +227,3 @@ function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, laneOf, mirror, editabl
     </div>`;
 }
 
-// Aufstellung (reines Setup, noch keine Ergebnisse im Team): je Position ein Namensfeld und –
-// innerhalb der Team-Bahnen – die Startbahn. Bei `mirror` liegen die Namen außen (Zahlen/Bahn
-// zur Mitte). Namen und Startbahn werden direkt in die Durchgang-Spiele geschrieben (siehe wire()).
-function aufstellungListe(m, rows, teamLanes, nameOf, laneOf, mirror, editable) {
-  const lis = rows.map((r) => {
-    const val = nameOf[`${m.id}|${r.pos}`] || '';
-    return `
-      <div class="wk-lu-row${mirror ? ' is-mirror' : ''}">
-        <span class="wk-c-pos">${r.pos}</span>
-        ${nameField(m, r.pos, val, editable)}
-        ${startbahnCtrl(m, r.pos, teamLanes, laneOf, editable)}
-      </div>`;
-  }).join('');
-  return `<div class="wk-lineup">${lis}</div>`;
-}

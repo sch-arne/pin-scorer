@@ -1028,6 +1028,8 @@ button.mini-pin { cursor: pointer; }
 .ept-bahn { font-size: 0.72rem; color: var(--text-dim); flex: 0 0 auto; }
 /* Zeile 2: Spielername (eigene Zeile, zentriert) */
 .ept-name { min-width: 0; font-weight: 700; font-size: 0.82rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+/* Mannschaftsname (nur im Wettkampf) unter dem Spielernamen — kleiner, gedämpft. */
+.ept-team { min-width: 0; font-size: 0.68rem; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
 .ept-total { flex: 0 0 auto; font-size: 1.05rem; font-weight: 800; color: var(--accent); }
 /* Fußzeile: Wurf-Nr. · aktueller Wurf · Gesamt Bahn */
 .ept-bot { display: flex; align-items: baseline; gap: 6px; }
@@ -1533,13 +1535,7 @@ button.mini-pin { cursor: pointer; }
   color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle;
 }
 .wk-name-static.is-empty { color: var(--text-dim); font-weight: 500; }
-.wk-lu-row .wk-name-static { flex: 1; min-width: 0; }
 
-/* Aufstellung (vor den Ergebnissen): Name + Startbahn je Position. */
-.wk-lineup { display: flex; flex-direction: column; gap: 6px; }
-.wk-lu-row { display: flex; align-items: center; gap: 8px; }
-.wk-lu-row .wk-c-pos { flex: none; width: 1.6em; text-align: center; color: var(--text-dim); font-weight: 700; }
-.wk-lu-row .wk-name { flex: 1; }
 .wk-lane { flex: none; padding: 5px 8px; font: inherit; font-size: 0.85rem; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; }
 .wk-lane-fix { flex: none; font-size: 0.8rem; color: var(--text-dim); white-space: nowrap; }
 /* Startbahn direkt in der Ergebnistabelle (Spieler ohne Ergebnis) — bleibt änderbar. */
@@ -1554,8 +1550,6 @@ button.mini-pin { cursor: pointer; }
 .wk-tbl.wk-mirror td.wk-c-name { text-align: right; }
 .wk-tbl.wk-mirror td.wk-c-name .wk-name { text-align: right; }
 .wk-tbl.wk-mirror td.wk-c-name .wk-name-static { text-align: right; }
-.wk-lu-row.is-mirror { flex-direction: row-reverse; }
-.wk-lu-row.is-mirror .wk-name { text-align: right; }
 
 /* Durchgänge als Statuskarten: farbiger Status-Rand links, oben Nummer-Chip + „Durchgang N"
    + Status-Badge, darunter die Aktion; Löschen als kleiner Button oben rechts. Mobil einspaltig
@@ -2160,33 +2154,32 @@ button.mini-pin { cursor: pointer; }
   .view-kontrollzentrum .kz-side { display: contents; }
 }
 
-/* ---------- Erfassung auf dem Vereins-PC: Live-Monitor aller Bahnen + breitere Eingabe ---------- */
-/* Der Monitor (bis zu 4 Bahnen gleichzeitig: Name, Satz, laufende Teilsatz-Summen, letzter Wurf)
-   ersetzt am Desktop den kompakten Bahn-Tab-Streifen. Auf schmalen Schirmen bleibt der Streifen
-   und der Monitor ist ausgeblendet. Tastatureingabe (siehe spiel-laufend.js) ist davon unabhängig. */
-.erf-lane-monitor { display: none; }
-
+/* ---------- Erfassung auf dem Vereins-PC: kompakte Bahn-Tabs + breitere Eingabe ---------- */
+/* Der Desktop nutzt denselben kompakten Bahn-Tab-Streifen (.erf-ptabs) wie das Smartphone,
+   mittig auf 720px begrenzt. Tastatureingabe (siehe spiel-laufend.js) ist davon unabhängig. */
 @media (min-width: 900px) {
-  /* Desktop-Erfassung nutzt die ganze verfügbare Breite (keine Pixel-Deckelung) —
-     der Bahn-Monitor darüber verteilt bis zu 4 Bahnen über die volle Breite. */
+  /* Desktop-Erfassung nutzt die ganze verfügbare Breite (keine Pixel-Deckelung); der
+     Arbeitsbereich darunter wird mittig begrenzt. */
   .erf-screen.erf-kz { max-width: none; padding-left: 20px; padding-right: 20px; }
   /* Erfassung + Satz-Pills mittig begrenzen, damit Kegelbild/Ziffernblock nicht über die volle
-     Breite zerlaufen — der Monitor darüber nutzt die ganze Breite. */
+     Breite zerlaufen. Die Bahn-Tabs darüber nutzen dagegen die ganze Breite (ein Tab je Bahn,
+     gleichmäßig verteilt). */
   .erf-kz .erf-stabs,
   .erf-kz .erf-satz,
   .erf-kz .erf-ueber { width: 100%; max-width: 720px; margin-left: auto; margin-right: auto; }
+  .erf-kz .erf-ptabs { width: 100%; }
+  /* Jeder Tab bleibt breit (gleichmäßig verteilt, Unterstrich über die volle Zellbreite), aber
+     sein INHALT wird zu einer schmalen, mittigen Spalte gebündelt — sonst kleben Bahn/Ergebnis in
+     einem sehr breiten Tab an den Rändern und lassen sich schlecht dem Namen zuordnen. */
+  .erf-kz .erf-ptab { align-items: center; }
+  .erf-kz .ept-top,
+  .erf-kz .ept-name,
+  .erf-kz .ept-team,
+  .erf-kz .ept-bot { width: 100%; max-width: 190px; }
 
-  .erf-kz .erf-ptabs { display: none; }
-  .erf-kz .erf-lane-monitor {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 10px;
-    margin-bottom: 12px;
-    flex: 0 0 auto;
-  }
-  /* Live-Mannschaftsübersicht des Wettkampfs ganz oben (über den Bahnkarten): feste Höhe deckeln
-     und intern scrollen, damit sie den Arbeitsbereich (Bahnkarten/Übersicht/Kegelbrett) im
-     100dvh-Layout nicht erdrückt. Volle Breite wie der Bahn-Monitor. */
+  /* Live-Mannschaftsübersicht des Wettkampfs ganz oben (über den Bahn-Tabs): feste Höhe deckeln
+     und intern scrollen, damit sie den Arbeitsbereich (Bahn-Tabs/Übersicht/Kegelbrett) im
+     100dvh-Layout nicht erdrückt. */
   .erf-kz .kz-team-uebersicht {
     flex: 0 0 auto;
     max-height: 40vh;
@@ -2194,41 +2187,6 @@ button.mini-pin { cursor: pointer; }
     margin-bottom: 12px;
   }
 }
-
-.elm-card {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: 10px 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-top: 3px solid var(--border);
-  border-radius: 12px;
-  color: var(--text-dim);
-  text-align: left; cursor: pointer; min-width: 0;
-}
-.elm-card.is-active { border-top-color: var(--accent); background: var(--surface-2); }
-.elm-card.is-live { border-top-color: var(--accent-2); }
-.elm-card.is-done { opacity: 0.85; }
-.elm-card.is-frei { opacity: 0.6; cursor: default; }
-.elm-top { display: flex; align-items: baseline; gap: 6px; }
-.elm-bahn { font-size: 0.72rem; color: var(--text-dim); flex: 0 0 auto; }
-.elm-flag { font-size: 0.8rem; }
-.elm-status { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.3px; color: var(--text-dim); }
-.elm-total { margin-left: auto; font-size: 1.1rem; font-weight: 800; color: var(--accent); }
-.elm-name { font-weight: 700; font-size: 0.95rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.elm-frei { font-size: 0.9rem; color: var(--text-dim); }
-.elm-mid { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.elm-satz { font-size: 0.75rem; color: var(--text-dim); }
-.elm-satzholz { font-size: 1rem; font-weight: 700; color: var(--text); }
-.elm-card.is-live .elm-satzholz { color: var(--accent); }
-.elm-ts { display: flex; flex-wrap: wrap; gap: 4px 8px; }
-.elm-ts-cell { display: inline-flex; align-items: baseline; gap: 3px; font-size: 0.72rem; }
-.elm-ts-lbl { color: var(--text-dim); }
-.elm-ts-val { font-weight: 700; color: var(--text); }
-.elm-ts-cell.is-manual .elm-ts-val { color: var(--accent-2); }
-.elm-bot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: 2px; }
-.elm-wurf { font-size: 0.72rem; color: var(--text-dim); }
-.elm-cur { font-size: 1.15rem; font-weight: 800; color: var(--text); line-height: 1; }
-.elm-card.is-live .elm-cur { color: var(--accent); }
 
 /* Mehr-Spieler-Satzübersicht (Kontrollzentrum): alle Spieler nebeneinander, volle Breite.
    Der Zell-Cursor (Pfeiltasten) wird umrandet; die Tabelle scrollt, der Ziffernblock bleibt unten. */
