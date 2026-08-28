@@ -190,6 +190,11 @@ export function spielLaufendView() {
   const backLabel = game.wettkampfId ? 'Zum Wettkampf' : 'Neues Spiel';
   const ranges = teilsatzRanges(c);
   const state = normalizeErfassung(game.erfassung, c);
+  // state ist eine NORMALISIERTE Kopie — game.erfassung sofort daran binden, damit beide nicht
+  // auseinanderlaufen. Sonst schreibt initSync() frisch geladene (fremde/geräteübergreifende)
+  // Würfe nur in state, während das Wurfprotokoll (buildProtokollHTML(game, …)) noch die alte,
+  // leere game.erfassung druckt — auf einem anderen Gerät fehlen dann die Würfe im Protokoll.
+  game.erfassung = state;
   let editIdx = null; // lokaler Korrektur-Index (nicht persistiert)
   let flashTs = 0; // Zeitstempel des zuletzt erfassten Wurfs: die aktuelle Wurfzahl blitzt danach kurz auf (Klick-Feedback, bei JEDEM Wert). Zeitfenster statt Render-Reset, damit ein Folge-Render (z. B. das Kegel-Popup) den Blitz nicht verschluckt.
   let pinMode = 'stehend'; // 'gefallen' | 'stehend' — welche Seite die Kegel-Raute erfasst (Default: Stehende)
@@ -729,9 +734,15 @@ export function spielLaufendView() {
     if (col === 'holz') openSatzOverride(row.st); else openOverride(row.st, col);
   }
 
-  // koenigFlag (nur Kranz, per Langdruck): der Wurf fällt N Kranz-Kegel, der König (5)
-  // bleibt stehen. Genaue Kranz-Kegel bleiben offen (kegel=null), gespeichert wird nur,
-  // DASS der König danach noch steht (blk.koenig[idx]=true).
+  // koenigFlag (nur Kranz, per Langdruck): der Wurf fällt ALLE stehenden Kranz-Kegel, der
+  // König (5) bleibt stehen. Ist der Reststand exakt bekannt (ctx.exact), sind das genau
+  // universe\{5} -> die konkreten Kegel werden gespeichert (Kegelbild eindeutig bestimmbar,
+  // erscheint auch im Wurfprotokoll). Nur bei unbekanntem Reststand bleiben die Kegel offen
+  // (kegel=null) und es wird lediglich das König-Flag gesetzt (blk.koenig[idx]=true).
+  // Liefert für den Kranz-Langdruck die konkreten gefallenen Kegel oder null (unbestimmbar).
+  function koenigKegelFor(ctx) {
+    return ctx.exact && ctx.universe.includes(5) ? ctx.universe.filter((p) => p !== 5) : null;
+  }
   function addWurf(pins, koenigFlag = false) {
     if (!guardEdit()) return false;
     const blk = current();
@@ -741,9 +752,10 @@ export function spielLaufendView() {
         const ctx = throwContext(blk, editIdx);
         const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
         if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
+        const kk = koenigFlag ? koenigKegelFor(ctx) : null;
         blk.wuerfe[editIdx] = pins;
-        blk.kegel[editIdx] = koenigFlag ? null : defaultKegelFor(blk, editIdx, pins);
-        blk.koenig[editIdx] = koenigFlag;
+        blk.kegel[editIdx] = koenigFlag ? kk : defaultKegelFor(blk, editIdx, pins);
+        blk.koenig[editIdx] = koenigFlag && kk == null;   // Flag nur, wenn Kegel offen bleiben
       }
       const idx = editIdx;
       editIdx = null; flashTs = Date.now(); persist(); render();
@@ -764,9 +776,10 @@ export function spielLaufendView() {
     const ctx = throwContext(blk, idx);
     const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
     if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
+    const kk = koenigFlag ? koenigKegelFor(ctx) : null;
     blk.wuerfe.push(pins);
-    blk.kegel.push(koenigFlag ? null : defaultKegelFor(blk, idx, pins));
-    blk.koenig.push(koenigFlag);
+    blk.kegel.push(koenigFlag ? kk : defaultKegelFor(blk, idx, pins));
+    blk.koenig.push(koenigFlag && kk == null);   // Flag nur, wenn Kegel offen bleiben
     // Sind mit diesem Wurf alle Teilsätze voll (alle Soll-Würfe des Satzes erfasst), wird der
     // Satz automatisch beendet — kein manuelles Abschließen mehr nötig. Da die Würfe die
     // Teilsätze der Reihe nach füllen, ist das genau erreicht, wenn wuerfeProSatz voll ist.

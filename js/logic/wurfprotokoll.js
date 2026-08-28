@@ -13,6 +13,7 @@
 
 import { computeGameStats } from './statistik.js';
 import { teilsatzStats, satzHolz, satzStatus } from './holz.js';
+import { abraeumScan, isAbraeumMode, volleKranz } from './abraeumen.js';
 
 const MODUS_ABK = { volle: 'Vo', abraeumen: 'Ab', 'kranz-abraeumen': 'Kr' };
 const MODUS_LBL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen' };
@@ -48,11 +49,12 @@ function pinSvg(fallenPins) {
 }
 
 // Eine Wurf-Zelle: Kegelbild oben, Wurfzahl mittig, Wurfnummer (pro Satz) klein unten.
-function throwCell(val, kegel, koenig, nr) {
+// kranz = echter Kranz (eine 8, nach der nur der König steht) -> ♔; NICHT bloß "König steht".
+function throwCell(val, kegel, kranz, nr) {
   const leer = val == null;
   const cls = leer ? 'wp-empty' : (val === 9 ? 'is-neuner' : (val === 0 ? 'is-fehl' : ''));
   const anzeige = leer ? '·' : String(val);
-  const kranzMark = koenig ? '<span class="wp-koenig">♔</span>' : '';
+  const kranzMark = kranz ? '<span class="wp-koenig">♔</span>' : '';
   return `<span class="wp-cell">`
     + `<span class="wp-pin">${leer ? '' : pinSvg(kegel)}</span>`
     + `<span class="wp-val ${cls}">${anzeige}${kranzMark}</span>`
@@ -67,6 +69,10 @@ function teilsatzRow(blk, ranges, i, done, satzCell, holzCell) {
   const ts = teilsatzStats(blk, ranges, i, done);
   const label = MODUS_ABK[r.modus] || r.modus;
 
+  // Beim (Kranz-)Abräumen liefert der Scan die vor jedem Wurf stehenden Kegel — nötig, um
+  // das Kegelbild eines Kranz-Langdrucks (kegel=null, König steht) zu rekonstruieren.
+  const scan = isAbraeumMode(r.modus) ? abraeumScan(blk, r) : null;
+
   let cells = '';
   if (ts.manual && blk.wuerfe.slice(r.start, r.end).length === 0) {
     // Nur als Ergebnis eingetragen (ohne Einzelwürfe) -> Hinweis statt Wurf-Raster.
@@ -75,9 +81,24 @@ function teilsatzRow(blk, ranges, i, done, satzCell, holzCell) {
     for (let k = r.start; k < r.end; k += 1) {
       const has = k < blk.wuerfe.length;
       const val = has ? blk.wuerfe[k] : null;
-      const kegel = has ? blk.kegel[k] : null;
       const koenig = has && Array.isArray(blk.koenig) ? blk.koenig[k] : false;
-      cells += throwCell(val, kegel, koenig, k + 1);
+      // Echter Kranz (fürs ♔): genau wie in der Erfassung — kranzAt aus dem Abräum-Scan bzw.
+      // volleKranz in der Volle. NICHT das koenig-Flag ("König steht danach"): eine 2 per
+      // Langdruck lässt zwar den König stehen, ist aber kein Kranz.
+      const kranz = scan ? !!scan.kranzAt[k] : (r.modus === 'volle' && volleKranz(blk, k));
+      let kegel = has ? blk.kegel[k] : null;
+      // Fallback für ALTDATEN: früher speicherte der Kranz-Langdruck kegel=null (nur König-Flag).
+      // Neue Würfe legen die konkreten Kegel direkt ab; für alte/gerätesynchronisierte Spiele
+      // hier das Bild rekonstruieren — die vor dem Wurf stehenden Kegel außer dem König —, aber
+      // nur wenn der Reststand exakt bekannt ist UND die Anzahl zum Wurf passt. Sonst kein Bild.
+      if (has && kegel == null && koenig && scan) {
+        const st = scan.before[k];
+        if (st && st.exact) {
+          const fallen = st.standing.filter((p) => p !== 5);
+          if (fallen.length === val) kegel = fallen;
+        }
+      }
+      cells += throwCell(val, kegel, kranz, k + 1);
     }
   }
 
