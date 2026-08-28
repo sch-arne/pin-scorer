@@ -543,6 +543,19 @@ export function spielLaufendView() {
       : Array.from({ length: c.bahnen }, (_, i) => c.ersteBahn + i);
   }
   function playerName(sp) { return c.spielerListe[sp].name || ('Spieler ' + (sp + 1)); }
+  // Mannschaftsname eines Spielers — nur im Wettkampf gesetzt, sonst ''. Wird in den Bahn-Tabs
+  // unter dem Spielernamen gezeigt. Die Zuordnung id -> Name wird beim ersten Aufruf gecacht.
+  let teamNameById = null;
+  function teamNameOf(sp) {
+    if (!game.wettkampfId) return '';
+    if (teamNameById === null) {
+      teamNameById = {};
+      const w = getWettkampf(game.wettkampfId);
+      ((w && w.mannschaften) || []).forEach((m) => { teamNameById[m.id] = m.name; });
+    }
+    const mid = c.spielerListe[sp] && c.spielerListe[sp].mannschaftId;
+    return (mid != null && teamNameById[mid]) || '';
+  }
   function playerTotal(sp) { return state.bloecke[sp].reduce((s, blk) => s + satzHolz(blk, ranges), 0); }
 
   // Effektive Wurfzahl eines Satz-Blocks fürs Anzeigen: ein manuell gesetzter Teilsatz zählt als
@@ -1085,7 +1098,7 @@ export function spielLaufendView() {
     const pad = root.querySelector('.erf-overpad');
     if (!pad) return;
     if (!root.isConnected) { requestAnimationFrame(anchorOverpad); return; } // erster Render: Layout steht noch nicht
-    const anchor = root.querySelector('.erf-lane-monitor') || root.querySelector('.erf-stabs');
+    const anchor = root.querySelector('.erf-ptabs') || root.querySelector('.erf-stabs');
     const top = anchor ? Math.max(0, Math.round(anchor.getBoundingClientRect().top)) : 0;
     pad.style.top = top + 'px';
   }
@@ -1221,7 +1234,6 @@ export function spielLaufendView() {
 
       <div data-sw-konflikt-banner></div>
       ${istDesktop() ? wettkampfTeamSection() : ''}
-      ${istDesktop() ? laneMonitor(bs) : ''}
       ${bahnTabs(bs)}
 
       ${satzTabs()}
@@ -1560,6 +1572,7 @@ export function spielLaufendView() {
           <span class="ept-total" title="Gesamtergebnis">${total}</span>
         </span>
         <span class="ept-name">${esc(playerName(sp))}</span>
+        ${teamNameOf(sp) ? `<span class="ept-team">${esc(teamNameOf(sp))}</span>` : ''}
         <span class="ept-bot">
           <span class="ept-wurf" title="Wurf-Nr.">${wurfN}</span>
           <span class="ept-cur" title="Aktueller Wurf">${lastThrow}</span>
@@ -1568,64 +1581,6 @@ export function spielLaufendView() {
       </button>`);
     }
     return `<div class="erf-ptabs" role="tablist">${tabs.join('')}</div>`;
-  }
-
-  // Live-Monitor aller Bahnen (nur Vereins-PC/Desktop, siehe CSS .erf-kz — ersetzt dort den
-  // kompakten Bahn-Tab-Streifen). Je Bahn eine Karte mit Name, Gesamt, aktuellem Satz + Bahn,
-  // laufenden Teilsatz-Summen und dem letzten Wurf. Antippen wählt die Bahn (data-player →
-  // dieselbe Verdrahtung wie die Bahn-Tabs), die aktive Bahn ist hervorgehoben.
-  function laneMonitor(bs) {
-    const lanes = gameLanes();
-    const belegung = {};
-    bs.forEach((s, sp) => { belegung[s.lane] = sp; });
-    const tsLabels = teilsatzLabels();
-    const showTs = ranges.length > 1;
-    const statusLbl = (st) => (st === 'wartet' ? 'wartet' : st === 'done' ? 'fertig' : st === 'live' ? 'läuft' : 'offen');
-
-    const cards = lanes.map((bahn) => {
-      const sp = belegung[bahn];
-      if (sp == null) {
-        return `<div class="elm-card is-frei" aria-label="Bahn ${bahn}, frei">
-          <div class="elm-top"><span class="elm-bahn">Bahn ${bahn}</span></div>
-          <div class="elm-frei">frei</div>
-        </div>`;
-      }
-      const s = bs[sp];
-      const st = s.pos;
-      const blk = block(sp, st);
-      const status = s.waiting ? 'wartet' : satzStatus(blk);
-      const done = status === 'done';
-      const realN = blk.wuerfe.length;
-      const lastThrow = realN ? blk.wuerfe[realN - 1] : '–';
-      const tsRow = showTs
-        ? `<div class="elm-ts">${ranges.map((_, i) => {
-          const t = teilsatzStats(blk, ranges, i, done);
-          const touched = t.count > 0 || t.manual;
-          return `<span class="elm-ts-cell${t.manual ? ' is-manual' : ''}"><span class="elm-ts-lbl">${esc(tsLabels[i])}</span><span class="elm-ts-val">${touched ? t.val : '·'}</span></span>`;
-        }).join('')}</div>`
-        : '';
-      const active = sp === state.aktiverSpieler;
-      return `<button type="button" role="tab" aria-selected="${active}" class="elm-card is-${status}${active ? ' is-active' : ''}" data-player="${sp}">
-        <div class="elm-top">
-          <span class="elm-bahn">Bahn ${bahn}</span>
-          ${s.waiting ? '<span class="elm-flag" title="wartet auf Bahnwechsel">⏳</span>' : ''}
-          ${fremdAktiv(sp) ? '<span class="elm-flag" title="wird auf anderem Gerät erfasst">🔒</span>' : ''}
-          <span class="elm-status">${statusLbl(status)}</span>
-          <span class="elm-total" title="Gesamtergebnis">${playerTotal(sp)}</span>
-        </div>
-        <div class="elm-name">${esc(playerName(sp))}</div>
-        <div class="elm-mid">
-          <span class="elm-satz">Satz ${st + 1} · Bahn ${bahn}</span>
-          <span class="elm-satzholz" title="Gesamt Bahn">${status === 'pending' ? '–' : satzHolz(blk, ranges)}</span>
-        </div>
-        ${tsRow}
-        <div class="elm-bot">
-          <span class="elm-wurf">Wurf ${wuerfeCount(blk)}/${c.wuerfeProSatz}</span>
-          <span class="elm-cur" title="letzter Wurf">${lastThrow}</span>
-        </div>
-      </button>`;
-    });
-    return `<div class="erf-lane-monitor" role="tablist" aria-label="Bahnen-Übersicht">${cards.join('')}</div>`;
   }
 
   function satzTabs() {

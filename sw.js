@@ -3,7 +3,7 @@
 // Verbindungsaussetzern. Cache-first für die App-Shell, Netzwerk-Fallback.
 // Bei Änderungen an den App-Dateien CACHE hochzählen (v1 -> v2 ...).
 
-const CACHE = 'pin-scorer-v45';
+const CACHE = 'pin-scorer-v46';
 
 // Relative Pfade -> funktionieren auch unter GitHub-Pages-Unterpfad /<repo>/
 const SHELL = [
