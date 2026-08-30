@@ -4,9 +4,11 @@
 // mittig die Namen + Spielpunkte, darunter mittig die Bahn-Übersicht (wer spielt gerade auf
 // welcher Bahn). Der große untere Bereich bleibt FREI, damit die Kamera durchscheint.
 //
-// Datenzugriff read-only per Beitritts-Code (#/overlay?code=XXXX) über die anon-RPC
+// Datenzugriff read-only per ZUSCHAUER-Code (#/overlay?code=XXXX) über die anon-RPC
 // wettkampf_overlay — es braucht KEIN angemeldetes Gerät, läuft also auch im (nicht
-// angemeldeten) OBS-Browser auf einem anderen PC. Aktualisiert per Polling (~2 s).
+// angemeldeten) OBS-Browser auf einem anderen PC. Der Eingabe-Code wird weiterhin akzeptiert
+// (alte OBS-URLs), aber die App verlinkt bewusst den Zuschauer-Code (keine Eingaben nötig).
+// Aktualisiert per Polling (~2 s).
 //
 // Design an die App angelehnt (dunkle Flächen, Kegel-Gold, gerundete Karten). Die Schere-
 // Wertung (Spielpunkte + EWP) kommt aus logic/wettkampf-wertung.js; bei Bahnarten ohne

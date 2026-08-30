@@ -117,6 +117,20 @@ export function durchgangStatusList(wettkampf, games) {
   });
 }
 
+// Abgeleiteter Wettkampf-Status aus den Durchgängen (analog gameBaseStatus für ein Spiel):
+//   'beendet' — es gibt Durchgänge UND jeder ist 'fertig' (alle Sätze beendet),
+//   'laufend' — mindestens ein Durchgang hat schon ein Ergebnis, aber nicht alle fertig,
+//   'setup'   — noch kein Durchgang oder noch nichts erfasst.
+// Wie bei den Durchgängen wird aus den (synchronisierten) Erfassungsdaten abgeleitet, damit
+// jedes Gerät ohne extra Push zum selben Ergebnis kommt.
+export function wettkampfBaseStatus(wettkampf, games) {
+  const list = durchgangStatusList(wettkampf, games);
+  if (!list.length) return 'setup';
+  if (list.every((d) => d.status === 'fertig')) return 'beendet';
+  if (list.some((d) => d.status === 'fertig' || d.status === 'laufend')) return 'laufend';
+  return 'setup';
+}
+
 // Wettkampf + zugehörige Durchgang-Spiele -> { einzel, mannschaften }.
 //   wettkampf: { mannschaften:[{id,name}], durchgaenge:[{nr, gameId}] }
 //   games:     Array der Durchgang-Spielobjekte (config + erfassung.bloecke)

@@ -193,8 +193,10 @@ returns jsonb
 language sql security definer stable
 set search_path = public as $$
   with wk as (
+    -- Bevorzugt der (read-only) ZUSCHAUER-Code; der EINGABE-Code wird weiterhin akzeptiert,
+    -- damit bereits verteilte OBS-URLs mit dem alten Code nicht brechen.
     select id, name, status, config_json
-    from wettkampf where beitritts_code = upper(p_code)
+    from wettkampf where zuschauer_code = upper(p_code) or beitritts_code = upper(p_code)
   )
   select case when not exists (select 1 from wk) then null else
     jsonb_build_object(
@@ -221,6 +223,90 @@ $$;
 
 grant execute on function wettkampf_overlay(text) to anon, authenticated;
 
+-- Read-only Schnappschuss eines SPIELS per ZUSCHAUER-Code — fürs Live-Zuschauen in der App
+-- (Menü „Spiel beitreten" mit einem Zuschauer-Code). Analog zu wettkampf_overlay: security
+-- definer + anon-grant, damit auch ein NICHT angemeldetes Gerät zusehen kann, OHNE dem Spiel
+-- als Gerät beizutreten. Gibt AUSSCHLIESSLICH lesbare Daten zurück (Setup, Aufstellung, Würfe,
+-- Status) — WEDER beitritts_code/zuschauer_code NOCH Besitzer/Geräte. So kann ein Zuschauer
+-- weder schreiben noch den Eingabe-Code auslesen. Liefert null bei unbekanntem Code.
+drop function if exists spiel_zuschauer(text);
+create or replace function spiel_zuschauer(p_code text)
+returns jsonb
+language sql security definer stable
+set search_path = public as $$
+  with s as (
+    select id, spielart, status, config_json, erstellt_am, aktualisiert_am
+    from spiel where zuschauer_code = upper(p_code)
+  )
+  select case when not exists (select 1 from s) then null else
+    jsonb_build_object(
+      'spiel', (select jsonb_build_object(
+        'id', s.id, 'spielart', s.spielart, 'status', s.status,
+        'config_json', s.config_json, 'erstellt_am', s.erstellt_am,
+        'aktualisiert_am', s.aktualisiert_am) from s),
+      'spieler', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'id', sp.id, 'position', sp.position, 'name', sp.name, 'start_bahn', sp.start_bahn)
+          order by sp.position)
+        from spiel_spieler sp where sp.spiel_id = (select id from s)
+      ), '[]'::jsonb),
+      'bloecke', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'spieler_id', b.spieler_id, 'satz', b.satz, 'block_json', b.block_json))
+        from satz_block b where b.spiel_id = (select id from s)
+      ), '[]'::jsonb)
+    )
+  end;
+$$;
+
+grant execute on function spiel_zuschauer(text) to anon, authenticated;
+
+-- Read-only Schnappschuss eines WETTKAMPFS per ZUSCHAUER-Code — für die volle Wettkampf-Ansicht
+-- (Hub) im Zuschauer-Modus. Wie spiel_zuschauer, aber inkl. aller Durchgang-Spiele (jeweils mit
+-- Aufstellung + Würfen). Der zuschauer_code JEDES Durchgangs ist enthalten, damit der geöffnete
+-- Durchgang in der Erfassungs-Ansicht ebenfalls live pollen kann — es ist ein reiner Lese-Code,
+-- der kein Eingaberecht gibt. KEIN beitritts_code, KEIN Besitzer/Gerät. Liefert null bei
+-- unbekanntem Code.
+drop function if exists wettkampf_zuschauer(text);
+create or replace function wettkampf_zuschauer(p_code text)
+returns jsonb
+language sql security definer stable
+set search_path = public as $$
+  with wk as (
+    select id, name, datum, status, anlage_id, config_json, erstellt_am, aktualisiert_am
+    from wettkampf where zuschauer_code = upper(p_code)
+  )
+  select case when not exists (select 1 from wk) then null else
+    jsonb_build_object(
+      'wettkampf', (select jsonb_build_object(
+        'id', w.id, 'name', w.name, 'datum', w.datum, 'status', w.status,
+        'anlage_id', w.anlage_id, 'config_json', w.config_json,
+        'erstellt_am', w.erstellt_am, 'aktualisiert_am', w.aktualisiert_am) from wk w),
+      'spiele', coalesce((
+        select jsonb_agg(jsonb_build_object(
+          'id', s.id, 'durchgang_nr', s.durchgang_nr, 'spielart', s.spielart,
+          'status', s.status, 'config_json', s.config_json,
+          'zuschauer_code', s.zuschauer_code,
+          'spieler', coalesce((
+            select jsonb_agg(jsonb_build_object(
+              'id', sp.id, 'position', sp.position, 'name', sp.name, 'start_bahn', sp.start_bahn)
+              order by sp.position)
+            from spiel_spieler sp where sp.spiel_id = s.id
+          ), '[]'::jsonb),
+          'bloecke', coalesce((
+            select jsonb_agg(jsonb_build_object(
+              'spieler_id', b.spieler_id, 'satz', b.satz, 'block_json', b.block_json))
+            from satz_block b where b.spiel_id = s.id
+          ), '[]'::jsonb)
+        ) order by s.durchgang_nr)
+        from spiel s where s.wettkampf_id = (select id from wk)
+      ), '[]'::jsonb)
+    )
+  end;
+$$;
+
+grant execute on function wettkampf_zuschauer(text) to anon, authenticated;
+
 -- Verbindung eines SPIELS kappen, OHNE das Spiel zu löschen. Entwertet den Beitritts-Code
 -- (kein Beitreten mehr) und entfernt ALLE Geräte-Mitgliedschaften (auch fremder Accounts) —
 -- dafür security definer, weil die normale RLS (spiel_geraet_delete) nur eigene Geräte-Zeilen
@@ -235,7 +321,7 @@ begin
   if not exists (select 1 from spiel where id = p_spiel and besitzer = auth.uid()) then
     raise exception 'Nicht berechtigt';
   end if;
-  update spiel set beitritts_code = null where id = p_spiel;
+  update spiel set beitritts_code = null, zuschauer_code = null where id = p_spiel;
   delete from spiel_geraet where spiel_id = p_spiel;
 end;
 $$;
@@ -256,9 +342,9 @@ begin
   if not exists (select 1 from wettkampf where id = p_wettkampf and besitzer = auth.uid()) then
     raise exception 'Nicht berechtigt';
   end if;
-  update wettkampf set beitritts_code = null where id = p_wettkampf;
+  update wettkampf set beitritts_code = null, zuschauer_code = null where id = p_wettkampf;
   delete from wettkampf_geraet where wettkampf_id = p_wettkampf;
-  update spiel set beitritts_code = null where wettkampf_id = p_wettkampf;
+  update spiel set beitritts_code = null, zuschauer_code = null where wettkampf_id = p_wettkampf;
   delete from spiel_geraet
     where spiel_id in (select id from spiel where wettkampf_id = p_wettkampf);
 end;

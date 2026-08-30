@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeWettkampfStats, planDurchgaenge, durchgangStatusList } from '../js/logic/wettkampf.js';
+import { computeWettkampfStats, planDurchgaenge, durchgangStatusList, wettkampfBaseStatus } from '../js/logic/wettkampf.js';
 
 const TWO_TEAMS = [{ id: 'mA', name: 'A' }, { id: 'mB', name: 'B' }];
 
@@ -47,6 +47,32 @@ test('durchgangStatusList: sortiert nach Nummer; genau ein Vorbereitungs-Durchga
   assert.deepEqual(list.map((d) => d.nr), [1, 2, 3]);
   assert.equal(list.filter((d) => d.status === 'vorbereitung').length, 1);
   assert.equal(list[0].status, 'vorbereitung'); // kleinste Nummer ist der nächste
+});
+
+test('wettkampfBaseStatus: alle Durchgänge fertig -> beendet; sonst laufend/setup', () => {
+  const mk = (id, status) => ({ id, status });
+  const wettkampf = { durchgaenge: [{ nr: 1, gameId: 'g1' }, { nr: 2, gameId: 'g2' }] };
+  // Alle beendet -> beendet.
+  assert.equal(wettkampfBaseStatus(wettkampf, [mk('g1', 'beendet'), mk('g2', 'beendet')]), 'beendet');
+  // Einer noch offen -> laufend (mindestens ein Ergebnis vorhanden).
+  assert.equal(wettkampfBaseStatus(wettkampf, [mk('g1', 'beendet'), mk('g2', 'laufend')]), 'laufend');
+  // Einer beendet, der Rest noch nicht gestartet -> laufend.
+  assert.equal(wettkampfBaseStatus(wettkampf, [mk('g1', 'beendet'), mk('g2', 'setup')]), 'laufend');
+  // Nichts erfasst -> setup.
+  assert.equal(wettkampfBaseStatus(wettkampf, [mk('g1', 'setup'), mk('g2', 'setup')]), 'setup');
+  // Ohne Durchgänge -> setup.
+  assert.equal(wettkampfBaseStatus({ durchgaenge: [] }, []), 'setup');
+});
+
+test('wettkampfBaseStatus: aus der Erfassung abgeleitet (nicht aus der status-Spalte)', () => {
+  const mkGame = (id, bloecke) => ({ id, status: 'setup', config: { spielerListe: [{}, {}], saetze: 2 }, erfassung: { bloecke } });
+  const done = { done: true, wuerfe: [], overrides: [null] };
+  const wettkampf = { durchgaenge: [{ nr: 1, gameId: 'g1' }, { nr: 2, gameId: 'g2' }] };
+  const games = [
+    mkGame('g1', [[done, done], [done, done]]),
+    mkGame('g2', [[done, done], [done, done]]),
+  ];
+  assert.equal(wettkampfBaseStatus(wettkampf, games), 'beendet');
 });
 
 test('planDurchgaenge: 2 Teams je 6 Spieler, je 2 Startbahnen -> 3 Durchgänge, Team sitzt auf seinen Bahnen', () => {

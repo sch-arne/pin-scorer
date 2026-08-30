@@ -21,7 +21,7 @@ export function beitretenView() {
       <h1 class="page-title">Spiel beitreten</h1>
     </header>
     <div class="join-body">
-      <p class="join-hint">Gib den Beitritts-Code eines geteilten Spiels oder Wettkampfs ein. Den Code zeigt das erste Gerät unter ⚙ → Mehrgeräte (bzw. im Wettkampf unter „Teilen").</p>
+      <p class="join-hint">Gib den Code eines geteilten Spiels oder Wettkampfs ein. Es gibt zwei Arten: der <b>Eingabe-Code</b> lässt dich mit erfassen, der <b>Zuschauer-Code</b> zeigt alles live, aber nur zum Ansehen. Die Codes zeigt das erste Gerät unter ⚙ → Mehrgeräte (bzw. im Wettkampf unter „Teilen").</p>
       <input id="join-code" class="join-input" type="text" inputmode="latin" autocapitalize="characters"
              autocomplete="off" spellcheck="false" placeholder="z. B. AB12CD" maxlength="12" aria-label="Beitritts-Code" />
       <button type="button" id="join-go" class="erf-btn done join-go">Beitreten</button>
@@ -47,9 +47,12 @@ export function beitretenView() {
     msg.textContent = 'Verbinde …';
     try {
       const sync = await import('../backend/sync.js');
-      // Ein Code kann zu einem Wettkampf ODER einem Einzelspiel gehören. Erst als
-      // Wettkampf versuchen; schlägt das mit einem Verbindungsfehler fehl, nicht weiter als
-      // Einzelspiel probieren (sonst verschluckt der innere catch den Offline-Fall).
+      // Ein Code kann zu einem Wettkampf ODER einem Einzelspiel gehören, und je Code-Art
+      // zum EINGABE-Code (mit erfassen) ODER zum ZUSCHAUER-Code (nur ansehen). Der Reihe nach
+      // probieren; ein „Code tot" (unbekannt) heißt nur „diese Variante passt nicht" und geht
+      // zur nächsten weiter — ein echter Verbindungsfehler (offline) bricht dagegen sofort ab
+      // (sonst verschluckt der innere catch den Offline-Fall).
+      // 1) Eingabe-Code eines Wettkampfs
       try {
         const { wettkampf, games } = await sync.joinWettkampf(code);
         games.forEach((g) => saveGame(g));
@@ -58,10 +61,31 @@ export function beitretenView() {
         navigate('/wettkampf');
         return;
       } catch (ew) {
-        if (!istCodeTot(ew)) throw ew; // echter Fehler (offline) → außen behandeln
-        /* Code ist kein Wettkampf-Code → als Einzelspiel versuchen */
+        if (!istCodeTot(ew)) throw ew;
       }
-      const game = await sync.joinGame(code);
+      // 2) Eingabe-Code eines Einzelspiels
+      try {
+        const game = await sync.joinGame(code);
+        saveGame(game);
+        setActiveGame(game.id);
+        navigate('/spiel-laufend');
+        return;
+      } catch (eg) {
+        if (!istCodeTot(eg)) throw eg;
+      }
+      // 3) Zuschauer-Code eines Wettkampfs
+      try {
+        const { wettkampf, games } = await sync.zuschauerWettkampf(code);
+        games.forEach((g) => saveGame(g));
+        saveWettkampf(wettkampf);
+        setActiveWettkampf(wettkampf.id);
+        navigate('/wettkampf');
+        return;
+      } catch (ez) {
+        if (!istCodeTot(ez)) throw ez;
+      }
+      // 4) Zuschauer-Code eines Einzelspiels
+      const game = await sync.zuschauerGame(code);
       saveGame(game);
       setActiveGame(game.id);
       navigate('/spiel-laufend');

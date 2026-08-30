@@ -58,6 +58,7 @@ function assembleLocalGame(sp, spieler, blocks) {
     remoteId: sp.id,
     linked: true,
     beitrittsCode: sp.beitritts_code,
+    zuschauerCode: sp.zuschauer_code,
     createdAt: sp.erstellt_am,
     spiel: sp.spielart,
     status: sp.status,
@@ -122,7 +123,7 @@ export async function linkGame(game, opts = {}) {
   const { data: sp, error: e1 } = await supabase
     .from('spiel')
     .insert(insertRow)
-    .select('id, beitritts_code, erstellt_am, aktualisiert_am, spielart, status, config_json')
+    .select('id, beitritts_code, zuschauer_code, erstellt_am, aktualisiert_am, spielart, status, config_json')
     .single();
   if (e1) throw e1;
   const remoteId = sp.id;
@@ -162,7 +163,7 @@ export async function linkGame(game, opts = {}) {
     }
   }
 
-  return { remoteId, beitrittsCode: sp.beitritts_code, posToId, geraet };
+  return { remoteId, beitrittsCode: sp.beitritts_code, zuschauerCode: sp.zuschauer_code, posToId, geraet };
 }
 
 // Vollstaendiges Remote-Spiel laden und als lokales Spiel-Objekt zusammenbauen.
@@ -215,6 +216,24 @@ export async function joinGame(code) {
   return pullGame(remoteId);
 }
 
+// Einem Spiel als ZUSCHAUER per Zuschauer-Code beitreten: nur lesend, KEIN Geräte-Beitritt.
+// Holt einen anonymen Snapshot (RPC spiel_zuschauer) und baut daraus ein lokales, NUR-LESEN
+// markiertes Spiel-Objekt (zuschauer:true, linked:false). Aktualisiert wird per Polling in der
+// Ansicht (nicht Realtime, da ohne Mitgliedschaft kein RLS-Lesezugriff besteht). Wirft
+// 'Ungültiger Beitritts-Code' bei unbekanntem Code (gleiche Semantik wie joinGame).
+export async function zuschauerGame(code) {
+  const c = (code || '').trim();
+  const { data, error } = await supabase.rpc('spiel_zuschauer', { p_code: c });
+  if (error) throw error;
+  if (!data || !data.spiel) throw new Error('Ungültiger Beitritts-Code');
+  const g = assembleLocalGame(data.spiel, data.spieler || [], data.bloecke || []);
+  g.linked = false;
+  g.zuschauer = true;
+  g.zuschauerCode = c.toUpperCase();
+  g.spielerOwners = {}; // im Zuschauer-Modus irrelevant (keine Locks anzeigen)
+  return g;
+}
+
 // --- Wettkampf: Klammer über mehrere Durchgang-Spiele -----------------------
 //
 // Ein Wettkampf ist eine dünne Klammer: die `wettkampf`-Zeile hält Stammdaten +
@@ -246,7 +265,7 @@ export async function linkWettkampf(wettkampf, games) {
       status: wettkampf.status || 'setup',
       config_json: config,
     })
-    .select('id, beitritts_code')
+    .select('id, beitritts_code, zuschauer_code')
     .single();
   if (e1) throw e1;
   const remoteWkId = w.id;
@@ -262,7 +281,7 @@ export async function linkWettkampf(wettkampf, games) {
     links.push({ gameId: g.id, remoteId: res.remoteId, beitrittsCode: res.beitrittsCode });
   }
 
-  return { remoteId: remoteWkId, beitrittsCode: w.beitritts_code, links };
+  return { remoteId: remoteWkId, beitrittsCode: w.beitritts_code, zuschauerCode: w.zuschauer_code, links };
 }
 
 // Vollständigen Remote-Wettkampf laden und als { wettkampf, games } (App-Struktur)
@@ -297,6 +316,7 @@ export async function pullWettkampf(remoteId) {
     remoteId: w.id,
     linked: true,
     beitrittsCode: w.beitritts_code,
+    zuschauerCode: w.zuschauer_code,
     typ: 'sportkegler-wettkampf',
     status: w.status,
     name: w.name != null ? w.name : base.name,
@@ -317,6 +337,52 @@ export async function joinWettkampf(code) {
   });
   if (error) throw error;
   return pullWettkampf(remoteId);
+}
+
+// Einem Wettkampf als ZUSCHAUER per Zuschauer-Code folgen: nur lesend, KEIN Geräte-Beitritt.
+// Anonymer Snapshot (RPC wettkampf_zuschauer) inkl. aller Durchgänge; baut { wettkampf, games }
+// in derselben App-Struktur wie pullWettkampf, aber NUR-LESEN markiert (zuschauer:true). Jeder
+// Durchgang trägt seinen eigenen Zuschauer-Code, damit er in der Erfassungs-Ansicht live pollen
+// kann. Wirft 'Ungültiger Beitritts-Code' bei unbekanntem Code.
+export async function zuschauerWettkampf(code) {
+  const c = (code || '').trim();
+  const { data, error } = await supabase.rpc('wettkampf_zuschauer', { p_code: c });
+  if (error) throw error;
+  if (!data || !data.wettkampf) throw new Error('Ungültiger Beitritts-Code');
+  const w = data.wettkampf;
+  const localWkId = 'rw-' + w.id;
+  const spiele = (data.spiele || []).slice()
+    .sort((a, b) => (a.durchgang_nr || 0) - (b.durchgang_nr || 0));
+  const games = [];
+  const durchgaenge = [];
+  for (const s of spiele) {
+    const g = assembleLocalGame(s, s.spieler || [], s.bloecke || []);
+    g.linked = false;
+    g.zuschauer = true;
+    g.zuschauerCode = s.zuschauer_code || '';
+    g.spielerOwners = {};
+    g.wettkampfId = localWkId;
+    g.durchgangNr = s.durchgang_nr;
+    games.push(g);
+    durchgaenge.push({ nr: s.durchgang_nr, gameId: g.id, status: s.status || g.status });
+  }
+  const base = w.config_json || {};
+  const wettkampf = {
+    ...base,
+    id: localWkId,
+    remoteId: w.id,
+    linked: false,
+    zuschauer: true,
+    typ: 'sportkegler-wettkampf',
+    status: w.status,
+    name: w.name != null ? w.name : base.name,
+    datum: w.datum || base.datum,
+    anlageId: w.anlage_id || base.anlageId,
+    durchgaenge,
+    createdAt: base.createdAt || w.erstellt_am,
+    updatedAt: w.aktualisiert_am,
+  };
+  return { wettkampf, games };
 }
 
 // Wettkampf-Status setzen (nur der Ersteller darf das laut RLS).

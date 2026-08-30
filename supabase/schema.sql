@@ -215,6 +215,25 @@ alter table spiel add column if not exists wettkampf_id uuid references wettkamp
 alter table spiel add column if not exists durchgang_nr int;
 create index if not exists idx_spiel_wettkampf on spiel(wettkampf_id);
 
+-- --- Zuschauer-Code: zweiter, NUR-LESEN-Code ---------------------------------
+-- Neben dem beitritts_code (Eingabe/Erfassen) trägt jedes Spiel/jeder Wettkampf einen
+-- SEPARATEN zuschauer_code. Wer ihn kennt, darf live ZUSEHEN — über die anonymen Snapshot-
+-- RPCs spiel_zuschauer / wettkampf_zuschauer (policies.sql), die AUSSCHLIESSLICH lesbare
+-- Ergebnisdaten liefern und WEDER Codes NOCH Besitz preisgeben. Ein Zuschauer wird KEIN
+-- Gerät-Mitglied (kein Eintrag in spiel_geraet/wettkampf_geraet) und kann daher per
+-- Konstruktion nichts schreiben und den Eingabe-Code nicht auslesen. So lässt sich ein
+-- reiner Zuschauer-Link teilen, ohne Eingaberecht zu vergeben. Idempotent.
+alter table spiel     add column if not exists zuschauer_code text;
+alter table wettkampf add column if not exists zuschauer_code text;
+-- Bestehende Zeilen einmalig mit einem Code füllen (md5(random) ist volatil -> je Zeile ein
+-- eigener Wert), danach den Default für neue Zeilen setzen.
+update spiel     set zuschauer_code = upper(substr(md5(random()::text), 1, 6)) where zuschauer_code is null;
+update wettkampf set zuschauer_code = upper(substr(md5(random()::text), 1, 6)) where zuschauer_code is null;
+alter table spiel     alter column zuschauer_code set default upper(substr(md5(random()::text), 1, 6));
+alter table wettkampf alter column zuschauer_code set default upper(substr(md5(random()::text), 1, 6));
+create unique index if not exists idx_spiel_zuschauer_code     on spiel(zuschauer_code);
+create unique index if not exists idx_wettkampf_zuschauer_code on wettkampf(zuschauer_code);
+
 -- --- Indizes ----------------------------------------------------------------
 create index if not exists idx_spiel_geraet_geraet   on spiel_geraet(geraet);
 create index if not exists idx_spiel_spieler_spiel    on spiel_spieler(spiel_id);
