@@ -124,6 +124,15 @@ export function getResumableWettkaempfe() {
     .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
 }
 
+// Beendete Wettkämpfe (alle Durchgänge fertig), zuletzt bearbeitete zuerst. Anders als bei
+// Einzelspielen (die in den Statistiken landen) gibt es für Wettkämpfe keine eigene Historie —
+// sie bleiben daher unter „Neues Spiel" zum Ansehen (Rangliste/Overlay) erreichbar.
+export function getBeendeteWettkaempfe() {
+  return getWettkaempfe()
+    .filter((w) => w.status === 'beendet')
+    .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+}
+
 export function setActiveWettkampf(id) {
   write(KEY_ACTIVE_WK, id);
 }

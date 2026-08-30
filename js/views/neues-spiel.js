@@ -4,7 +4,8 @@
 import { navigate } from '../router.js';
 import {
   getResumableGames, setActiveGame, deleteGame,
-  getResumableWettkaempfe, setActiveWettkampf, deleteWettkampf,
+  getResumableWettkaempfe, getBeendeteWettkaempfe, getWettkampf,
+  setActiveWettkampf, deleteWettkampf,
 } from '../store.js';
 import { SPIELARTEN, labelOf, iconOf } from '../logic/spielarten.js';
 import { vergissWettkampf } from '../backend/sw-bruecke.js';
@@ -25,7 +26,9 @@ export function neuesSpielView() {
     // Durchgänge eines Wettkampfs erscheinen NICHT als einzelne Spiele — sie werden über
     // den Wettkampf-Hub fortgesetzt. Stattdessen listen wir die Wettkämpfe selbst.
     const resumableGames = getResumableGames().filter((g) => !g.wettkampfId);
-    const resumableWk = getResumableWettkaempfe();
+    // Laufende UND beendete Wettkämpfe listen: Wettkämpfe haben (anders als Einzelspiele) keine
+    // eigene Historie, daher bleibt ein beendeter Wettkampf hier zum Ansehen erreichbar.
+    const resumableWk = [...getResumableWettkaempfe(), ...getBeendeteWettkaempfe()];
     const resumable = [
       ...resumableWk.map((w) => ({ kind: 'wettkampf', obj: w })),
       ...resumableGames.map((g) => ({ kind: 'game', obj: g })),
@@ -55,7 +58,7 @@ export function neuesSpielView() {
     };
 
     const wettkampfCard = (w) => {
-      const statusLabel = w.status === 'laufend' ? 'Läuft' : 'Setup';
+      const statusLabel = w.status === 'beendet' ? 'Beendet' : (w.status === 'laufend' ? 'Läuft' : 'Setup');
       const durchgaenge = w.durchgaenge?.length || 0;
       const meta = [formatDate(w.updatedAt || w.createdAt), esc(w.name || 'Wettkampf'),
         durchgaenge ? `${durchgaenge} Durchg.` : ''].filter(Boolean).join(' · ');
@@ -134,7 +137,7 @@ export function neuesSpielView() {
       }));
     root.querySelectorAll('[data-del-wk]').forEach((b) =>
       b.addEventListener('click', async () => {
-        const w = getResumableWettkaempfe().find((x) => x.id === b.dataset.delWk);
+        const w = getWettkampf(b.dataset.delWk);
         const linked = !!(w && w.linked && w.remoteId);
         const frage = linked
           ? 'Diesen Wettkampf hier entfernen und den Freigabe-Link (inkl. OBS-Overlay) '

@@ -11,12 +11,13 @@
 //   - Holz je Satz = Summe Teilsaetze; Spieler-Gesamt ueber alle Saetze
 //   - Satz-Status pending/live/done, Bahn je Satz aus bahnplan
 
-import { getActiveGame, getGame, saveGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings, getWettkampf, getWettkampfGames } from '../store.js';
+import { getActiveGame, getGame, saveGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings, getWettkampf, getWettkampfGames, saveWettkampf } from '../store.js';
 import { esc } from '../util.js';
+import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
 import { computeGameStats } from '../logic/statistik.js';
 import { buildProtokollHTML, printProtokollHTML } from '../logic/wurfprotokoll.js';
-import { computeWettkampfStats } from '../logic/wettkampf.js';
+import { computeWettkampfStats, wettkampfBaseStatus } from '../logic/wettkampf.js';
 import { computeWertung, assignEwp } from '../logic/wettkampf-wertung.js';
 import { teamUebersichtSection } from './wettkampf-teams.js';
 import { buildSportwinnerPush } from '../logic/sportwinner-ergebnis.js';
@@ -185,6 +186,11 @@ export function spielLaufendView() {
   }
 
   const c = game.config;
+  // Zuschauer-Modus: das Spiel wurde per Zuschauer-Code geöffnet (sync.zuschauerGame). Alles wird
+  // live angezeigt, aber KEINE Eingabe ist möglich — keine Würfe, kein Übernehmen, kein Teilen,
+  // kein Beenden. Server-seitig ist das ohnehin nicht schreibbar (kein Geräte-Beitritt); hier
+  // werden zusätzlich alle Eingabe-Bedienelemente ausgeblendet. Aktualisiert per Polling.
+  const zuschauer = !!game.zuschauer;
   // Gehört das Spiel zu einem Wettkampf, führt „Zurück" in dessen Hub statt in die Spielauswahl.
   const backHref = game.wettkampfId ? '#/wettkampf' : '#/neues-spiel';
   const backLabel = game.wettkampfId ? 'Zum Wettkampf' : 'Neues Spiel';
@@ -201,8 +207,14 @@ export function spielLaufendView() {
   let lpSuppress = 0; // Zeitstempel: unterdrückt den Klick direkt nach einem Langdruck (König)
   let settingsOpen = false; // Einstellungsmenü (⚙) offen? — enthält u.a. die Spiel-Details
   let laneSettingsOpen = false; // Bahneinstellung (⚙ in der Satz-Kopfzeile) offen?
-  let satzOverviewOpen = false; // Spieler-Übersicht (inline, statt Wurferfassung) offen?
+  let satzOverviewOpen = true; // Spieler-Übersicht (inline, statt Wurferfassung) offen? — beim Öffnen eines Spiels direkt die Übersicht zeigen (nicht die Wurferfassung des 1. Satzes)
   let ueberTab = 'uebersicht'; // aktiver Tab der Übersicht: 'uebersicht' (Bahnen editieren) | 'statistik' | 'verteilung' (Wurf-Häufigkeit)
+  // Filter der Wurfübersicht (Wurf-Bild). Zwei Dimensionen, frei kombinierbar:
+  //   wbSatzFilter — 'alle' oder ein Satz-Index als String ('0','1',…): nur diesen Satz zählen.
+  //   wbTeilFilter — 'alle' oder ein Teilsatz-Modus ('volle'/'abraeumen'/'kranz-abraeumen'):
+  //                  nur die Würfe der Teilsätze dieses Modus zählen.
+  let wbSatzFilter = 'alle';
+  let wbTeilFilter = 'alle';
   // Sortierung der Übersichts-Zeilen (klickbare Kopfzellen Bahn/Satz). Standard: nach Satz aufsteigend.
   // Ein Klick auf eine Spalte sortiert danach absteigend; erneuter Klick auf dieselbe Spalte toggelt.
   let ueberSortKey = 'satz'; // 'satz' | 'bahn'
@@ -220,6 +232,8 @@ export function spielLaufendView() {
   // (Listener am Ende, Aufräumen in teardownSync). Passt zum CSS-Breakpoint 900px.
   const kzMedia = window.matchMedia('(min-width: 900px)');
   const istDesktop = () => kzMedia.matches;
+  // Übersicht ist beim Öffnen offen -> auf dem Desktop (Kontrollzentrum) gleich den Zell-Cursor setzen (wie beim manuellen Umschalten).
+  if (satzOverviewOpen && istDesktop()) cursor = { sp: state.aktiverSpieler || 0, r: 0, ci: 0 };
   let standardbilder = normalizeStandardbilder(getStandardbilder()); // globale Schnellauswahl-Bilder (Zahl -> Liste { pins, slot })
   let pinPick = null; // offenes Schnellauswahl-Pop-up: { idx, n, combos } (null = zu)
   let sbEditN = 1; // in den Einstellungen gerade bearbeitete Holzzahl (1-8)
@@ -338,12 +352,14 @@ export function spielLaufendView() {
   let owners = game.spielerOwners || {};  // position -> { id, besitzer, heartbeat }
   let unsub = null;                       // Realtime abmelden
   let hbTimer = null;                     // Heartbeat-Intervall
+  let zpollTimer = null;                  // Zuschauer-Polling-Intervall (nur-lesen)
   const lastPushed = {};                  // "sp:st" -> JSON des zuletzt gepushten Blocks (Diff-Push)
 
   function ownerOf(sp) { return owners[sp] || null; }
   // Darf dieses Gerät den Spieler bearbeiten? Unverknüpft immer ja (lokal). Verknüpft nur,
   // wenn ich ihn besitze; freie/fremde Spieler sind gesperrt (erst „Übernehmen").
   function canEdit(sp) {
+    if (zuschauer) return false;         // Zuschauer-Modus: niemals bearbeitbar
     if (!linked) return true;
     const o = ownerOf(sp);
     if (!o) return true;                  // Besitz noch nicht geladen -> nicht blockieren
@@ -406,6 +422,7 @@ export function spielLaufendView() {
   }
   function teardownSync() {
     if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+    if (zpollTimer) { clearInterval(zpollTimer); zpollTimer = null; }
     if (unsub) { try { unsub(); } catch (e) {} unsub = null; }
     clearTimeout(bpushTimer);
     clearInterval(bstatusTimer);
@@ -444,6 +461,33 @@ export function spielLaufendView() {
       render();
     } catch (e) { /* offline / CDN nicht erreichbar -> lokal weiterspielen */ }
   }
+
+  // Zuschauer-Modus: statt Realtime (braucht Mitgliedschaft) den anonymen Snapshot pollen und
+  // Würfe + Status live übernehmen. Nur neu rendern, wenn sich etwas geändert hat (kein Flackern,
+  // kein ständiger Scroll-Reset). UI-Zustände (aktiver Spieler/Satz) bleiben erhalten.
+  async function initZuschauerPoll() {
+    if (!zuschauer || !game.zuschauerCode) return;
+    let last = '';
+    const poll = async () => {
+      if (!root.isConnected) { teardownSync(); return; }
+      try {
+        if (!syncMod) syncMod = await import('../backend/sync.js');
+        const fresh = await syncMod.zuschauerGame(game.zuschauerCode);
+        const fb = (fresh.erfassung && fresh.erfassung.bloecke) || [];
+        const sig = JSON.stringify(fb) + '|' + (fresh.status || '');
+        if (sig === last) return;
+        last = sig;
+        fb.forEach((satzArr, sp) => satzArr.forEach((blk, st) => {
+          if (state.bloecke[sp] && state.bloecke[sp][st] !== undefined) state.bloecke[sp][st] = blk;
+        }));
+        game.status = fresh.status;
+        persistLocalOnly();
+        render();
+      } catch (e) { /* offline -> letzten Stand stehen lassen */ }
+    };
+    await poll();
+    zpollTimer = setInterval(poll, 2500);
+  }
   window.addEventListener('hashchange', teardownSync);
 
   // Lokales Spiel teilen: in Supabase spiegeln, ab jetzt verknüpft + Realtime.
@@ -455,6 +499,7 @@ export function spielLaufendView() {
       meGeraet = await syncMod.ensureGeraet();
       meKonto = await syncMod.kontoId();
       game.linked = true; game.remoteId = res.remoteId; game.beitrittsCode = res.beitrittsCode;
+      game.zuschauerCode = res.zuschauerCode;
       linked = true;
       owners = {};
       Object.keys(res.posToId).forEach((pos) => {
@@ -678,9 +723,12 @@ export function spielLaufendView() {
     overrideSt = null; overrideTs = null; overrideDraft = '';
     persist(); render();
   }
-  function selectSatz(st) {
+  function selectSatz(st, closeOverview = false) {
     state.aktiverSatz = st; editIdx = null;
     overrideSt = null; overrideTs = null; overrideDraft = '';
+    // Klick auf einen Satz-Tab (oben) führt direkt in die Wurfeingabe des Satzes; die
+    // Übersichts-Zeilen (ohne closeOverview) lassen die Übersicht offen (Inline-Bearbeitung).
+    if (closeOverview) { satzOverviewOpen = false; cursor = null; }
     persist(); render();
   }
 
@@ -1027,11 +1075,31 @@ export function spielLaufendView() {
       statsOpen = true;
       setGameStatus(gameId, 'beendet');
       pushResults();
+      reconcileWettkampfStatus();
     } else if (!done && finishSeen) {
       finishSeen = false;
       statsOpen = false;
       setGameStatus(gameId, 'laufend');
+      reconcileWettkampfStatus();
     }
+  }
+
+  // Ist dieser Durchgang Teil eines Wettkampfs: dessen Status an die Durchgänge angleichen.
+  // Sind ALLE Durchgänge beendet, ist auch der Wettkampf beendet; wird ein Durchgang wieder
+  // geöffnet, geht der Wettkampf zurück auf 'laufend'. Lokal speichern und — falls geteilt —
+  // zum Server spiegeln (pushWettkampfStatus ist laut RLS Ersteller-only; sonst still no-op).
+  function reconcileWettkampfStatus() {
+    if (!game.wettkampfId) return;
+    const w = getWettkampf(game.wettkampfId);
+    if (!w || w.zuschauer) return;
+    const alleFertig = wettkampfBaseStatus(w, getWettkampfGames(w.id)) === 'beendet';
+    let next = null;
+    if (alleFertig && w.status !== 'beendet') next = 'beendet';
+    else if (!alleFertig && w.status === 'beendet') next = 'laufend';
+    if (!next) return;
+    w.status = next;
+    saveWettkampf(w);
+    if (w.linked && w.remoteId && syncMod) syncMod.pushWettkampfStatus(w.remoteId, next).catch(() => {});
   }
 
   // ── Standard-Bilder verwalten (Einstellungen) ──
@@ -1084,6 +1152,7 @@ export function spielLaufendView() {
     root.classList.toggle('overpad-open', padPresent && overNumpadOpen);
     root.innerHTML = template();
     wire();
+    wireRevealCodes(root); // Eingabe-Code verdeckt, per Klick 10 s lesbar
     keepThrowVisible();
     fitBoard();
     positionPinPick();
@@ -1242,11 +1311,11 @@ export function spielLaufendView() {
       <div class="erf-satz erf-satz-ueber">
         ${istDesktop() ? allPlayersOverview() : spielerUebersichtPanel()}
         ${(!istDesktop() && ueberTab === 'uebersicht') ? overviewNumpad() : ''}
-        ${istDesktop() ? overSlideNumpad() : ''}
+        ${(istDesktop() && ueberTab === 'uebersicht') ? overSlideNumpad() : ''}
       </div>` : `
       <div class="erf-satz erf-pad-${settings.numpadSeite === 'links' ? 'left' : 'right'}">
         <div class="erf-play-main">
-          ${linked && !canEdit(state.aktiverSpieler) ? lockBanner() : ''}
+          ${zuschauer ? zuschauerBanner() : (linked && !canEdit(state.aktiverSpieler) ? lockBanner() : '')}
           ${kegelBoard(blk)}
           ${wurfChips(blk, status === 'done')}
         </div>
@@ -1432,14 +1501,28 @@ export function spielLaufendView() {
               </div>
             </div>
             <h3 class="erf-settings-sub">Mehrgeräte</h3>
-            ${linked ? `
+            ${zuschauer ? `
             <div class="erf-setting-row">
               <div class="erf-setting-text">
-                <span class="erf-setting-label">Beitritts-Code</span>
-                <span class="erf-setting-hint">Anderes Gerät: im Menü „Spiel beitreten" wählen und diesen Code eingeben.</span>
+                <span class="erf-setting-label">👁 Zuschauer-Modus</span>
+                <span class="erf-setting-hint">Du bist über einen Zuschauer-Code verbunden und siehst den Stand live. Eingaben sind nicht möglich.</span>
               </div>
-              <span class="erf-share-code">${esc(game.beitrittsCode || '—')}</span>
-            </div>` : `
+            </div>` : linked ? `
+            <div class="erf-setting-row">
+              <div class="erf-setting-text">
+                <span class="erf-setting-label">Eingabe-Code</span>
+                <span class="erf-setting-hint">Zum Mit-Erfassen: anderes Gerät → „Spiel beitreten" → diesen Code eingeben. Verdeckt — zum Ablesen antippen.</span>
+              </div>
+              ${revealCodeHtml(game.beitrittsCode)}
+            </div>
+            ${game.zuschauerCode ? `
+            <div class="erf-setting-row">
+              <div class="erf-setting-text">
+                <span class="erf-setting-label">👁 Zuschauer-Code</span>
+                <span class="erf-setting-hint">Nur ansehen (keine Eingabe): diesen Code an Zuschauer geben.</span>
+              </div>
+              <span class="erf-share-code">${esc(game.zuschauerCode)}</span>
+            </div>` : ''}` : `
             <div class="erf-setting-row">
               <div class="erf-setting-text">
                 <span class="erf-setting-label">Spiel teilen</span>
@@ -1481,9 +1564,10 @@ export function spielLaufendView() {
           <div class="erf-settings-body">
             <p class="erf-lane-sub">Bahn ${laneOf(sp, st)}${(() => { const bi = bahnInfo(laneOf(sp, st)); return bi && bi.bahnart ? ` (${esc(ART_LABEL[bi.bahnart] || bi.bahnart)})` : ''; })()} · ${esc(playerName(sp))} · Satz ${st + 1}</p>
             <div class="erf-lane-actions">
+              ${zuschauer ? '<p class="erf-lane-sub">👁 Zuschauer-Modus — keine Eingabe möglich.</p>' : `
               <button type="button" class="erf-btn ${satzDone ? 'is-on' : 'done'}" data-act="end-satz">${satzDone ? '↺ Satz wieder öffnen' : '✓ Satz beenden'}</button>
               <button type="button" class="erf-btn ${allDone ? 'is-on' : 'danger'}" data-act="end-game">${allDone ? '↺ Spiel wieder öffnen' : '⏹ Spiel beenden (nur dieser Spieler)'}</button>
-              ${linked && canEdit(sp) ? `<button type="button" class="erf-btn" data-act="release">🔓 Bahn freigeben (anderes Gerät)</button>` : ''}
+              ${linked && canEdit(sp) ? `<button type="button" class="erf-btn" data-act="release">🔓 Bahn freigeben (anderes Gerät)</button>` : ''}`}
             </div>
           </div>
         </div>
@@ -1521,6 +1605,13 @@ export function spielLaufendView() {
 
   // Banner über der Erfassung, wenn der aktive Spieler nicht diesem Gerät gehört.
   // „Übernehmen" nur, wenn die Bahn frei oder das andere Gerät inaktiv ist.
+  // Banner im Zuschauer-Modus: macht deutlich, dass nur zugesehen wird (keine Eingabe).
+  function zuschauerBanner() {
+    return `<div class="erf-lock-banner erf-zuschauer-banner">
+      <span class="elb-text">👁 Zuschauer-Modus — live ansehen, keine Eingabe</span>
+    </div>`;
+  }
+
   function lockBanner() {
     const sp = state.aktiverSpieler;
     const o = ownerOf(sp);
@@ -1594,8 +1685,21 @@ export function spielLaufendView() {
       </button>`;
     }).join('');
     // Übersicht-Button in der Satz-Zeile: schaltet zwischen Wurferfassung und Spieler-Übersicht
-    // um (Tab-Leisten bleiben oben stehen). Aktiv gefärbt, solange die Übersicht offen ist.
-    const overviewBtn = `<button type="button" class="erf-stab erf-stab-more${satzOverviewOpen ? ' is-active' : ''}" data-act="satz-overview" aria-pressed="${satzOverviewOpen}" aria-label="Spieler-Übersicht" title="Übersicht">▦</button>`;
+    // um (Tab-Leisten bleiben oben stehen). Auf dem Desktop ist er der „Übersicht"-Tab und nur
+    // dann aktiv gefärbt; auf dem Handy gilt jede offene Übersicht als aktiv.
+    const uebersichtAktiv = satzOverviewOpen && (!istDesktop() || ueberTab === 'uebersicht');
+    const overviewBtn = `<button type="button" class="erf-stab erf-stab-more${uebersichtAktiv ? ' is-active' : ''}" data-act="satz-overview" aria-pressed="${uebersichtAktiv}" aria-label="Spieler-Übersicht" title="Übersicht">▦</button>`;
+
+    // Desktop: Statistik + Wurf-Bild als eigene Tabs links neben dem mittig gesetzten ▦-Button.
+    // Sie öffnen die Übersicht auf dem jeweiligen Tab (bzw. schließen sie beim erneuten Tipp).
+    if (istDesktop()) {
+      const sideBtn = (id, label, title) => {
+        const on = satzOverviewOpen && ueberTab === id;
+        return `<button type="button" class="erf-stab erf-stab-tab${on ? ' is-active' : ''}" data-uebertab="${id}" aria-pressed="${on}" title="${title}">${label}</button>`;
+      };
+      const side = `<div class="erf-stabs-side">${sideBtn('statistik', 'Statistik', 'Statistik')}${sideBtn('verteilung', 'Wurfübersicht', 'Wurf-Bild')}</div>`;
+      return `<div class="erf-stabs erf-stabs-desk" role="tablist">${side}${overviewBtn}<div class="erf-stabs-satze">${tabs}</div></div>`;
+    }
     return `<div class="erf-stabs" role="tablist">${overviewBtn}${tabs}</div>`;
   }
 
@@ -1710,46 +1814,46 @@ export function spielLaufendView() {
       order.sort((a, b) => bs[a].lane - bs[b].lane);
     }
     const players = computeGameStats(c, state.bloecke, ranges).players;
+    // Spalten-Inhalt je aktivem Tab: editierbare Satztabelle (Standard), Statistik-Kacheln
+    // oder das Wurf-Bild — jeweils für alle Spieler nebeneinander.
+    const colBody = (sp) =>
+      ueberTab === 'statistik' ? statMetricsFor(sp) :
+      ueberTab === 'verteilung' ? wurfVerteilungTab(state.bloecke[sp]) :
+      overviewTableFor(sp, { multi: true });
     const cols = order.map((sp) => `
         <div class="eum-col${sp === state.aktiverSpieler ? ' is-active' : ''}">
           <div class="ueber-head">
             <span class="ueber-name">${esc(playerName(sp))}</span>
             <span class="ueber-total">${players[sp].gesamt}</span>
           </div>
-          ${overviewTableFor(sp, { multi: true })}
+          ${colBody(sp)}
         </div>`).join('');
+    const hint =
+      ueberTab === 'statistik' ? 'Kennzahlen je Spieler.' :
+      ueberTab === 'verteilung' ? 'Wie häufig welches Holz-Ergebnis fiel — je Spieler.' :
+      'Pfeiltasten bewegen die Markierung · Enter öffnet die Zelle · Ziffern + Enter übernehmen.';
     return `
       <div class="erf-ueber erf-ueber-multi">
         <div class="eum-toolbar">
-          <p class="ueber-edithint">Pfeiltasten bewegen die Markierung · Enter öffnet die Zelle · Ziffern + Enter übernehmen.</p>
+          <p class="ueber-edithint">${hint}</p>
           <label class="eum-sync">
             <span class="eum-sync-lbl">Nach Bahn ordnen</span>
             <button type="button" class="erf-switch${bahnFolge ? ' is-on' : ''}" role="switch" aria-checked="${bahnFolge}" data-act="toggle-bahnfolge" aria-label="Übersicht nach aktueller Bahn ordnen"><span class="erf-switch-knob"></span></button>
           </label>
         </div>
+        ${ueberTab === 'verteilung' ? wurfFilterBar() : ''}
         <div class="eum-grid" style="grid-template-columns: repeat(${order.length}, minmax(0, 1fr));">${cols}</div>
       </div>`;
   }
 
-  // Spieler-Übersicht (inline, ein Spieler; Bahn-/Satz-Leiste bleibt oben): Satztabelle +
-  // Statistik-Kacheln + Wurf-Bild in Tabs. Der ▦-Button schaltet zurück zur Erfassung.
-  function spielerUebersichtPanel() {
-    const sp = state.aktiverSpieler;
-    const arr = state.bloecke[sp];
+  // Kennzahl-Kacheln EINES Spielers (geteilt: mobile Übersicht + Desktop-Statistik-Spalten).
+  // Kränze nur, wenn Kranz-Abräumen gespielt wird; Räumer-Schnitt nur beim Abräumen.
+  function statMetricsFor(sp) {
     const stats = computeGameStats(c, state.bloecke, ranges).players[sp];
-    const showTs = ranges.length > 1;
-
     const metric = (val, lbl) => `<div class="stats-metric"><span class="stats-metric-val">${val}</span><span class="stats-metric-lbl">${lbl}</span></div>`;
-
-    // Inhalt „Übersicht": die editierbare Bahnen-Tabelle (Teilsatz-/Satz-Ergebnisse antippbar).
-    const uebersichtTab = `
-      <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an und ändere es unten mit dem Ziffernblock.</p>
-      ${overviewTableFor(sp, { multi: false })}`;
-
-    // Inhalt „Statistik": die Kennzahl-Kacheln. Kränze nur, wenn Kranz-Abräumen gespielt wird.
     const hasKranz = ranges.some((r) => r.modus === 'kranz-abraeumen');
     const hasAbraeum = ranges.some((r) => r.modus === 'abraeumen' || r.modus === 'kranz-abraeumen');
-    const statistikTab = `
+    return `
       <div class="stats-metrics">
         ${metric(stats.schnittSatz.toFixed(1), 'Ø / Satz')}
         ${metric(stats.bester, 'bester Satz')}
@@ -1761,13 +1865,30 @@ export function spielLaufendView() {
         ${metric(stats.fehl, 'Fehlwürfe')}
         ${metric(stats.wurfCount, 'Würfe')}
       </div>`;
+  }
+
+  // Spieler-Übersicht (inline, ein Spieler; Bahn-/Satz-Leiste bleibt oben): Satztabelle +
+  // Statistik-Kacheln + Wurf-Bild in Tabs. Der ▦-Button schaltet zurück zur Erfassung.
+  function spielerUebersichtPanel() {
+    const sp = state.aktiverSpieler;
+    const arr = state.bloecke[sp];
+    const stats = computeGameStats(c, state.bloecke, ranges).players[sp];
+    const showTs = ranges.length > 1;
+
+    // Inhalt „Übersicht": die editierbare Bahnen-Tabelle (Teilsatz-/Satz-Ergebnisse antippbar).
+    const uebersichtTab = `
+      <p class="ueber-edithint">Tippe ein ${showTs ? 'Teilsatz- oder Satz-Ergebnis' : 'Satz-Ergebnis'} an und ändere es unten mit dem Ziffernblock.</p>
+      ${overviewTableFor(sp, { multi: false })}`;
+
+    // Inhalt „Statistik": die Kennzahl-Kacheln (geteilte Helfer-Funktion).
+    const statistikTab = statMetricsFor(sp);
 
     // Tab-Leiste + aktiver Inhalt.
     const tab = (id, label) =>
       `<button type="button" role="tab" aria-selected="${ueberTab === id}" class="ueber-tab${ueberTab === id ? ' is-active' : ''}" data-uebertab="${id}">${label}</button>`;
     const body =
       ueberTab === 'statistik' ? statistikTab :
-      ueberTab === 'verteilung' ? wurfVerteilungTab(arr) :
+      ueberTab === 'verteilung' ? wurfFilterBar() + wurfVerteilungTab(arr) :
       uebersichtTab;
 
     return `
@@ -1787,35 +1908,91 @@ export function spielLaufendView() {
       </div>`;
   }
 
+  // Die im Wurf-Bild aktuell aktiven Filter greifen? (für Hinweise/Leer-Text).
+  function wbFilterAktiv() { return wbSatzFilter !== 'alle' || wbTeilFilter !== 'alle'; }
+
+  // Einzelwürfe eines Spielers nach den aktiven Wurf-Bild-Filtern einsammeln:
+  //  - Satz-Filter: nur den gewählten Satz-Block (Index als String).
+  //  - Teilsatz-Filter: nur die Würfe der Teilsätze mit dem gewählten Modus (per ranges-Bereich).
+  // Beide sind frei kombinierbar (z. B. „Satz 2 · Volle").
+  function gefilterteWuerfe(arr) {
+    const out = [];
+    arr.forEach((b, st) => {
+      if (wbSatzFilter !== 'alle' && String(st) !== wbSatzFilter) return;
+      const w = Array.isArray(b.wuerfe) ? b.wuerfe : [];
+      if (wbTeilFilter === 'alle') { out.push(...w); return; }
+      ranges.forEach((r) => { if (r.modus === wbTeilFilter) out.push(...w.slice(r.start, r.end)); });
+    });
+    return out;
+  }
+
+  // Filter-Leiste über dem Wurf-Bild: Chips für den Satz (Alle + je Satz) und — sofern das Spiel
+  // mehrere Teilsatz-Modi kennt — für den Teilsatz (Alle + Volle/Abräumen/…). Beide kombinierbar.
+  function wurfFilterBar() {
+    const chip = (attr, val, cur, label) => {
+      const on = cur === val;
+      return `<button type="button" class="wb-chip${on ? ' is-on' : ''}" ${attr}="${esc(val)}" aria-pressed="${on}">${esc(label)}</button>`;
+    };
+    const satzChips = [chip('data-wb-satz', 'alle', wbSatzFilter, 'Alle Sätze')]
+      .concat(Array.from({ length: c.saetze }, (_, st) => chip('data-wb-satz', String(st), wbSatzFilter, `Satz ${st + 1}`)))
+      .join('');
+    const modi = [...new Set(ranges.map((r) => r.modus))];
+    let modusRow = '';
+    if (modi.length > 1) {
+      const modChips = [chip('data-wb-teil', 'alle', wbTeilFilter, 'Alle')]
+        .concat(modi.map((m) => chip('data-wb-teil', m, wbTeilFilter, MODUS_LABEL[m] || m)))
+        .join('');
+      modusRow = `<div class="wb-row"><span class="wb-row-lbl">Teilsatz</span><div class="wb-chips">${modChips}</div></div>`;
+    }
+    return `
+      <div class="wb-filter">
+        <div class="wb-row"><span class="wb-row-lbl">Satz</span><div class="wb-chips">${satzChips}</div></div>
+        ${modusRow}
+      </div>`;
+  }
+
   // Inhalt „Wurf-Bild": wie häufig welches Ergebnis (0–9 Holz) geworfen wurde. Zählt nur die
   // einzeln ERFASSTEN Würfe des aktiven Spielers (rein als Summe eingetragene Ergebnisse liefern
-  // keine Einzelwürfe). Balken proportional zum häufigsten Wert; 9 (Alle Neune) und 0 (Fehl)
-  // sind farblich hervorgehoben.
+  // keine Einzelwürfe), gefiltert nach Satz und Teilsatz. Balken proportional zum häufigsten Wert;
+  // 9 (Alle Neune) und 0 (Fehl) sind farblich hervorgehoben.
   function wurfVerteilungTab(arr) {
-    const alle = arr.flatMap((b) => (Array.isArray(b.wuerfe) ? b.wuerfe : []));
-    const dist = Array.from({ length: 10 }, () => 0);
-    alle.forEach((w) => { if (w >= 0 && w <= 9) dist[w] += 1; });
-    const total = alle.length;
-    if (total === 0) {
+    // Zwei Häufigkeiten je Holz-Wert: GESAMT (alle Einzelwürfe) und GEFILTERT (aktueller Filter).
+    // Der Balken bildet immer die Gesamt-Häufigkeit ab (stabile Länge, an der häufigsten Zahl
+    // skaliert); der Filter füllt darin nur den relativen Anteil ein.
+    const distGes = Array.from({ length: 10 }, () => 0);
+    const distFil = Array.from({ length: 10 }, () => 0);
+    arr.forEach((b) => { (Array.isArray(b.wuerfe) ? b.wuerfe : []).forEach((w) => { if (w >= 0 && w <= 9) distGes[w] += 1; }); });
+    gefilterteWuerfe(arr).forEach((w) => { if (w >= 0 && w <= 9) distFil[w] += 1; });
+    const gesamt = distGes.reduce((s, n) => s + n, 0);
+    const total = distFil.reduce((s, n) => s + n, 0);
+    if (gesamt === 0) {
       return `<p class="ueber-dist-empty">Noch keine Einzelwürfe erfasst.<br><span>Nur als Summe eingetragene Ergebnisse zählen hier nicht mit.</span></p>`;
     }
-    const maxCount = Math.max(1, ...dist);
+    const maxCount = Math.max(1, ...distGes); // Skala fest an der Gesamt-Häufigkeit — filterunabhängig.
     const rows = [];
     for (let v = 9; v >= 0; v -= 1) {
-      const count = dist[v];
-      const pct = Math.round((count / total) * 100);
-      const barW = (count / maxCount) * 100;
+      const ges = distGes[v];
+      const fil = distFil[v];
+      const barW = (ges / maxCount) * 100;        // äußerer Balken = Gesamt-Anteil dieses Werts.
+      const fillW = ges > 0 ? (fil / ges) * 100 : 0; // Füllung innerhalb = relativer Filter-Anteil.
+      const pct = total > 0 ? Math.round((fil / total) * 100) : 0;
       const cls = v === 9 ? ' is-neuner' : v === 0 ? ' is-fehl' : '';
       const note = v === 9 ? '<span class="ud-note">☆</span>' : v === 0 ? '<span class="ud-note">Fehl</span>' : '';
+      // Zähler: bei aktivem Filter „gefiltert/gesamt" je Wert, sonst nur die Gesamtzahl.
+      const zahl = wbFilterAktiv() ? `${fil}<span class="ud-of">/${ges}</span>` : `${ges}`;
       rows.push(`
         <div class="ud-row${cls}">
           <span class="ud-val">${v}${note}</span>
-          <span class="ud-bar"><span class="ud-fill" style="width:${barW}%"></span></span>
-          <span class="ud-count">${count}<span class="ud-pct">${pct}%</span></span>
+          <span class="ud-bar"><span class="ud-total" style="width:${barW}%"><span class="ud-fill" style="width:${fillW}%"></span></span></span>
+          <span class="ud-count">${zahl}<span class="ud-pct">${pct}%</span></span>
         </div>`);
     }
+    // Kopfzeile: bei aktivem Filter „X von Gesamt", sonst nur die Gesamtzahl.
+    const kopf = wbFilterAktiv()
+      ? `<strong>${total}</strong> von ${gesamt} Würfen · Balken = Gesamt, gefüllt = Filter.`
+      : `${gesamt} Würfe erfasst · wie häufig welches Holz-Ergebnis fiel.`;
     return `
-      <p class="ueber-edithint">${total} Würfe erfasst · wie häufig welches Holz-Ergebnis fiel.</p>
+      <p class="ueber-edithint">${kopf}</p>
       <div class="ueber-dist">${rows.join('')}</div>`;
   }
 
@@ -2075,12 +2252,13 @@ export function spielLaufendView() {
     // Bodenreihe (3 Zellen wie die Zahlen): links Aktion · 0 · rechts Aktion.
     // Normal: ↩ Zurück · 0 · ⚙ Bahneinstellung. Beim Korrigieren: 🗑 Löschen · 0 · ✕ Abbrechen.
     const editing = editIdx !== null;
-    const leftAct = editing
+    // Im Zuschauer-Modus keine Aktionstasten (Zurück/Löschen/⚙) — reine Anzeige.
+    const leftAct = zuschauer ? '' : (editing
       ? `<button type="button" class="erf-num erf-num-act danger" data-act="delete" aria-label="Wurf löschen">🗑</button>`
-      : `<button type="button" class="erf-num erf-num-act" data-act="undo" aria-label="Letzten Wurf zurück">↩</button>`;
-    const rightAct = editing
+      : `<button type="button" class="erf-num erf-num-act" data-act="undo" aria-label="Letzten Wurf zurück">↩</button>`);
+    const rightAct = zuschauer ? '' : (editing
       ? `<button type="button" class="erf-num erf-num-act" data-act="cancel-edit" aria-label="Korrektur abbrechen">✕</button>`
-      : `<button type="button" class="erf-num erf-num-act" data-act="lane-settings" aria-label="Bahneinstellung">⚙</button>`;
+      : `<button type="button" class="erf-num erf-num-act" data-act="lane-settings" aria-label="Bahneinstellung">⚙</button>`);
     return `<div class="erf-numpad">
       ${[7, 8, 9, 4, 5, 6, 1, 2, 3].map(btn).join('')}
       ${leftAct}
@@ -2093,7 +2271,7 @@ export function spielLaufendView() {
     root.querySelectorAll('[data-player]').forEach((b) =>
       b.addEventListener('click', () => selectPlayer(parseInt(b.dataset.player, 10))));
     root.querySelectorAll('[data-satz]').forEach((b) =>
-      b.addEventListener('click', () => selectSatz(parseInt(b.dataset.satz, 10))));
+      b.addEventListener('click', () => selectSatz(parseInt(b.dataset.satz, 10), b.classList.contains('erf-stab'))));
     root.querySelectorAll('[data-num]').forEach((b) => {
       const n = parseInt(b.dataset.num, 10);
       const canK = b.dataset.koenig === '1';
@@ -2184,11 +2362,22 @@ export function spielLaufendView() {
 
     // Spieler-Übersicht (inline): der ▦-Button schaltet zwischen Erfassung und Übersicht um.
     // Die Übersichts-Zeilen tragen data-satz und werden über die Satz-Tab-Verdrahtung
-    // (selectSatz) mitgenommen — ein Tipp wählt den Satz, die Übersicht bleibt offen.
+    // (selectSatz) mitgenommen — ein Tipp auf eine Zeile wählt den Satz, die Übersicht bleibt
+    // offen (Inline-Bearbeitung). Ein Tipp auf einen Satz-Tab oben (.erf-stab) schließt dagegen
+    // die Übersicht und führt direkt in die Wurfeingabe des Satzes.
     act('satz-overview', () => {
-      satzOverviewOpen = !satzOverviewOpen;
-      // Beim Verlassen der Übersicht eine ggf. angefangene Zellen-Bearbeitung verwerfen.
+      // Beim Verlassen/Umschalten eine ggf. angefangene Zellen-Bearbeitung verwerfen.
       overrideSt = null; overrideTs = null; overrideDraft = '';
+      // Desktop: liegt die offene Übersicht auf Statistik/Wurf-Bild, wechselt der ▦-Button
+      // zurück auf die (editierbare) Satztabelle, statt die Übersicht zu schließen.
+      if (istDesktop() && satzOverviewOpen && ueberTab !== 'uebersicht') {
+        ueberTab = 'uebersicht';
+        cursor = { sp: state.aktiverSpieler || 0, r: 0, ci: 0 };
+        render();
+        return;
+      }
+      satzOverviewOpen = !satzOverviewOpen;
+      if (satzOverviewOpen && istDesktop()) ueberTab = 'uebersicht';
       // Im Kontrollzentrum den Zell-Cursor initialisieren (Pfeiltasten-Navigation), sonst löschen.
       cursor = (satzOverviewOpen && istDesktop()) ? { sp: state.aktiverSpieler || 0, r: 0, ci: 0 } : null;
       render();
@@ -2199,11 +2388,29 @@ export function spielLaufendView() {
     // Übersicht-Tab).
     root.querySelectorAll('[data-uebertab]').forEach((b) =>
       b.addEventListener('click', () => {
-        if (ueberTab === b.dataset.uebertab) return;
-        ueberTab = b.dataset.uebertab;
+        const tab = b.dataset.uebertab;
         overrideSt = null; overrideTs = null; overrideDraft = '';
+        // Desktop-Tabs in der Satz-Zeile öffnen die (ggf. geschlossene) Übersicht auf ihrem Tab;
+        // ein erneuter Tipp auf den aktiven Tab schließt die Übersicht wieder.
+        const inStabRow = b.classList.contains('erf-stab');
+        if (inStabRow && satzOverviewOpen && ueberTab === tab) {
+          satzOverviewOpen = false; cursor = null; render(); return;
+        }
+        if (ueberTab === tab && satzOverviewOpen) return;
+        ueberTab = tab;
+        if (inStabRow && !satzOverviewOpen) {
+          satzOverviewOpen = true;
+          cursor = istDesktop() ? { sp: state.aktiverSpieler || 0, r: 0, ci: 0 } : null;
+        }
         render();
       }));
+
+    // Wurf-Bild-Filter (Satz-Chips + Teilsatz-Modus-Chips) umschalten. Beide Dimensionen sind
+    // unabhängig und kombinierbar; ein Tipp setzt nur die jeweilige Dimension neu.
+    root.querySelectorAll('[data-wb-satz]').forEach((b) =>
+      b.addEventListener('click', () => { wbSatzFilter = b.dataset.wbSatz; render(); }));
+    root.querySelectorAll('[data-wb-teil]').forEach((b) =>
+      b.addEventListener('click', () => { wbTeilFilter = b.dataset.wbTeil; render(); }));
 
     // Klickbare Sortier-Kopfzellen der Übersicht (Bahn/Satz). Enter/Leertaste ebenso (role=button).
     root.querySelectorAll('[data-sort]').forEach((th) => {
@@ -2452,6 +2659,7 @@ export function spielLaufendView() {
   // Tastatur feuert das nie — daher überall aktiv (kein eigenes Gating nötig).
   function onKey(e) {
     if (!root.isConnected) { window.removeEventListener('keydown', onKey); return; }
+    if (zuschauer) return; // Zuschauer-Modus: keine Tastatureingabe
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     const t = e.target;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
@@ -2481,14 +2689,17 @@ export function spielLaufendView() {
       return;
     }
     // Mehr-Spieler-Übersicht (Kontrollzentrum): Zell-Cursor per Pfeiltasten, Enter öffnet die Zelle.
+    // Cursor/Ziffern nur auf dem editierbaren Übersicht-Tab; Statistik/Wurf-Bild sind reine Anzeige.
     if (satzOverviewOpen && istDesktop()) {
-      if (key === 'ArrowLeft') { moveCursor(-1, 0); e.preventDefault(); return; }
-      if (key === 'ArrowRight') { moveCursor(1, 0); e.preventDefault(); return; }
-      if (key === 'ArrowUp') { moveCursor(0, -1); e.preventDefault(); return; }
-      if (key === 'ArrowDown') { moveCursor(0, 1); e.preventDefault(); return; }
-      if (key === 'Enter') { editCursorCell(); e.preventDefault(); return; }
       if (key === 'Escape') { satzOverviewOpen = false; cursor = null; render(); e.preventDefault(); return; }
-      if (digit != null || key === 'Backspace') { e.preventDefault(); return; } // keine Würfe in der Übersicht
+      if (ueberTab === 'uebersicht') {
+        if (key === 'ArrowLeft') { moveCursor(-1, 0); e.preventDefault(); return; }
+        if (key === 'ArrowRight') { moveCursor(1, 0); e.preventDefault(); return; }
+        if (key === 'ArrowUp') { moveCursor(0, -1); e.preventDefault(); return; }
+        if (key === 'ArrowDown') { moveCursor(0, 1); e.preventDefault(); return; }
+        if (key === 'Enter') { editCursorCell(); e.preventDefault(); return; }
+        if (digit != null || key === 'Backspace') { e.preventDefault(); return; } // keine Würfe in der Übersicht
+      }
       return;
     }
     // Normale Wurferfassung.
@@ -2505,7 +2716,8 @@ export function spielLaufendView() {
 
   render();
   initSync();
-  if (swActive()) {
+  initZuschauerPoll();
+  if (!zuschauer && swActive()) {
     pollBrueckeStatus();
     bstatusTimer = setInterval(pollBrueckeStatus, 3000);
     pollKonflikte();

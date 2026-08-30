@@ -7,7 +7,7 @@ import {
   getActiveWettkampf, getWettkampf, getWettkampfGames, saveWettkampf,
   getGame, saveGame, saveErfassung, setActiveGame, deleteGame, setActiveWettkampf, deleteWettkampf,
 } from '../store.js';
-import { computeWettkampfStats, durchgangStatusList } from '../logic/wettkampf.js';
+import { computeWettkampfStats, durchgangStatusList, wettkampfBaseStatus } from '../logic/wettkampf.js';
 import { computeWertung, assignEwp } from '../logic/wettkampf-wertung.js';
 import { buildSportwinnerPush } from '../logic/sportwinner-ergebnis.js';
 import { adoptAufstellung } from '../logic/sportwinner-konflikte.js';
@@ -18,6 +18,7 @@ import {
 import { lanePlan } from '../logic/bahnwechsel.js';
 import { teamUebersichtSection } from './wettkampf-teams.js';
 import { esc } from '../util.js';
+import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
 
 const STATUS_LBL = { vorbereitung: 'Vorbereitung', laufend: 'Läuft', offen: 'Offen', fertig: 'Fertig' };
 const STATUS_CTA = { fertig: 'Ansehen', laufend: 'Fortsetzen', vorbereitung: 'Erfassen', offen: 'Erfassen' };
@@ -37,6 +38,8 @@ export function wettkampfHubView() {
   let reloadTimer = null;  // entprellt das Neuladen bei Remote-Änderungen
   let subscribedIds = '';  // Signatur der aktuell abonnierten Durchgang-Remote-IDs
   let syncMsg = '';        // Statuszeile der Mehrgeräte-Sektion
+  let zpollTimer = null;   // Zuschauer-Polling-Intervall (nur-lesen)
+  let zpollSig = '';       // letzter Snapshot-Fingerabdruck (Flicker/Scroll-Reset vermeiden)
 
   // ── Sportwinner-Rückschreiben (nur Vereins-PC) ───────────────────────────────
   // Ist der Wettkampf aus Sportwinner importiert UND wurde die App von der Brücke mit
@@ -147,6 +150,22 @@ export function wettkampfHubView() {
     }, 600);
   }
 
+  // Wettkampf-Status an die Durchgänge angleichen (Sicherheitsnetz, u. a. wenn ein beigetretenes
+  // Gerät den letzten Durchgang beendet hat): sind alle Durchgänge beendet, gilt auch der
+  // Wettkampf als beendet — sonst wieder 'laufend'. Lokal spiegeln und als Ersteller zum Server
+  // pushen (pushWettkampfStatus ist laut RLS Ersteller-only; auf anderen Geräten still no-op,
+  // der lokale Status stimmt dann trotzdem für die Anzeige).
+  function reconcileWettkampfStatus(wettkampf, games) {
+    const alleFertig = wettkampfBaseStatus(wettkampf, games) === 'beendet';
+    let next = null;
+    if (alleFertig && wettkampf.status !== 'beendet') next = 'beendet';
+    else if (!alleFertig && wettkampf.status === 'beendet') next = 'laufend';
+    if (!next) return;
+    wettkampf.status = next;
+    saveWettkampf(wettkampf);
+    if (wettkampf.remoteId && syncMod) syncMod.pushWettkampfStatus(wettkampf.remoteId, next).catch(() => {});
+  }
+
   function render() {
     const wettkampf = getWettkampf(getActiveWettkampf());
     if (!wettkampf) {
@@ -171,12 +190,18 @@ export function wettkampfHubView() {
     // Desktop-PC → Kontrollzentrum: breites, mehrspaltiges Layout. Auf schmalen Schirmen
     // (Handy/Tablet hochkant) bleibt der Hub mobil-first — automatisch per Bildschirmbreite.
     const kz = istDesktop();
+    // Zuschauer-Modus: der Wettkampf wurde per Zuschauer-Code geöffnet (sync.zuschauerWettkampf).
+    // Alles wird live gezeigt, aber keine Bearbeitung (kein Teilen, kein Durchgang +/−, keine
+    // Aufstellungs-/Logo-Änderung); Durchgänge öffnen read-only. Aktualisiert per Polling.
+    const zuschauer = !!wettkampf.zuschauer;
+    if (!zuschauer) reconcileWettkampfStatus(wettkampf, games);
     root.classList.toggle('view-kontrollzentrum', kz);
-    root.innerHTML = template(wettkampf, games, stats, wertung, syncMsg, kz);
-    wire(wettkampf, games);
+    root.classList.toggle('is-zuschauer', zuschauer);
+    root.innerHTML = template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer);
+    wire(wettkampf, games, zuschauer);
     paintSw(); // gehaltenen Brücken-Status ins frisch gerenderte DOM malen
     konfliktPanel.paint(); // offene Konflikte ins frisch gerenderte DOM malen
-    pushToBruecke(wettkampf, games);
+    if (!zuschauer) pushToBruecke(wettkampf, games);
     scheduleFit(); // Zahlen in den Ergebnistabellen an ihre Spaltenbreite anpassen
   }
 
@@ -314,6 +339,7 @@ export function wettkampfHubView() {
   // Fällt still auf lokal zurück, wenn offline.
   async function initSync() {
     const w = getWettkampf(getActiveWettkampf());
+    if (w && w.zuschauer) { initZuschauerPoll(); return; }
     if (!w || !w.linked || !w.remoteId) return;
     try {
       syncMod = await import('../backend/sync.js');
@@ -321,6 +347,35 @@ export function wettkampfHubView() {
       await reload();
       subscribeNow();
     } catch (e) { /* offline -> lokal weiterarbeiten */ }
+  }
+
+  // Zuschauer-Modus: statt Realtime (braucht Mitgliedschaft) den anonymen Wettkampf-Snapshot
+  // pollen und lokal spiegeln. Nur neu rendern, wenn sich der Snapshot geändert hat — sonst
+  // springt das Layout (Scroll) alle paar Sekunden.
+  async function initZuschauerPoll() {
+    const w0 = getWettkampf(getActiveWettkampf());
+    if (!w0 || !w0.zuschauer || !w0.zuschauerCode) return;
+    const code = w0.zuschauerCode;
+    try { syncMod = await import('../backend/sync.js'); } catch (e) { return; }
+    const poll = async () => {
+      if (!root.isConnected) { teardown(); return; }
+      try {
+        const { wettkampf: fresh, games: freshGames } = await syncMod.zuschauerWettkampf(code);
+        const sig = JSON.stringify({
+          s: fresh.status,
+          g: freshGames.map((g) => [g.id, g.status, g.erfassung && g.erfassung.bloecke]),
+        });
+        if (sig === zpollSig) return;
+        zpollSig = sig;
+        const keep = new Set(freshGames.map((g) => g.id));
+        getWettkampfGames(fresh.id).forEach((g) => { if (!keep.has(g.id)) deleteGame(g.id); });
+        freshGames.forEach((g) => saveGame(g));
+        saveWettkampf(fresh);
+        render();
+      } catch (e) { /* offline -> letzten Stand stehen lassen */ }
+    };
+    await poll();
+    zpollTimer = setInterval(poll, 2500);
   }
 
   // Wettkampf teilen: in Supabase spiegeln, lokale (unverknüpfte) Kopie durch die
@@ -351,6 +406,7 @@ export function wettkampfHubView() {
 
   function teardown() {
     clearTimeout(reloadTimer);
+    clearInterval(zpollTimer);
     clearTimeout(pushTimer);
     clearInterval(statusTimer);
     clearInterval(swLiveTimer);
@@ -361,11 +417,19 @@ export function wettkampfHubView() {
     window.removeEventListener('hashchange', teardown);
   }
 
-  function wire(wettkampf, games) {
-    const add = root.querySelector('[data-action="add-durchgang"]');
-    if (add) add.addEventListener('click', () => navigate('/setup/wettkampf-durchgang'));
+  function wire(wettkampf, games, zuschauer) {
+    wireRevealCodes(root); // verdeckte Codes (Eingabe-Code) aufdeckbar machen
+    // Durchgänge öffnen (read-only bei Zuschauer, da die geöffneten Spiele zuschauer:true tragen)
+    // ist immer aktiv — auch im Zuschauer-Modus.
     root.querySelectorAll('[data-open]').forEach((b) =>
       b.addEventListener('click', () => { setActiveGame(b.dataset.open); navigate('/spiel-laufend'); }));
+    // Zuschauer-Modus: keine Bearbeitungs-Handler binden; Aufstellungs-Felder sperren.
+    if (zuschauer) {
+      root.querySelectorAll('.roster-name, .roster-lane').forEach((el) => { el.disabled = true; });
+      return;
+    }
+    const add = root.querySelector('[data-action="add-durchgang"]');
+    if (add) add.addEventListener('click', () => navigate('/setup/wettkampf-durchgang'));
     root.querySelectorAll('[data-del-durchgang]').forEach((b) =>
       b.addEventListener('click', () => removeDurchgang(wettkampf, b.dataset.delDurchgang, b.dataset.nr)));
 
@@ -481,11 +545,13 @@ export function wettkampfHubView() {
   return root;
 }
 
-// Overlay-URL des Wettkampfs (Hash-Route + Beitritts-Code) — von einer OBS-Browser-Quelle
-// eingebunden. Braucht einen geteilten Wettkampf (Code), da das Overlay read-only per Code liest.
+// Overlay-URL des Wettkampfs (Hash-Route + ZUSCHAUER-Code) — von einer OBS-Browser-Quelle
+// eingebunden. Nutzt bewusst den read-only Zuschauer-Code (nicht den Eingabe-Code): das Overlay
+// macht ohnehin keine Eingaben, und so gibt selbst eine geleakte OBS-URL kein Eingaberecht.
+// Braucht einen geteilten Wettkampf (Code), da das Overlay read-only per Code liest.
 function overlayUrl(wettkampf) {
   const base = location.origin + location.pathname;
-  return `${base}#/overlay?code=${encodeURIComponent(wettkampf.beitrittsCode || '')}`;
+  return `${base}#/overlay?code=${encodeURIComponent(wettkampf.zuschauerCode || '')}`;
 }
 
 // Bilddatei → verkleinerte Data-URL (PNG, längste Kante ≤ MAX). Klein genug, um im
@@ -534,7 +600,7 @@ function overlaySection(wettkampf) {
       </div>
     </div>`).join('');
 
-  const linked = !!(wettkampf.linked && wettkampf.beitrittsCode);
+  const linked = !!(wettkampf.linked && wettkampf.zuschauerCode);
   const urlBox = linked
     ? `<div class="ov-url-row">
          <input class="ov-url-input" type="text" readonly value="${esc(overlayUrl(wettkampf))}" data-overlay-url aria-label="Overlay-URL">
@@ -553,15 +619,29 @@ function overlaySection(wettkampf) {
     </section>`;
 }
 
+// Ersetzt die Mehrgeräte-Sektion im Zuschauer-Modus: nur ein Hinweis, keine Codes/Teilen.
+function zuschauerSection() {
+  return `
+    <section class="field">
+      <label class="field-label">👁 Zuschauer-Modus</label>
+      <p class="field-hint">Du verfolgst diesen Wettkampf über einen Zuschauer-Code und siehst den Stand live. Eingaben und Änderungen sind nicht möglich.</p>
+    </section>`;
+}
+
 function mehrgeraeteSection(wettkampf, syncMsg) {
   const linked = !!(wettkampf.linked && wettkampf.remoteId);
   const code = wettkampf.beitrittsCode || '';
+  const zcode = wettkampf.zuschauerCode || '';
   const body = linked
     ? `<div class="field-row">
-         <span class="erf-setting-label">Beitritts-Code</span>
-         <span class="erf-share-code">${esc(code || '—')}</span>
+         <span class="erf-setting-label">Eingabe-Code</span>
+         ${revealCodeHtml(code)}
        </div>
-       <p class="field-hint">Andere Geräte treten unter „Spiel beitreten" mit diesem Code bei. Durchgänge werden parallel erfasst, die Rangliste läuft live zusammen.</p>`
+       ${zcode ? `<div class="field-row">
+         <span class="erf-setting-label">👁 Zuschauer-Code</span>
+         <span class="erf-share-code">${esc(zcode)}</span>
+       </div>` : ''}
+       <p class="field-hint">Der <b>Eingabe-Code</b> ist zum Mit-Erfassen (Durchgänge parallel, Rangliste läuft live zusammen) — aus Schutz standardmäßig verdeckt, zum Ablesen antippen. Der <b>Zuschauer-Code</b> zeigt alles live, aber nur zum Ansehen. Beide unter „Spiel beitreten" eingeben.</p>`
     : `<button type="button" class="erf-btn done" data-action="share">🔗 Wettkampf teilen</button>
        <p class="field-hint">Teilt den Wettkampf geräteübergreifend — andere erfassen Durchgänge parallel mit. Konto nötig.</p>`;
   return `
@@ -592,7 +672,7 @@ function brueckeRow(wettkampf) {
       : 'Die Übertragung nach Sportwinner läuft über den Vereins-PC, der die Brücke ausführt.'}</p>`;
 }
 
-function template(wettkampf, games, stats, wertung, syncMsg, kz) {
+function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer) {
   const metaLine = [
     wettkampf.datum ? new Date(wettkampf.datum).toLocaleDateString('de-DE') : '',
     wettkampf.anlageName || '',
@@ -613,21 +693,21 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz) {
           </span>
           <span class="wk-dg-bot">
             <span class="status-badge is-${status}">${STATUS_LBL[status] || status}</span>
-            <span class="wk-dg-cta">${cta}</span>
+            <span class="wk-dg-cta">${zuschauer ? 'Ansehen' : cta}</span>
           </span>
         </button>
-        <button type="button" class="wk-dg-del" data-del-durchgang="${esc(d.gameId)}" data-nr="${d.nr}" aria-label="Durchgang löschen">🗑</button>
+        ${zuschauer ? '' : `<button type="button" class="wk-dg-del" data-del-durchgang="${esc(d.gameId)}" data-nr="${d.nr}" aria-label="Durchgang löschen">🗑</button>`}
       </div>`;
   }).join('');
 
   const durchgaengeSection = durchgaenge || '<p class="field-hint">Noch keine Durchgänge.</p>';
 
-  const secMehr = mehrgeraeteSection(wettkampf, syncMsg);
+  const secMehr = zuschauer ? zuschauerSection() : mehrgeraeteSection(wettkampf, syncMsg);
   const secDurch = `
       <section class="field kz-durchgaenge">
         <div class="field-row">
           <label class="field-label">Durchgänge</label>
-          <button type="button" class="btn-mini" data-action="add-durchgang">+ Durchgang</button>
+          ${zuschauer ? '' : '<button type="button" class="btn-mini" data-action="add-durchgang">+ Durchgang</button>'}
         </div>
         <div class="wk-dg-list">${durchgaengeSection}</div>
       </section>`;
@@ -638,7 +718,7 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz) {
   // die kompakten Durchgänge, rechts Mehrgeräte/Sportwinner und das OBS-Overlay. Die Spalten-Wrapper
   // lösen sich auf schmalen Schirmen per CSS (display:contents) auf. Das OBS-Overlay ist eine
   // Desktop-/Vereins-PC-Funktion (Livestream läuft dort) — daher nur im Kontrollzentrum-Layout.
-  const secOverlay = kz ? overlaySection(wettkampf) : '';
+  const secOverlay = (kz && !zuschauer) ? overlaySection(wettkampf) : '';
   const inner = kz
     ? `${secTeam}
        <div class="kz-main">${secDurch}</div>
