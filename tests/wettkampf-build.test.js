@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildWettkampf } from '../js/logic/wettkampf-build.js';
+import { buildWettkampf, sportwinnerOhnePersonendaten } from '../js/logic/wettkampf-build.js';
 import { parseRoster } from '../js/logic/roster-import.js';
 
 const BASE = {
@@ -92,4 +92,48 @@ test('parseRoster -> buildWettkampf: Ende-zu-Ende aus Sportwinner-Roster', () =>
   assert.equal(games.length, 1); // 2 Spieler / 2 Bahnen je Team -> 1 Durchgang
   const namen = games[0].config.spielerListe.map((p) => p.name).sort();
   assert.deepEqual(namen, ['Arne Schierbaum', 'Jan Meier', 'Max Mustermann', 'Tim Müller']);
+});
+
+test('sportwinnerOhnePersonendaten: entfernt pass/extId, behält die DLL-Zuordnung', () => {
+  const sw = {
+    spielNr: 7,
+    spieltagNr: 3,
+    seiten: { mA: 'GG', mB: 'G' },
+    spieler: [
+      { mannschaftId: 'mA', teamPos: 1, slot: 0, pass: '095578', extId: 11 },
+      { mannschaftId: 'mB', teamPos: 2, slot: 1, pass: '300400', extId: 14 },
+    ],
+  };
+  const clean = sportwinnerOhnePersonendaten(sw);
+  assert.deepEqual(clean.spieler, [
+    { mannschaftId: 'mA', teamPos: 1, slot: 0 },
+    { mannschaftId: 'mB', teamPos: 2, slot: 1 },
+  ]);
+  // Alles, was das Rueckschreiben braucht, bleibt erhalten …
+  assert.equal(clean.spielNr, 7);
+  assert.equal(clean.spieltagNr, 3);
+  assert.deepEqual(clean.seiten, { mA: 'GG', mB: 'G' });
+  // … und das Original wird nicht veraendert (der Vereins-PC braucht die Paesse lokal weiter).
+  assert.equal(sw.spieler[0].pass, '095578');
+});
+
+test('sportwinnerOhnePersonendaten: kein sportwinner-Block -> unveraendert durchreichen', () => {
+  assert.equal(sportwinnerOhnePersonendaten(null), null);
+  assert.equal(sportwinnerOhnePersonendaten(undefined), undefined);
+  assert.deepEqual(sportwinnerOhnePersonendaten({ seiten: {} }), { seiten: {}, spieler: [] });
+});
+
+test('buildSportwinnerPush arbeitet auch ohne pass/extId weiter', async () => {
+  const { buildSportwinnerPush } = await import('../js/logic/sportwinner-ergebnis.js');
+  const { wettkampf, games } = buildWettkampf({ ...BASE, sportwinner: {
+    spielNr: 7,
+    seiten: { mA: 'GG', mB: 'G' },
+    spieler: [{ mannschaftId: 'mA', teamPos: 1, slot: 0, pass: '095578', extId: 11 }],
+  } });
+  const mitPass = buildSportwinnerPush(wettkampf, games);
+  const ohnePass = buildSportwinnerPush(
+    { ...wettkampf, sportwinner: sportwinnerOhnePersonendaten(wettkampf.sportwinner) }, games,
+  );
+  assert.ok(mitPass.updates.length > 0);
+  assert.deepEqual(ohnePass, mitPass);
 });

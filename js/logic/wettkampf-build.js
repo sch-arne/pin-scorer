@@ -12,6 +12,24 @@ export const SCHEMA_VERSION = 1;
 
 const sortNum = (arr) => arr.slice().sort((a, b) => a - b);
 
+// Den `sportwinner`-Block von personenbezogenen Daten befreien, bevor er in die DB gespiegelt
+// wird (linkWettkampf / pushWettkampfConfig).
+//
+// Er trägt neben der reinen DLL-Zuordnung auch `pass` (Passnummer/LizenzID des Verbands) und
+// `extId` (Sportwinner-interne Spieler-ID) JEDES Spielers. Für das Rückschreiben braucht
+// buildSportwinnerPush davon nichts — es adressiert ausschließlich über mannschaftId|teamPos
+// und den DLL-`slot`. Da wettkampf.config_json über die Zuschauer-/Overlay-RPCs an `anon`
+// ausgeliefert wird, hätte jeder, der einen 6-stelligen Code kennt, sonst die Verbands-IDs
+// aller Spieler lesen können. Die LizenzID reist stattdessen über spiel_spieler.passnummer,
+// das hinter der RLS liegt; im Klartext bleibt sie lokal auf dem erfassenden Gerät.
+export function sportwinnerOhnePersonendaten(sw) {
+  if (!sw || typeof sw !== 'object') return sw;
+  return {
+    ...sw,
+    spieler: (sw.spieler || []).map(({ pass, extId, ...rest }) => rest),
+  };
+}
+
 // Programm-Snapshot (dient auch als Vorlage für manuell hinzugefügte Durchgänge im Hub).
 export function snapshotProgramm(p) {
   const lanes = sortNum(p.playedLanes || []);

@@ -12,7 +12,7 @@
 //   - Satz-Status pending/live/done, Bahn je Satz aus bahnplan
 
 import { getActiveGame, getGame, saveGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings, getWettkampf, getWettkampfGames, saveWettkampf } from '../store.js';
-import { esc } from '../util.js';
+import { esc, fehlerText } from '../util.js';
 import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
 import { computeGameStats } from '../logic/statistik.js';
@@ -495,7 +495,12 @@ export function spielLaufendView() {
     try {
       if (!syncMod) syncMod = await import('../backend/sync.js');
       game.erfassung = state;
-      const res = await syncMod.linkGame(game);
+      // LizenzIDen der Aufstellung + die eigene Spieler-Position mitgeben: die Paesse landen
+      // an spiel_spieler.passnummer (hinter der RLS), profil_id NUR bei meinem eigenen Slot.
+      const ident = await syncMod.spielerIdentitaet(
+        game, game.wettkampfId ? getWettkampf(game.wettkampfId) : null,
+      );
+      const res = await syncMod.linkGame(game, ident);
       meGeraet = await syncMod.ensureGeraet();
       meKonto = await syncMod.kontoId();
       game.linked = true; game.remoteId = res.remoteId; game.beitrittsCode = res.beitrittsCode;
@@ -511,7 +516,12 @@ export function spielLaufendView() {
       startRealtime();
       toast('Spiel geteilt · Code ' + res.beitrittsCode);
       render();
-    } catch (e) { toast('Teilen fehlgeschlagen — online?'); }
+    } catch (e) {
+      // Die echte Ursache zeigen. "online?" hat frueher JEDEN Grund verdeckt — fehlende
+      // Anmeldung, RLS-Ablehnung und eine nicht eingespielte SQL-Migration sahen gleich aus.
+      console.error('[teilen] Spiel teilen fehlgeschlagen', e);
+      toast('Teilen fehlgeschlagen: ' + fehlerText(e, 'online?'));
+    }
   }
   async function claimActive() {
     const sp = state.aktiverSpieler; const o = ownerOf(sp);
@@ -536,25 +546,20 @@ export function spielLaufendView() {
   }
   // Bei Spielende einen Ergebnis-Snapshot je EIGENEM Spieler in die DB schreiben
   // (für die geräteübergreifende Statistik-Historie). Best-effort.
-  function pushResults() {
+  //
+  // WICHTIG für die accountbasierte Statistik: `profil_id` bedeutet „das bin ICH als SPIELER"
+  // und wird deshalb nur auf genau EINER Zeile gesetzt — der eigenen Position (spielerIdentitaet:
+  // eigene LizenzID in der Aufstellung, sonst die manuelle „Das bin ich"-Markierung). Wer die
+  // Zeile ERFASST hat, steht getrennt in `erfasst_von`. Früher stand hier durchgängig das eigene
+  // Konto, wodurch auf einem Vereins-PC alle 12 Spieler in der eigenen Statistik landeten.
+  //
+  // `passnummer` bleibt dagegen für ALLE Positionen gesetzt: darüber findet jeder Mitspieler
+  // seine eigenen Ergebnisse in fremd erfassten Spielen wieder (pins_lizenz_im_spiel).
+  async function pushResults() {
     if (!linked || !syncMod || !meGeraet) return;
     try {
-      // Gehört das Spiel zu einem Sportwinner-Wettkampf, die LizenzID (pass) je Spielerposition
-      // aus der Sportwinner-Aufstellung (keyed mannschaftId|teamPos) auflösen. So findet ein
-      // Spieler SEINE Ergebnisse später über die eigene Passnummer wieder (siehe policies.sql).
-      const passByPos = {};
-      if (game.wettkampfId) {
-        const w = getWettkampf(game.wettkampfId);
-        const swSpieler = (w && w.sportwinner && w.sportwinner.spieler) || [];
-        if (swSpieler.length) {
-          const byKey = {};
-          swSpieler.forEach((s) => { byKey[`${s.mannschaftId}|${s.teamPos}`] = String(s.pass || '').trim(); });
-          (c.spielerListe || []).forEach((sp, i) => {
-            const pass = byKey[`${sp.mannschaftId}|${sp.teamPos}`];
-            if (pass) passByPos[i] = pass;
-          });
-        }
-      }
+      const wk = game.wettkampfId ? getWettkampf(game.wettkampfId) : null;
+      const { passByPos, ichIndex } = await syncMod.spielerIdentitaet(game, wk);
       const { players } = computeGameStats(c, state.bloecke, ranges);
       const rows = [];
       players.forEach((p, sp) => {
@@ -562,7 +567,9 @@ export function spielLaufendView() {
         const pid = owners[sp] && owners[sp].id;
         if (!pid) return;
         const row = {
-          spiel_id: game.remoteId, spieler_id: pid, profil_id: meKonto,
+          spiel_id: game.remoteId, spieler_id: pid,
+          profil_id: (ichIndex != null && sp === ichIndex) ? meKonto : null,
+          erfasst_von: meKonto,
           gesamt: p.gesamt, schnitt_satz: p.schnittSatz, schnitt_wurf: p.schnittWurf,
           bester_satz: p.bester, neuner: p.neuner, fehl: p.fehl, wurf_count: p.wurfCount, rang: p.rang,
         };
@@ -571,8 +578,12 @@ export function spielLaufendView() {
         if (passByPos[sp]) row.passnummer = passByPos[sp];
         rows.push(row);
       });
-      if (rows.length) syncMod.pushResults(rows).catch(() => {});
-    } catch (e) { /* Snapshot ist best-effort */ }
+      if (rows.length) await syncMod.pushResults(rows);
+    } catch (e) {
+      // Best-effort: das Spiel bleibt lokal vollstaendig. Aber lautlos verschwinden darf der
+      // Fehler nicht — sonst fehlt der Ergebnis-Snapshot spaeter unerklaerlich in der Statistik.
+      console.error('[sync] Ergebnis-Snapshot fehlgeschlagen', e);
+    }
   }
   function block(sp, st) { return state.bloecke[sp][st]; }
   function current() { return block(state.aktiverSpieler, state.aktiverSatz); }
@@ -965,6 +976,32 @@ export function spielLaufendView() {
     render();
   }
 
+  // Steht das Kegelbild von Wurf k schon? Fertig ist es, wenn genau so viele Kegel gewählt
+  // sind wie Holz geworfen wurde — dieselbe Bedingung, die die Zahl unter der Raute grün
+  // färbt. Der Kranz-Langdruck (König steht, Kegel bewusst offen) gilt ebenfalls als fertig.
+  function bildOffen(blk, k) {
+    if (k < 0 || k >= blk.wuerfe.length) return false;
+    const bild = blk.kegel[k];
+    if (Array.isArray(bild) && bild.length === blk.wuerfe[k]) return false;
+    return !(bild == null && Array.isArray(blk.koenig) && blk.koenig[k]);
+  }
+
+  // Ein beendeter Satz ist gesperrt — mit einer Ausnahme: das Kegelbild des LETZTEN Wurfs darf
+  // noch nachgetragen werden. Genau dieser Wurf schließt den Satz ja automatisch, oft bevor die
+  // Raute überhaupt angetippt werden konnte.
+  //
+  // Das gilt NUR für den voll durchgeworfenen Satz. Ein Satz, der über ein manuell gesetztes
+  // Ergebnis oder über „Satz beenden“/„Bahn frei“ geschlossen wurde, ist bewusst ohne
+  // vollständige Wurferfassung fertig — dort wartet niemand auf eine Raute. Ebenso, wenn der
+  // Teilsatz DIESES Wurfs ein manuelles Ergebnis trägt: dann zählen die Kegel gar nicht mit.
+  function bildNachtragbar(blk, k) {
+    if (blk.wuerfe.length < c.wuerfeProSatz) return false;   // nicht voll geworfen
+    if (k !== blk.wuerfe.length - 1) return false;
+    const ti = ranges.findIndex((r) => k >= r.start && k < r.end);
+    if (ti >= 0 && Array.isArray(blk.overrides) && blk.overrides[ti] != null) return false;
+    return bildOffen(blk, k);
+  }
+
   // Kegel p (1-9) fuer den Ziel-Wurf antippen. Der Ziffernblock gibt die Holzzahl N vor.
   // Gefallener Kegel LEUCHTET, stehender ist aus. F = gefallene (leuchtende) Kegel.
   //   "gefallen": Grundzustand alle aus, die N gefallenen einschalten.
@@ -974,7 +1011,7 @@ export function spielLaufendView() {
     const blk = current();
     const k = pinTarget();
     if (k < 0) { toast('Erst einen Wurf eintragen'); return; }
-    if (blk.done) { toast('Satz ist fertig'); return; }
+    if (blk.done && !bildNachtragbar(blk, k)) { toast('Satz ist fertig'); return; }
     const n = blk.wuerfe[k];
     const ctx = throwContext(blk, k);
     const U = ctx.universe;         // wählbare Kegel (beim Abräumen nur die stehenden)
@@ -1010,14 +1047,38 @@ export function spielLaufendView() {
     return blk.wuerfe.length - 1;
   }
 
+  // Ein beendeter Satz darf per ↩ direkt wieder geöffnet werden, solange er der ZULETZT
+  // bespielte ist (kein späterer Satz angefangen oder beendet). Ältere Sätze bleiben gesperrt
+  // — die öffnet man bewusst über die Bahneinstellung („Satz öffnen“).
+  function undoReopenAllowed(sp, st) {
+    const arr = state.bloecke[sp];
+    for (let i = st + 1; i < arr.length; i++) if (satzStatus(arr[i]) !== 'pending') return false;
+    return true;
+  }
+
+  // Ist die ↩-Taste gerade bedienbar? Steuert das Ausgrauen im Ziffernblock.
+  function canUndo() {
+    const blk = current();
+    if (blk.wuerfe.length === 0) return false;
+    return !blk.done || undoReopenAllowed(state.aktiverSpieler, state.aktiverSatz);
+  }
+
   function undo() {
     if (!guardEdit()) return;
     const blk = current();
+    if (blk.done && !undoReopenAllowed(state.aktiverSpieler, state.aktiverSatz)) {
+      toast('Älterer Satz — erst über ⚙ wieder öffnen'); return;
+    }
     if (blk.wuerfe.length === 0) { toast('Nichts rückgängig zu machen'); return; }
+    // Ein Satz, der mit dem letzten Wurf automatisch beendet wurde, wird durch das Zurücknehmen
+    // wieder geöffnet — sonst stünde er mit fehlendem Wurf weiter als „fertig“ da.
+    const reopened = blk.done;
+    blk.done = false;
     blk.wuerfe.pop();
     blk.kegel.pop();
     if (Array.isArray(blk.koenig)) blk.koenig.pop();
     persist(); render();
+    if (reopened) toast(`Satz ${state.aktiverSatz + 1} wieder geöffnet`);
   }
 
   function deleteEditing() {
@@ -1064,24 +1125,65 @@ export function spielLaufendView() {
     return state.bloecke.every((arr) => arr.length > 0 && arr.every((b) => b.done));
   }
 
+  // Wartet der zuletzt erfasste Wurf noch auf sein Kegelbild? Der letzte Wurf eines Satzes
+  // schließt den Satz automatisch — ohne diese Bremse spränge der „Spiel beendet“-Screen auf,
+  // während die Raute (bzw. das Vorschlags-Pop-up) noch offen ist. Geprüft wird nur für
+  // Spieler, die DIESES Gerät erfasst — fremde Bahnen dürfen das Spielende nicht blockieren.
+  function kegelbildOffen() {
+    return state.bloecke.some((arr, sp) => {
+      if (!canEdit(sp)) return false;
+      const blk = arr[arr.length - 1];
+      if (!blk) return false;
+      return bildNachtragbar(blk, blk.wuerfe.length - 1);
+    });
+  }
+
+  // Spielende festschreiben: Statistik zeigen, Status 'beendet', Ergebnisse spiegeln.
+  function markFinished() {
+    finishSeen = true;
+    statsOpen = true;
+    setGameStatus(gameId, 'beendet');
+    finishRemote();
+    reconcileWettkampfStatus();
+  }
+
   // Übergang ins Spielende erkennen und einmalig die Statistik zeigen. Wird zu Beginn jedes
   // Renders geprüft (nachdem die Würfe/Done-Flags in `persist()` schon gespeichert sind):
-  //   - alle fertig & noch nicht gemeldet -> Statistik automatisch öffnen + Status 'beendet'.
+  //   - alle fertig & noch nicht gemeldet -> Statistik automatisch öffnen + Status 'beendet'
+  //     (aber erst, wenn auch das Kegelbild des letzten Wurfs gewählt ist).
   //   - wieder ein Satz offen -> zurück auf 'laufend' (Statistik schließt sich).
   function maybeFinish() {
     const done = allGamesDone();
     if (done && !finishSeen) {
-      finishSeen = true;
-      statsOpen = true;
-      setGameStatus(gameId, 'beendet');
-      pushResults();
-      reconcileWettkampfStatus();
+      if (kegelbildOffen()) return;   // letzter Wurf wartet noch auf sein Kegelbild
+      markFinished();
     } else if (!done && finishSeen) {
       finishSeen = false;
       statsOpen = false;
       setGameStatus(gameId, 'laufend');
+      pushRemoteStatus('laufend');
       reconcileWettkampfStatus();
     }
+  }
+
+  // Spielende zum Server spiegeln. Die REIHENFOLGE ist wichtig:
+  //   1) Ergebnis-Snapshots schreiben (tragen u.a. die LizenzID je Spieler),
+  //   2) DANN spiel.status auf 'beendet' setzen — das löst serverseitig die Anonymisierung
+  //      der Namen aus (Trigger trg_spiel_anonymisieren), die die LizenzID braucht, um das
+  //      passende Profil und dessen öffentlichen Anzeigenamen zu finden.
+  // Beides best-effort: ohne Verbindung bleibt der lokale Stand maßgeblich und wird beim
+  // nächsten Beenden nachgezogen.
+  async function finishRemote() {
+    try {
+      await pushResults();
+      await pushRemoteStatus('beendet');
+    } catch (e) { /* offline / keine Berechtigung */ }
+  }
+
+  // spiel.status spiegeln (laut RLS nur der Ersteller; auf anderen Geräten still no-op).
+  async function pushRemoteStatus(status) {
+    if (!linked || !syncMod || !game.remoteId) return;
+    try { await syncMod.pushStatus(game.remoteId, status); } catch (e) { /* still */ }
   }
 
   // Ist dieser Durchgang Teil eines Wettkampfs: dessen Status an die Durchgänge angleichen.
@@ -2137,7 +2239,7 @@ export function spielLaufendView() {
         ? U.filter((pin) => pin !== 5)
         : (unset ? (pinMode === 'stehend' ? U.slice() : []) : blk.kegel[target]);
       const fallenN = fallen.length;
-      const locked = blk.done;
+      const locked = blk.done && !bildNachtragbar(blk, target);
       const match = fallenN === n;
 
       pins = KEGEL_LAYOUT.map((p) => {
@@ -2252,10 +2354,13 @@ export function spielLaufendView() {
     // Bodenreihe (3 Zellen wie die Zahlen): links Aktion · 0 · rechts Aktion.
     // Normal: ↩ Zurück · 0 · ⚙ Bahneinstellung. Beim Korrigieren: 🗑 Löschen · 0 · ✕ Abbrechen.
     const editing = editIdx !== null;
+    // ↩ ist ausgegraut, wenn es nichts zurückzunehmen gibt — und bei einem älteren, bereits
+    // beendeten Satz: den öffnet man bewusst über die Bahneinstellung („Satz öffnen“).
+    const undoDis = !canUndo();
     // Im Zuschauer-Modus keine Aktionstasten (Zurück/Löschen/⚙) — reine Anzeige.
     const leftAct = zuschauer ? '' : (editing
       ? `<button type="button" class="erf-num erf-num-act danger" data-act="delete" aria-label="Wurf löschen">🗑</button>`
-      : `<button type="button" class="erf-num erf-num-act" data-act="undo" aria-label="Letzten Wurf zurück">↩</button>`);
+      : `<button type="button" class="erf-num erf-num-act" data-act="undo"${undoDis ? ' disabled' : ''} aria-label="Letzten Wurf zurück">↩</button>`);
     const rightAct = zuschauer ? '' : (editing
       ? `<button type="button" class="erf-num erf-num-act" data-act="cancel-edit" aria-label="Korrektur abbrechen">✕</button>`
       : `<button type="button" class="erf-num erf-num-act" data-act="lane-settings" aria-label="Bahneinstellung">⚙</button>`);
@@ -2339,7 +2444,9 @@ export function spielLaufendView() {
     act('numpad-links', () => setNumpadSeite('links'));
     act('numpad-rechts', () => setNumpadSeite('rechts'));
     act('toggle-overpad', toggleOverNumpad);
-    act('show-stats', () => { statsOpen = true; render(); });
+    // 🏁 im Kopf: Statistik von Hand öffnen. Hängt das Spielende nur noch am offenen
+    // Kegelbild, ist dieser Griff die bewusste Ansage „fertig“ — dann wird es festgeschrieben.
+    act('show-stats', () => { if (allGamesDone() && !finishSeen) markFinished(); else statsOpen = true; render(); });
     // Wurfprotokoll: im Statistik-Screen die angehakten Spieler, im ⚙-Menü der aktive Spieler.
     act('print-protokoll', () => {
       const sel = [];

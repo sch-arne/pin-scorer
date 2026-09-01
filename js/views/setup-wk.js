@@ -38,6 +38,7 @@ function ensurePlayers(s) {
   const arr = s.spielerData;
   while (arr.length < s.spieler) arr.push({ name: '', startBahn: null });
   arr.length = s.spieler;
+  if (s.ichIndex != null && s.ichIndex >= s.spieler) s.ichIndex = null; // Markierung fiel weg
   const used = new Set();
   arr.forEach((pl) => {
     let lane = pl.startBahn;
@@ -94,6 +95,9 @@ function defaultState(seed) {
     preset: s.preset ?? 'bohle',
     spieler: s.spieler ?? 1,
     spielerData: [{ name: '', startBahn: 1 }],
+    // "Das bin ich": Index des Spielers, der der angemeldete Account SELBST ist (oder null).
+    // Nur dieser bekommt beim Spielende profil_id -> nur er zaehlt in die Account-Statistik.
+    ichIndex: s.ichIndex ?? null,
     bahnen: s.bahnen ?? p.bahnen,
     ersteBahn: s.ersteBahn ?? 1,
     saetze: s.saetze ?? p.saetze,
@@ -265,6 +269,10 @@ export function setupWkView(opts = {}) {
       createdAt: new Date().toISOString(),
       spiel: 'sportkegler-wk',
       status: 'setup',
+      // "Das bin ich" bleibt am Spiel-Objekt (lokal) und NICHT in config -- config wird
+      // gespiegelt und an Zuschauer ausgeliefert; die Zuordnung geht serverseitig ueber
+      // spiel_spieler.profil_id, das linkGame aus genau diesem Index setzt.
+      ichIndex: state.ichIndex,
       config: {
         preset: state.preset,
         spieler: state.spieler,
@@ -387,6 +395,10 @@ export function setupWkView(opts = {}) {
       inp.addEventListener('input', () => { state.spielerData[parseInt(inp.dataset.player, 10)].name = inp.value; }));
     root.querySelectorAll('.player-team').forEach((sel) =>
       sel.addEventListener('change', () => { state.spielerData[parseInt(sel.dataset.player, 10)].mannschaftId = sel.value; }));
+    root.querySelectorAll('[data-ich]').forEach((rb) =>
+      rb.addEventListener('change', () => { state.ichIndex = parseInt(rb.dataset.ich, 10); update(); }));
+    const ichClear = root.querySelector('[data-action="ich-clear"]');
+    if (ichClear) ichClear.addEventListener('click', () => { state.ichIndex = null; update(); });
     root.querySelectorAll('.player-lane').forEach((sel) =>
       sel.addEventListener('change', () => {
         const i = parseInt(sel.dataset.player, 10);
@@ -588,13 +600,17 @@ function tabSpieler(s) {
         ${teams.map((m) => `<option value="${esc(m.id)}"${pl.mannschaftId === m.id ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}
       </select>` : '';
     return `
-    <div class="player-row${teamSel ? ' player-row--wk' : ''}">
+    <div class="player-row player-row--ich${teamSel ? ' player-row--wk' : ''}">
       <span class="player-idx">${i + 1}</span>
       <input class="player-name" data-player="${i}" type="text" placeholder="Spieler ${i + 1}" value="${esc(pl.name)}" />
       <select class="player-lane" data-player="${i}">
         ${nums.map((n) => `<option value="${n}"${pl.startBahn === n ? ' selected' : ''}>Bahn ${n}</option>`).join('')}
       </select>
       ${teamSel}
+      <label class="player-ich" title="Das bin ich — nur dieser Spieler zählt in meine Statistik">
+        <input type="radio" name="ich" data-ich="${i}"${s.ichIndex === i ? ' checked' : ''} />
+        <span aria-hidden="true">★</span><span class="sr-only">Das bin ich: Spieler ${i + 1}</span>
+      </label>
     </div>`;
   }).join('');
   return `
@@ -605,6 +621,9 @@ function tabSpieler(s) {
       </div>
       <div class="players">${rows}</div>
       <p class="field-hint">Anzahl Spieler änderst du im Tab „Modus". Keine Bahn doppelt – bei Konflikt wird getauscht.</p>
+      <p class="field-hint">★ markiert, wer <strong>du selbst</strong> bist. Nur dieses Ergebnis zählt in deine
+        Account-Statistik — die übrigen bleiben neutral.
+        ${s.ichIndex == null ? '<button type="button" class="btn-mini" data-action="ich-clear" hidden></button>' : '<button type="button" class="btn-mini" data-action="ich-clear">★ Markierung entfernen</button>'}</p>
     </section>
 
     <section class="field">

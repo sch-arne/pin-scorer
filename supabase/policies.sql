@@ -187,16 +187,23 @@ grant execute on function wettkampf_beitreten(text, uuid) to anon, authenticated
 -- OHNE dem Wettkampf als Gerät beizutreten. Gibt AUSSCHLIESSLICH lesbare Ergebnis-Daten
 -- zurück (kein Besitz, keine Geräte, keine fremden Profildaten) und nur, wer den Code kennt.
 -- Liefert null bei unbekanntem Code. Wirft nichts, schreibt nichts.
+--
+-- DATENSCHUTZ: `config_json` wird um den Block `sportwinner` bereinigt (jsonb `-`). Er trägt
+-- die Passnummern/LizenzIDs und die Sportwinner-internen Spieler-IDs der Aufstellung und hätte
+-- hier sonst jeden, der den Code kennt, ohne Login an fremde Verbands-IDs kommen lassen. Der
+-- Client schreibt ihn seit `sportwinnerOhnePersonendaten` gar nicht mehr mit hoch — der Filter
+-- deckt zusätzlich die bereits gespeicherten Alt-Wettkämpfe ab.
 drop function if exists wettkampf_overlay(text);
 create or replace function wettkampf_overlay(p_code text)
 returns jsonb
 language sql security definer stable
 set search_path = public as $$
   with wk as (
-    -- Bevorzugt der (read-only) ZUSCHAUER-Code; der EINGABE-Code wird weiterhin akzeptiert,
-    -- damit bereits verteilte OBS-URLs mit dem alten Code nicht brechen.
-    select id, name, status, config_json
-    from wettkampf where zuschauer_code = upper(p_code) or beitritts_code = upper(p_code)
+    -- NUR der read-only ZUSCHAUER-Code. Der Eingabe-Code wurde früher ebenfalls akzeptiert;
+    -- das vermischte Lese- und Schreibrecht in einer geteilten OBS-URL. Die App erzeugt die
+    -- Overlay-URL ohnehin aus dem Zuschauer-Code (wettkampf-hub.js overlayUrl).
+    select id, name, status, config_json - 'sportwinner' as config_json
+    from wettkampf where zuschauer_code = upper(p_code)
   )
   select case when not exists (select 1 from wk) then null else
     jsonb_build_object(
@@ -235,7 +242,7 @@ returns jsonb
 language sql security definer stable
 set search_path = public as $$
   with s as (
-    select id, spielart, status, config_json, erstellt_am, aktualisiert_am
+    select id, spielart, status, config_json, erstellt_am, aktualisiert_am, anonymisiert_am
     from spiel where zuschauer_code = upper(p_code)
   )
   select case when not exists (select 1 from s) then null else
@@ -243,7 +250,8 @@ set search_path = public as $$
       'spiel', (select jsonb_build_object(
         'id', s.id, 'spielart', s.spielart, 'status', s.status,
         'config_json', s.config_json, 'erstellt_am', s.erstellt_am,
-        'aktualisiert_am', s.aktualisiert_am) from s),
+        'aktualisiert_am', s.aktualisiert_am,
+        'anonymisiert_am', s.anonymisiert_am) from s),
       'spieler', coalesce((
         select jsonb_agg(jsonb_build_object(
           'id', sp.id, 'position', sp.position, 'name', sp.name, 'start_bahn', sp.start_bahn)
@@ -273,7 +281,9 @@ returns jsonb
 language sql security definer stable
 set search_path = public as $$
   with wk as (
-    select id, name, datum, status, anlage_id, config_json, erstellt_am, aktualisiert_am
+    -- config_json ohne den `sportwinner`-Block (Passnummern/LizenzIDs) — siehe wettkampf_overlay.
+    select id, name, datum, status, anlage_id,
+           config_json - 'sportwinner' as config_json, erstellt_am, aktualisiert_am
     from wettkampf where zuschauer_code = upper(p_code)
   )
   select case when not exists (select 1 from wk) then null else
@@ -287,6 +297,7 @@ set search_path = public as $$
           'id', s.id, 'durchgang_nr', s.durchgang_nr, 'spielart', s.spielart,
           'status', s.status, 'config_json', s.config_json,
           'zuschauer_code', s.zuschauer_code,
+          'anonymisiert_am', s.anonymisiert_am,
           'spieler', coalesce((
             select jsonb_agg(jsonb_build_object(
               'id', sp.id, 'position', sp.position, 'name', sp.name, 'start_bahn', sp.start_bahn)
@@ -416,7 +427,12 @@ create or replace view profil_public
   with (security_invoker = off) as
   select id, anzeigename from profil;
 
-grant select on profil_public to anon, authenticated;
+-- NICHT an `anon`: die View hat keinen Zeilenfilter, ein anon-Grant hätte also die
+-- Anzeigenamen ALLER Accounts ohne Login auslesbar gemacht. Angemeldete Nutzer reichen
+-- für den geplanten Zweck (Mitspieler-Anzeige); der Livestream-Name kommt inzwischen aus
+-- der Anonymisierung (pins_spiel_anonymisieren schreibt anzeigename direkt in spiel_spieler).
+revoke all on profil_public from anon;
+grant select on profil_public to authenticated;
 
 -- =============================================================================
 -- spiel — Mitglieder lesen; nur der Ersteller ändert Setup/Status
@@ -515,13 +531,16 @@ create policy spiel_spieler_insert on spiel_spieler for insert
   with check (
     exists (select 1 from spiel where id = spiel_id and besitzer = auth.uid())
     and besitzer_geraet is null
+    and (profil_id is null or profil_id = auth.uid())
   );
 
 -- USING (alte Zeile): der Ersteller darf immer; ein Mitglied darf nur übernehmen,
 -- wenn der Spieler frei ist, bereits einem EIGENEN Gerät gehört oder der Vorbesitzer
 -- inaktiv ist (heartbeat älter als 30s / nie gesetzt). So kann kein FREMDER Account
 -- einen aktiv bespielten Spieler an sich reißen — Regel "ein Spieler, ein Gerät".
--- WITH CHECK (neue Zeile): als Besitzer nur ein EIGENES Gerät eintragen oder freigeben.
+-- WITH CHECK (neue Zeile): als Besitzer nur ein EIGENES Gerät eintragen oder freigeben,
+-- und profil_id ("das bin ICH als Spieler") nur auf den EIGENEN Account setzen — sonst
+-- könnte ein Mitglied einem fremden Account Ergebnisse unterschieben.
 drop policy if exists spiel_spieler_update on spiel_spieler;
 create policy spiel_spieler_update on spiel_spieler for update
   using (
@@ -539,6 +558,7 @@ create policy spiel_spieler_update on spiel_spieler for update
   with check (
     pins_ist_mitglied(spiel_id)
     and (pins_ist_mein_geraet(besitzer_geraet) or besitzer_geraet is null)
+    and (profil_id is null or profil_id = auth.uid())
   );
 
 drop policy if exists spiel_spieler_delete on spiel_spieler;
@@ -605,6 +625,9 @@ create policy spiel_ergebnis_select on spiel_ergebnis for select
     or pins_lizenz_im_spiel(spiel_id)
   );
 
+-- WITH CHECK zusätzlich: profil_id ("das bin ICH als Spieler") und erfasst_von dürfen nur
+-- auf den EIGENEN Account zeigen. Ohne diese Schranke könnte ein Mitglied einem fremden
+-- Account beliebige Ergebnisse in dessen Statistik schreiben.
 drop policy if exists spiel_ergebnis_insert on spiel_ergebnis;
 create policy spiel_ergebnis_insert on spiel_ergebnis for insert
   with check (
@@ -612,6 +635,8 @@ create policy spiel_ergebnis_insert on spiel_ergebnis for insert
       select 1 from spiel_spieler s
       where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
     )
+    and (profil_id is null or profil_id = auth.uid())
+    and (erfasst_von is null or erfasst_von = auth.uid())
   );
 
 drop policy if exists spiel_ergebnis_update on spiel_ergebnis;
@@ -627,6 +652,8 @@ create policy spiel_ergebnis_update on spiel_ergebnis for update
       select 1 from spiel_spieler s
       where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
     )
+    and (profil_id is null or profil_id = auth.uid())
+    and (erfasst_von is null or erfasst_von = auth.uid())
   );
 
 -- =============================================================================
@@ -715,11 +742,16 @@ security definer
 set search_path = public, auth
 as $$
 declare
-  v_uid uuid := auth.uid();
+  v_uid    uuid := auth.uid();
+  v_pass   text;
+  v_spiele uuid[];
 begin
   if v_uid is null then
     raise exception 'nicht angemeldet';
   end if;
+
+  -- Eigene LizenzID merken, SOLANGE das Profil noch existiert (es kaskadiert in Schritt 4 weg).
+  select passnummer into v_pass from profil where id = v_uid;
 
   -- 1a) Eigene Wettkämpfe -> kaskadiert wettkampf_geraet UND die Durchgang-Spiele
   --     (spiel.wettkampf_id ON DELETE CASCADE) inkl. deren spiel_spieler/satz_block/…
@@ -733,7 +765,52 @@ begin
   --    (statt nur profil_id auf NULL zu setzen).
   delete from spiel_ergebnis where profil_id = v_uid;
 
-  -- 3) Auth-User -> kaskadiert profil + geraet (ON DELETE CASCADE) sowie die
+  -- 3) Als SPIELER (nicht als Erfasser) hinterlassene Spuren in fremd erfassten Spielen:
+  --    Ergebniszeilen, die über die eigene LizenzID zuzuordnen sind, sowie die LizenzID an
+  --    der Aufstellung. Ohne diesen Schritt bliebe die eigene Verbands-ID in Spielen stehen,
+  --    die ein anderer Account (z.B. der Vereins-PC) erfasst hat. Der Name in spiel_spieler
+  --    wird zusätzlich neutralisiert, sofern das Spiel bereits anonymisiert wurde — bei noch
+  --    laufenden Spielen bleibt er, damit die laufende Erfassung nicht zerreißt.
+  if v_pass is not null then
+    delete from spiel_ergebnis where passnummer = v_pass;
+
+    -- Betroffene Spiele merken, SOLANGE die LizenzID sie noch auffindbar macht.
+    select array_agg(distinct sp.spiel_id) into v_spiele
+      from spiel_spieler sp where sp.passnummer = v_pass;
+
+    -- 3a) Aufstellung: LizenzID + Konto-Zuordnung entfernen. Der Name wird nur in bereits
+    --     ANONYMISIERTEN (beendeten) Spielen neutralisiert — in noch laufenden bleibt er,
+    --     damit die aktive Erfassung nicht mitten im Spiel zerreißt.
+    update spiel_spieler sp
+       set passnummer = null,
+           profil_id  = null,
+           name = case
+             when exists (select 1 from spiel s
+                           where s.id = sp.spiel_id and s.anonymisiert_am is not null)
+               then pins_platzhalter_name(
+                      (select w.config_json -> 'mannschaften' from spiel s
+                         left join wettkampf w on w.id = s.wettkampf_id where s.id = sp.spiel_id),
+                      (select s.config_json -> 'spielerListe' from spiel s where s.id = sp.spiel_id),
+                      sp.position)
+             else sp.name
+           end
+     where sp.passnummer = v_pass;
+
+    -- 3b) Die ZWEITE Namenskopie nachziehen: spiel.config_json.spielerListe[].name. Der
+    --     Anzeigename stünde dort sonst weiter, obwohl das Profil gelöscht wird. Es genügt,
+    --     die geänderte Position zu schreiben — das weckt trg_spiel_anonymisieren, der die
+    --     ganze Liste wieder aus spiel_spieler (jetzt neutral) aufbaut.
+    update spiel s
+       set config_json = jsonb_set(s.config_json,
+             array['spielerListe', sp.position::text, 'name'], to_jsonb(sp.name))
+      from spiel_spieler sp
+     where sp.spiel_id = s.id
+       and s.id = any(v_spiele)
+       and s.anonymisiert_am is not null
+       and sp.name is distinct from (s.config_json #>> array['spielerListe', sp.position::text, 'name']);
+  end if;
+
+  -- 4) Auth-User -> kaskadiert profil + geraet (ON DELETE CASCADE) sowie die
   --    auth-internen identities/sessions.
   delete from auth.users where id = v_uid;
 end;
@@ -741,3 +818,270 @@ $$;
 
 revoke all on function konto_loeschen() from public;
 grant execute on function konto_loeschen() to authenticated;
+
+-- =============================================================================
+-- Anonymisierung bei Spielende (DSGVO / Datenminimierung)
+-- -----------------------------------------------------------------------------
+-- Leitidee: Klarnamen sind nur so lange nötig, wie sie gebraucht werden — nämlich
+-- WÄHREND des Spiels (Mitspieler-Geräte, Zuschauer, Livestream-Overlay). Sobald ein
+-- Spiel auf `beendet` steht, ersetzt der Trigger die Namen serverseitig:
+--
+--   1) Hat ein Spieler eine LizenzID (spiel_spieler.passnummer), zu der ein Profil mit
+--      derselben passnummer existiert, steht künftig dessen ÖFFENTLICHER Anzeigename
+--      (profil.anzeigename) da — der Betroffene hat ihn selbst gewählt und freigegeben.
+--   2) Sonst ein neutraler Platzhalter ("<Mannschaft> <Pos>" bzw. "Spieler N") — exakt
+--      die Bezeichnung, die buildDurchgangGame/computeGameStats ohnehin verwenden.
+--
+-- Beide Namenskopien werden ersetzt: spiel_spieler.name UND
+-- spiel.config_json.spielerListe[].name — sonst lieferten die Zuschauer-/Overlay-RPCs
+-- weiter die Klarnamen aus dem config_json.
+--
+-- Geräte, die WÄHREND des Spiels verbunden waren, behalten die Klarnamen in ihrer lokalen
+-- Kopie (Client-seitiger Merge in sync.js mergeSpielerNamen) — nur die DB und alle, die erst
+-- danach beitreten/pullen, sehen die anonymisierte Fassung.
+-- =============================================================================
+
+-- Neutraler Platzhalter für eine Spieler-Position: "<Mannschaftsname> <teamPos>", sonst
+-- "Spieler N". p_teams = wettkampf.config_json->'mannschaften' (kann null sein),
+-- p_liste = spiel.config_json->'spielerListe', p_pos = 0-basierte Position.
+create or replace function pins_platzhalter_name(p_teams jsonb, p_liste jsonb, p_pos int)
+returns text
+language plpgsql immutable
+set search_path = public as $$
+declare
+  v_eintrag jsonb := p_liste -> p_pos;          -- spielerListe[p_pos] (null-sicher)
+  v_teampos text  := v_eintrag ->> 'teamPos';
+  v_team    text;
+begin
+  if v_teampos is not null then
+    select t ->> 'name' into v_team
+      from jsonb_array_elements(coalesce(p_teams, '[]'::jsonb)) t
+     where t ->> 'id' = (v_eintrag ->> 'mannschaftId')
+     limit 1;
+  end if;
+  if v_team is not null then
+    return v_team || ' ' || v_teampos;          -- "Grün-Weiß Osnabrück 3"
+  end if;
+  return 'Spieler ' || (p_pos + 1);             -- Einzelspiel-Fallback (wie computeGameStats)
+end;
+$$;
+
+create or replace function pins_spiel_anonymisieren()
+returns trigger
+language plpgsql security definer
+set search_path = public as $$
+declare
+  r        record;
+  v_name   text;
+  v_liste  jsonb := new.config_json -> 'spielerListe';
+  v_teams  jsonb;
+  v_frisch boolean := (new.anonymisiert_am is null);
+begin
+  if jsonb_typeof(v_liste) is distinct from 'array' then
+    -- Kein Aufstellungs-Array im config_json -> nur die Aufstellungstabelle behandeln.
+    v_liste := null;
+  end if;
+
+  -- Mannschaftsnamen des Wettkampfs für den neutralen Platzhalter (null bei Einzelspielen).
+  select w.config_json -> 'mannschaften' into v_teams
+    from wettkampf w where w.id = new.wettkampf_id;
+
+  -- passnummer bevorzugt aus der Aufstellung; ersatzweise aus dem soeben geschriebenen
+  -- Ergebnis-Snapshot. Der Fallback deckt Spiele ab, die geteilt wurden, BEVOR es
+  -- spiel_spieler.passnummer gab (dort trägt nur spiel_ergebnis die LizenzID).
+  for r in
+    select sp.id, sp.position, sp.name,
+           coalesce(sp.passnummer,
+                    (select e.passnummer from spiel_ergebnis e
+                      where e.spieler_id = sp.id and e.passnummer is not null limit 1)) as passnummer
+      from spiel_spieler sp where sp.spiel_id = new.id
+  loop
+    if v_frisch then
+      v_name := null;
+      if r.passnummer is not null then
+        select nullif(btrim(p.anzeigename), '') into v_name
+          from profil p where p.passnummer = r.passnummer limit 1;
+      end if;
+      if v_name is null then
+        v_name := pins_platzhalter_name(v_teams, new.config_json -> 'spielerListe', r.position);
+      end if;
+      update spiel_spieler set name = v_name where id = r.id;
+    else
+      -- Bereits anonymisiert: nur ein nachträglich gepushtes config_json wieder einfangen.
+      v_name := r.name;
+    end if;
+    if v_liste is not null and v_liste -> r.position is not null then
+      v_liste := jsonb_set(v_liste, array[r.position::text, 'name'], to_jsonb(v_name));
+    end if;
+  end loop;
+
+  if v_liste is not null then
+    new.config_json := jsonb_set(new.config_json, '{spielerListe}', v_liste);
+  end if;
+  if v_frisch then
+    new.anonymisiert_am := now();
+  end if;
+  return new;
+end;
+$$;
+
+-- Feuert beim Übergang auf `beendet` (die eigentliche Anonymisierung) und danach bei jedem
+-- weiteren config_json-Schreibvorgang auf einem beendeten Spiel (fängt ein nachträgliches
+-- pushConfig ab, das die lokal noch vorhandenen Klarnamen zurückschreiben würde).
+drop trigger if exists trg_spiel_anonymisieren on spiel;
+create trigger trg_spiel_anonymisieren before update on spiel
+  for each row
+  when (new.status = 'beendet'
+        and (old.status is distinct from 'beendet'
+             or new.config_json is distinct from old.config_json))
+  execute function pins_spiel_anonymisieren();
+
+-- =============================================================================
+-- Ergebnis nachträglich dem eigenen Account zuordnen
+-- -----------------------------------------------------------------------------
+-- Für Spiele ohne LizenzID (Training/Freizeit) und für Alt-Daten, deren profil_id durch die
+-- Migration in schema.sql gelöst wurde: der Nutzer markiert in den Statistiken, welcher
+-- Spieler er war. security definer, weil die normale spiel_ergebnis_update-Policy den
+-- Geräte-Besitz des Spielers verlangt — den hat ein anderes Gerät womöglich längst abgegeben.
+-- Setzt NUR auf den eigenen Account und NUR auf noch freie Zeilen (profil_id is null), und
+-- nur, wenn der Aufrufer das Spiel ohnehin lesen darf.
+drop function if exists ergebnis_mir_zuordnen(uuid);
+create or replace function ergebnis_mir_zuordnen(p_ergebnis uuid)
+returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare v_n int := 0;
+begin
+  if auth.uid() is null then
+    raise exception 'nicht angemeldet';
+  end if;
+  update spiel_ergebnis e
+     set profil_id = auth.uid()
+   where e.id = p_ergebnis
+     and e.profil_id is null
+     and (pins_ist_mitglied(e.spiel_id)
+          or pins_ist_spiel_besitzer(e.spiel_id)
+          or pins_lizenz_im_spiel(e.spiel_id));
+  get diagnostics v_n = row_count;
+  return v_n > 0;
+end;
+$$;
+
+grant execute on function ergebnis_mir_zuordnen(uuid) to authenticated;
+
+-- Gegenstück: eine irrtümliche Zuordnung wieder lösen (nur die eigene).
+drop function if exists ergebnis_zuordnung_loesen(uuid);
+create or replace function ergebnis_zuordnung_loesen(p_ergebnis uuid)
+returns void
+language sql security definer
+set search_path = public as $$
+  update spiel_ergebnis set profil_id = null
+   where id = p_ergebnis and profil_id = auth.uid();
+$$;
+
+grant execute on function ergebnis_zuordnung_loesen(uuid) to authenticated;
+
+-- =============================================================================
+-- „Das bin ich" — Selbst-Zuordnung an der Aufstellung (auch für Mitspieler)
+-- -----------------------------------------------------------------------------
+-- Damit ein Mitspieler seine Ergebnisse in die EIGENE Statistik bekommt, ohne dass er das
+-- Spiel erfasst hat und ohne dass er eine LizenzID hinterlegt hat, markiert er sich an der
+-- Aufstellung selbst: spiel_spieler.profil_id = sein Konto.
+--
+-- Warum als security-definer-RPC und nicht über die normale Policy?
+--   spiel_spieler_update ist an den ERFASSUNGS-Lock gebunden (besitzer_geraet muss ein eigenes
+--   Gerät sein, oder der Spieler ist frei/inaktiv). Das schützt die Wurf-Hoheit — solange der
+--   Vereins-PC aktiv erfasst, dürfte ein Mitspieler die Zeile also gar nicht anfassen. Diese
+--   Regel wird bewusst NICHT gelockert; die Frage „wer bin ich" hat mit der Wurf-Hoheit nichts
+--   zu tun und bekommt deshalb einen eigenen, eng begrenzten Weg.
+--
+-- Sicherheit: geschrieben wird AUSSCHLIESSLICH auth.uid(). Eine fremde profil_id ist über
+-- diesen Weg unmöglich, und eine bereits von jemand anderem beanspruchte Zeile wird nicht
+-- überschrieben. Voraussetzung ist Lese-Zugriff auf das Spiel (Mitglied, Ersteller oder die
+-- eigene LizenzID steht darin).
+drop function if exists spieler_bin_ich(uuid);
+create or replace function spieler_bin_ich(p_spieler uuid)
+returns boolean
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_spiel uuid;
+  v_alt   uuid;
+begin
+  if auth.uid() is null then
+    raise exception 'nicht angemeldet';
+  end if;
+  select spiel_id, profil_id into v_spiel, v_alt from spiel_spieler where id = p_spieler;
+  if v_spiel is null then
+    return false;
+  end if;
+  if not (pins_ist_mitglied(v_spiel)
+          or pins_ist_spiel_besitzer(v_spiel)
+          or pins_lizenz_im_spiel(v_spiel)) then
+    raise exception 'Kein Zugriff auf dieses Spiel';
+  end if;
+  -- In einem aus Sportwinner importierten Wettkampf ist die Zuordnung durch die amtliche
+  -- Aufstellung (LizenzID je Spieler) bereits festgelegt. Eine manuelle Selbstzuordnung ist
+  -- dort nicht vorgesehen — sie könnte die amtliche Zuordnung überstimmen und jemandem fremde
+  -- Ergebnisse in die Statistik schreiben. Nur manuell angelegte Wettkämpfe und Einzelspiele
+  -- (ohne LizenzIDen) lassen die Selbstmarkierung zu. Der Client blendet sie dort ohnehin aus;
+  -- diese Prüfung setzt die Regel serverseitig durch.
+  if exists (
+    select 1 from spiel s
+      join wettkampf w on w.id = s.wettkampf_id
+     where s.id = v_spiel and w.config_json ->> 'quelle' = 'sportwinner'
+  ) then
+    raise exception 'In einem Sportwinner-Wettkampf erfolgt die Zuordnung über die LizenzID.';
+  end if;
+  if v_alt is not null and v_alt <> auth.uid() then
+    return false; -- gehört bereits einem anderen Konto: nicht überschreiben
+  end if;
+  -- Eine Person kann in einem Spiel nur EINE Position sein: eigene Altmarkierung lösen.
+  update spiel_spieler set profil_id = null
+   where spiel_id = v_spiel and profil_id = auth.uid() and id <> p_spieler;
+  update spiel_spieler set profil_id = auth.uid() where id = p_spieler;
+  return true;
+end;
+$$;
+
+grant execute on function spieler_bin_ich(uuid) to authenticated;
+
+-- Gegenstück: die eigene Markierung wieder lösen (nur die eigene).
+drop function if exists spieler_bin_ich_loesen(uuid);
+create or replace function spieler_bin_ich_loesen(p_spieler uuid)
+returns void
+language sql security definer
+set search_path = public as $$
+  update spiel_spieler set profil_id = null
+   where id = p_spieler and profil_id = auth.uid();
+$$;
+
+grant execute on function spieler_bin_ich_loesen(uuid) to authenticated;
+
+-- Noch freie Ergebniszeilen beanspruchen, deren Aufstellungs-Zeile ICH SELBST markiert habe.
+-- Nötig, weil die Ergebniszeilen der ERFASSER schreibt (z.B. der Vereins-PC für alle 12
+-- Spieler) und die RLS ihm bewusst verbietet, eine fremde profil_id einzutragen — die
+-- Zuordnung holt sich der Spieler daher selbst ab, sobald er online ist.
+-- Schreibt ausschließlich auth.uid() und nur auf Zeilen, die noch niemandem gehören.
+drop function if exists meine_ergebnisse_beanspruchen();
+create or replace function meine_ergebnisse_beanspruchen()
+returns int
+language plpgsql security definer
+set search_path = public as $$
+declare v_n int := 0;
+begin
+  if auth.uid() is null then
+    return 0;
+  end if;
+  update spiel_ergebnis e
+     set profil_id = auth.uid()
+    from spiel_spieler sp
+   where sp.id = e.spieler_id
+     and sp.profil_id = auth.uid()
+     and e.profil_id is null;
+  get diagnostics v_n = row_count;
+  return v_n;
+end;
+$$;
+
+grant execute on function meine_ergebnisse_beanspruchen() to authenticated;

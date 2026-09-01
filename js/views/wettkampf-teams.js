@@ -43,11 +43,19 @@ export function teamUebersichtSection(wettkampf, games, stats, wertung, kz, opts
   // Gegenüberstellung (Scoreboard): bei genau zwei Mannschaften auf breitem Schirm stehen sie
   // nebeneinander, die zweite gespiegelt — die Zahlen beider Teams zeigen so zur Mitte.
   const facing = !!kz && teams.length === 2;
+  // "Das bin ich": ichSlot markiert die eigene Position, ichEditable schaltet den Umschalter frei.
+  // In Sportwinner-Wettkaempfen bleiben BEIDE aus — dort steht die Zuordnung ueber die amtliche
+  // LizenzID fest und wird in der Aufstellung gar nicht angezeigt (siehe istLizenzWettkampf).
+  const ichEditable = editable && opts.ichEditable !== false;
   const cards = teams.map((m, ti) =>
-    teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults, facing && ti === 1, editable)).join('');
+    teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults,
+      facing && ti === 1, editable, opts.ichSlot || null, ichEditable)).join('');
+  const hinweis = opts.ichHinweis
+    ? `<p class="field-hint">${esc(opts.ichHinweis)}</p>` : '';
   return `
     <section class="field kz-team-uebersicht${facing ? ' is-facing' : ''}">
       <div class="wk-teams">${cards}</div>
+      ${hinweis}
     </section>`;
 }
 
@@ -71,7 +79,7 @@ function startbahnCtrl(m, pos, teamLanes, laneOf, editable) {
     : `<span class="wk-lane-fix">Bahn ${cur ?? (teamLanes[0] ?? '–')}</span>`;
 }
 
-function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults, mirror, editable) {
+function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults, mirror, editable, ichSlot, ichEditable) {
   const P = wettkampf.spielerJeMannschaft || 0;
   const teamLanes = (m.lanes || []).slice().sort((a, b) => a - b);
   const st = (stats.mannschaften || []).find((t) => t.mannschaftId === m.id)
@@ -102,7 +110,7 @@ function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults
   // stehen im Kopf (Spielpunkte) und in der Summenzeile der Tabelle (Ges./EWP). Die Tabelle wird
   // immer gerendert (auch ohne Ergebnisse), damit die Übersicht von Beginn an vollständig aufgebaut
   // ist und beim ersten Ergebnis nicht umspringt.
-  const body = ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable);
+  const body = ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable, ichSlot, ichEditable);
 
   return `
     <div class="wk-team-card${isLead ? ' is-lead' : ''}${mirror ? ' is-mirror' : ''}">
@@ -125,12 +133,25 @@ function nameField(m, pos, value, editable) {
     : `<span class="wk-name-static is-empty">${esc(m.name)} ${pos}</span>`;
 }
 
+// Positions-Zelle: die Nummer, im Hub zusaetzlich als "Das bin ich"-Umschalter. Jeder, der den
+// Wettkampf sehen darf, markiert hier SICH SELBST — auch ein Mitspieler, der den Wettkampf nur
+// per Code betreten hat und nichts erfasst. Nur diese Position bekommt spaeter die eigene
+// profil_id, alle uebrigen bleiben neutral. Ohne Umschalter (Live-Erfassung, Overlay,
+// Sportwinner-Wettkampf) bleibt es die schlichte Nummer — dort wird KEINE eigene Position
+// hervorgehoben, auch keine ueber die LizenzID erkannte.
+function posCell(m, pos, ichEditable, ichSlot) {
+  if (!ichEditable) return String(pos);
+  const ich = !!ichSlot && ichSlot === `${m.id}|${pos}`;
+  return `<button type="button" class="wk-ich${ich ? ' is-ich' : ''}" data-ich-team="${esc(m.id)}" data-ich-pos="${pos}"
+    aria-pressed="${ich}" title="${ich ? 'Markierung entfernen' : 'Das bin ich'}">${pos}<span class="wk-ich-star" aria-hidden="true">★</span></button>`;
+}
+
 // Bahnweise Ergebnistabelle: Pos, Name, Wurf (Startbahn — bei noch ergebnislosen Spielern wählbar),
 // je eine Spalte pro gespielter Bahn, dann Volle/Abräumen/Gesamt/EWP. Je Spieler eine Zeile.
 // Mannschaft als Fußzeile: je Bahn der Mannschafts-Durchschnitt, rechts die Summen.
 // Bei `mirror` (gegenüberstehendes Team) werden die Spalten-Blöcke gespiegelt (Zahlen zur Mitte) —
 // der Bahn-Block bleibt dabei ein zusammenhängendes Segment und damit auf beiden Seiten aufsteigend.
-function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable) {
+function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable, ichSlot, ichEditable) {
   // Bahn-Spalten = sortierte Vereinigung der Team-Bahnen und aller im Team gespielten Bahnen. Die
   // Team-Bahnen sind von Anfang an dabei, damit die Tabelle schon vor dem ersten Ergebnis alle
   // Bahn-Spalten zeigt (leer) und sich das Spaltengerüst später nicht mehr ändert.
@@ -145,7 +166,9 @@ function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror,
   // über den Kopf (table-layout: fixed); reisen beim Spiegeln mit der jeweiligen Spalte mit.
   const T = 100 / 3;
   const nB = Math.max(1, bahnen.length);
-  const wPos = 6;
+  // Positions-Spalte: nur mit dem "Das bin ich"-Umschalter (Nummer + Stern) etwas breiter,
+  // sonst — auch im Sportwinner-Wettkampf — die schmale reine Nummernspalte.
+  const wPos = ichEditable ? 9 : 6;
   const wName = (T - wPos).toFixed(2);
   const wWurf = 12;
   const wBahn = ((T - wWurf) / nB).toFixed(2);
@@ -179,7 +202,7 @@ function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror,
     const bahnCells = bahnBlock((b) => `<td class="wk-c-bahn">${played ? nz(holzAufBahn(p, b)) : ''}</td>`);
     const volle = played ? (p.gesamt || 0) - (p.abraeum || 0) : null;
     const cells = [
-      `<td class="wk-c-pos">${r.pos}</td>`,
+      `<td class="wk-c-pos">${posCell(m, r.pos, ichEditable, ichSlot)}</td>`,
       nameCell,
       wurfCell,
       bahnCells,

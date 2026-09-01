@@ -5,6 +5,7 @@
 import { navigate, currentQuery } from '../router.js';
 import { saveGame, setActiveGame, saveWettkampf, setActiveWettkampf } from '../store.js';
 import { setBruecke, getBruecke, vergissWettkampf } from '../backend/sw-bruecke.js';
+import { fehlerText } from '../util.js';
 
 // Ist der Fehler ein „Code unbekannt/deaktiviert" (RPC wirft 'Ungültiger Beitritts-Code'),
 // also KEIN Verbindungsproblem? Nur dann ist der Code sicher tot; bei offline nicht.
@@ -101,9 +102,12 @@ export function beitretenView() {
         navigate('/import/sportwinner?src=' + src + '&push=' + encodeURIComponent(base));
         return;
       }
+      // Bei einem echten Fehler (kein toter Code) die Ursache NENNEN: RLS-Ablehnung, fehlende
+      // Anmeldung und ein nicht eingespieltes SQL-Update sahen bisher alle wie „offline" aus.
+      if (!tot) console.error('[beitreten] fehlgeschlagen', e);
       msg.textContent = tot
         ? 'Unbekannter oder deaktivierter Code.'
-        : 'Beitritt fehlgeschlagen — Code prüfen und online sein.';
+        : 'Beitritt fehlgeschlagen: ' + fehlerText(e, 'Code prüfen und online sein');
       btn.disabled = false;
     }
   }
