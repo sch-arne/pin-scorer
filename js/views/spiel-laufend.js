@@ -209,11 +209,18 @@ export function spielLaufendView() {
   let laneSettingsOpen = false; // Bahneinstellung (⚙ in der Satz-Kopfzeile) offen?
   let satzOverviewOpen = true; // Spieler-Übersicht (inline, statt Wurferfassung) offen? — beim Öffnen eines Spiels direkt die Übersicht zeigen (nicht die Wurferfassung des 1. Satzes)
   let ueberTab = 'uebersicht'; // aktiver Tab der Übersicht: 'uebersicht' (Bahnen editieren) | 'statistik' | 'verteilung' (Wurf-Häufigkeit)
-  // Filter der Wurfübersicht (Wurf-Bild). Zwei Dimensionen, frei kombinierbar:
+  // Filter der Wurfübersicht (Wurf-Bild). Drei Dimensionen:
   //   wbSatzFilter — 'alle' oder ein Satz-Index als String ('0','1',…): nur diesen Satz zählen.
+  //   wbBahnFilter — 'alle' oder eine Bahnnummer als String: nur die Sätze, die der jeweilige
+  //                  Spieler auf DIESER Bahn gespielt hat (laneOf). Über mehrere Spieler hinweg
+  //                  sind das je Spalte andere Sätze — genau das zeigt „was fiel auf Bahn X".
   //   wbTeilFilter — 'alle' oder ein Teilsatz-Modus ('volle'/'abraeumen'/'kranz-abraeumen'):
   //                  nur die Würfe der Teilsätze dieses Modus zählen.
+  // Satz und Bahn sind ALTERNATIVEN (ein Satz liegt je Spieler auf genau einer Bahn — kombiniert
+  // ergäbe das meist eine leere Auswahl): eine Wahl setzt die andere Dimension auf 'alle' zurück.
+  // Der Teilsatz-Filter ist mit beiden frei kombinierbar.
   let wbSatzFilter = 'alle';
+  let wbBahnFilter = 'alle';
   let wbTeilFilter = 'alle';
   // Sortierung der Übersichts-Zeilen (klickbare Kopfzellen Bahn/Satz). Standard: nach Satz aufsteigend.
   // Ein Klick auf eine Spalte sortiert danach absteigend; erneuter Klick auf dieselbe Spalte toggelt.
@@ -1920,7 +1927,7 @@ export function spielLaufendView() {
     // oder das Wurf-Bild — jeweils für alle Spieler nebeneinander.
     const colBody = (sp) =>
       ueberTab === 'statistik' ? statMetricsFor(sp) :
-      ueberTab === 'verteilung' ? wurfVerteilungTab(state.bloecke[sp]) :
+      ueberTab === 'verteilung' ? wurfVerteilungTab(state.bloecke[sp], sp) :
       overviewTableFor(sp, { multi: true });
     const cols = order.map((sp) => `
         <div class="eum-col${sp === state.aktiverSpieler ? ' is-active' : ''}">
@@ -1990,7 +1997,7 @@ export function spielLaufendView() {
       `<button type="button" role="tab" aria-selected="${ueberTab === id}" class="ueber-tab${ueberTab === id ? ' is-active' : ''}" data-uebertab="${id}">${label}</button>`;
     const body =
       ueberTab === 'statistik' ? statistikTab :
-      ueberTab === 'verteilung' ? wurfFilterBar() + wurfVerteilungTab(arr) :
+      ueberTab === 'verteilung' ? wurfFilterBar() + wurfVerteilungTab(arr, sp) :
       uebersichtTab;
 
     return `
@@ -2011,16 +2018,19 @@ export function spielLaufendView() {
   }
 
   // Die im Wurf-Bild aktuell aktiven Filter greifen? (für Hinweise/Leer-Text).
-  function wbFilterAktiv() { return wbSatzFilter !== 'alle' || wbTeilFilter !== 'alle'; }
+  function wbFilterAktiv() { return wbSatzFilter !== 'alle' || wbBahnFilter !== 'alle' || wbTeilFilter !== 'alle'; }
 
   // Einzelwürfe eines Spielers nach den aktiven Wurf-Bild-Filtern einsammeln:
   //  - Satz-Filter: nur den gewählten Satz-Block (Index als String).
+  //  - Bahn-Filter: nur die Satz-Blöcke, die DIESER Spieler auf der gewählten Bahn gespielt hat.
   //  - Teilsatz-Filter: nur die Würfe der Teilsätze mit dem gewählten Modus (per ranges-Bereich).
-  // Beide sind frei kombinierbar (z. B. „Satz 2 · Volle").
-  function gefilterteWuerfe(arr) {
+  // Satz und Bahn schließen sich gegenseitig aus (siehe Filter-Deklaration), der Teilsatz-Filter
+  // ist mit beiden kombinierbar (z. B. „Bahn 3 · Volle").
+  function gefilterteWuerfe(arr, sp) {
     const out = [];
     arr.forEach((b, st) => {
       if (wbSatzFilter !== 'alle' && String(st) !== wbSatzFilter) return;
+      if (wbBahnFilter !== 'alle' && String(laneOf(sp, st)) !== wbBahnFilter) return;
       const w = Array.isArray(b.wuerfe) ? b.wuerfe : [];
       if (wbTeilFilter === 'alle') { out.push(...w); return; }
       ranges.forEach((r) => { if (r.modus === wbTeilFilter) out.push(...w.slice(r.start, r.end)); });
@@ -2028,8 +2038,10 @@ export function spielLaufendView() {
     return out;
   }
 
-  // Filter-Leiste über dem Wurf-Bild: Chips für den Satz (Alle + je Satz) und — sofern das Spiel
-  // mehrere Teilsatz-Modi kennt — für den Teilsatz (Alle + Volle/Abräumen/…). Beide kombinierbar.
+  // Filter-Leiste über dem Wurf-Bild: Chips für den Satz (Alle + je Satz), — sofern das Spiel auf
+  // mehreren Bahnen läuft — für die Bahn (Alle + je Bahn) und — sofern das Spiel mehrere
+  // Teilsatz-Modi kennt — für den Teilsatz (Alle + Volle/Abräumen/…). Satz und Bahn sind
+  // Alternativen, der Teilsatz-Filter ist mit beiden kombinierbar.
   function wurfFilterBar() {
     const chip = (attr, val, cur, label) => {
       const on = cur === val;
@@ -2038,6 +2050,16 @@ export function spielLaufendView() {
     const satzChips = [chip('data-wb-satz', 'alle', wbSatzFilter, 'Alle Sätze')]
       .concat(Array.from({ length: c.saetze }, (_, st) => chip('data-wb-satz', String(st), wbSatzFilter, `Satz ${st + 1}`)))
       .join('');
+    // Bahn-Zeile: alle bespielten Bahnen des Spiels. Bei nur einer Bahn wäre der Filter identisch
+    // mit „Alle Sätze" -> Zeile weglassen.
+    const lanes = gameLanes();
+    let bahnRow = '';
+    if (lanes.length > 1) {
+      const bahnChips = [chip('data-wb-bahn', 'alle', wbBahnFilter, 'Alle Bahnen')]
+        .concat(lanes.map((b) => chip('data-wb-bahn', String(b), wbBahnFilter, `Bahn ${b}`)))
+        .join('');
+      bahnRow = `<div class="wb-row"><span class="wb-row-lbl">Bahn</span><div class="wb-chips">${bahnChips}</div></div>`;
+    }
     const modi = [...new Set(ranges.map((r) => r.modus))];
     let modusRow = '';
     if (modi.length > 1) {
@@ -2049,22 +2071,23 @@ export function spielLaufendView() {
     return `
       <div class="wb-filter">
         <div class="wb-row"><span class="wb-row-lbl">Satz</span><div class="wb-chips">${satzChips}</div></div>
+        ${bahnRow}
         ${modusRow}
       </div>`;
   }
 
   // Inhalt „Wurf-Bild": wie häufig welches Ergebnis (0–9 Holz) geworfen wurde. Zählt nur die
   // einzeln ERFASSTEN Würfe des aktiven Spielers (rein als Summe eingetragene Ergebnisse liefern
-  // keine Einzelwürfe), gefiltert nach Satz und Teilsatz. Balken proportional zum häufigsten Wert;
-  // 9 (Alle Neune) und 0 (Fehl) sind farblich hervorgehoben.
-  function wurfVerteilungTab(arr) {
+  // keine Einzelwürfe), gefiltert nach Satz bzw. Bahn und Teilsatz. Balken proportional zum
+  // häufigsten Wert; 9 (Alle Neune) und 0 (Fehl) sind farblich hervorgehoben.
+  function wurfVerteilungTab(arr, sp) {
     // Zwei Häufigkeiten je Holz-Wert: GESAMT (alle Einzelwürfe) und GEFILTERT (aktueller Filter).
     // Der Balken bildet immer die Gesamt-Häufigkeit ab (stabile Länge, an der häufigsten Zahl
     // skaliert); der Filter füllt darin nur den relativen Anteil ein.
     const distGes = Array.from({ length: 10 }, () => 0);
     const distFil = Array.from({ length: 10 }, () => 0);
     arr.forEach((b) => { (Array.isArray(b.wuerfe) ? b.wuerfe : []).forEach((w) => { if (w >= 0 && w <= 9) distGes[w] += 1; }); });
-    gefilterteWuerfe(arr).forEach((w) => { if (w >= 0 && w <= 9) distFil[w] += 1; });
+    gefilterteWuerfe(arr, sp).forEach((w) => { if (w >= 0 && w <= 9) distFil[w] += 1; });
     const gesamt = distGes.reduce((s, n) => s + n, 0);
     const total = distFil.reduce((s, n) => s + n, 0);
     if (gesamt === 0) {
@@ -2512,10 +2535,14 @@ export function spielLaufendView() {
         render();
       }));
 
-    // Wurf-Bild-Filter (Satz-Chips + Teilsatz-Modus-Chips) umschalten. Beide Dimensionen sind
-    // unabhängig und kombinierbar; ein Tipp setzt nur die jeweilige Dimension neu.
+    // Wurf-Bild-Filter (Satz-, Bahn- und Teilsatz-Modus-Chips) umschalten. Satz und Bahn sind
+    // Alternativen: die Wahl der einen Dimension setzt die andere auf „alle" zurück (ein Satz
+    // liegt je Spieler auf genau einer Bahn, kombiniert bliebe meist nichts übrig). Der
+    // Teilsatz-Filter ist davon unabhängig und mit beiden kombinierbar.
     root.querySelectorAll('[data-wb-satz]').forEach((b) =>
-      b.addEventListener('click', () => { wbSatzFilter = b.dataset.wbSatz; render(); }));
+      b.addEventListener('click', () => { wbSatzFilter = b.dataset.wbSatz; wbBahnFilter = 'alle'; render(); }));
+    root.querySelectorAll('[data-wb-bahn]').forEach((b) =>
+      b.addEventListener('click', () => { wbBahnFilter = b.dataset.wbBahn; wbSatzFilter = 'alle'; render(); }));
     root.querySelectorAll('[data-wb-teil]').forEach((b) =>
       b.addEventListener('click', () => { wbTeilFilter = b.dataset.wbTeil; render(); }));
 
