@@ -1551,6 +1551,40 @@ button.mini-pin { cursor: pointer; }
 .wk-tbl.wk-mirror td.wk-c-name .wk-name { text-align: right; }
 .wk-tbl.wk-mirror td.wk-c-name .wk-name-static { text-align: right; }
 
+/* ---------- Wettkampf-Hub: Ansichts-Umschalter (Durchgänge / Statistik / Wurf-Bild) ---------- */
+/* Segmentierte Leiste unter der Mannschafts-Übersicht: sie wählt, was darunter steht — die
+   Durchgänge (Arbeitsansicht) oder eine der beiden Auswertungen. Nutzt die Tab-Optik der
+   Erfassung (.ueber-tab), hier über die volle Breite. */
+.wk-hub-switch { margin: 0; }
+
+/* ---------- Wettkampf-Hub: Mannschafts-Auswertung (Kennzahlen + Wurf-Bild) ---------- */
+/* Eigene Sektion unter der Mannschafts-Übersicht: dieselben Team-Tafeln (.wk-team-card), darin
+   Kennzahl-Kacheln (.stats-metrics) und Balkenzeilen (.ud-*) wie im Wurf-Bild der Erfassung.
+   Die Filter-Chips (.wb-*) sind ebenfalls geteilt — hier nur die Ergänzungen. */
+.kz-team-auswertung .wb-filter { margin-top: 0; }
+.kz-team-auswertung .stats-metrics { margin-bottom: 14px; }
+/* Zwischenüberschrift einer Balkengruppe (Bahn-Vergleich / Satz-Verlauf / Wurf-Bild). */
+.mba-sub {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  margin: 14px 0 8px;
+  font-size: 0.8rem; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.mba-sub small { font-size: 0.7rem; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.mba-sub:first-child { margin-top: 0; }
+/* Die im Filter gewählte Bahn/der gewählte Satz: hervorgehoben, die übrigen Zeilen bleiben
+   als Vergleich stehen (siehe aufschluesselung() in logic/mannschaft-statistik.js). */
+.ud-row.is-sel .ud-val,
+.ud-row.is-sel .ud-count { color: var(--accent); }
+.ud-row.is-sel .ud-fill { background: var(--accent); }
+/* Gegenübergestellte Mannschaft (zweite Tafel): Balken wachsen zur Mitte, Zahlen außen —
+   dieselbe Leserichtung wie in der gespiegelten Ergebnistabelle darüber. */
+.mba-mirror .ud-row { flex-direction: row-reverse; }
+.mba-mirror .ud-bar { display: flex; justify-content: flex-end; }
+.mba-mirror .ud-count { text-align: left; }
+.mba-mirror .stats-metrics { direction: rtl; }
+.mba-mirror .stats-metric { direction: ltr; }
+
 /* Durchgänge als Statuskarten: farbiger Status-Rand links, oben Nummer-Chip + „Durchgang N"
    + Status-Badge, darunter die Aktion; Löschen als kleiner Button oben rechts. Mobil einspaltig
    (volle Breite), am Desktop als Kachel-Raster (siehe Kontrollzentrum-Media-Query). */
@@ -2197,7 +2231,10 @@ button.mini-pin { cursor: pointer; }
   .view-kontrollzentrum .stats-sub { grid-column: 1 / -1; margin: 0; }
   /* Mannschafts-Übersicht über die ganze Breite oben; bei zwei Teams stehen sie nebeneinander. */
   .view-kontrollzentrum .kz-team-uebersicht { grid-column: 1 / -1; }
-  .kz-team-uebersicht.is-facing .wk-teams {
+  .view-kontrollzentrum .kz-team-auswertung { grid-column: 1 / -1; }
+  .view-kontrollzentrum .wk-hub-switch { grid-column: 1 / -1; }
+  .kz-team-uebersicht.is-facing .wk-teams,
+  .kz-team-auswertung.is-facing .wk-teams {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 24px;
