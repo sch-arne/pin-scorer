@@ -1843,6 +1843,9 @@ button.mini-pin { cursor: pointer; }
 .ud-row.is-neuner .ud-fill { background: var(--accent); }
 .ud-row.is-fehl .ud-val,
 .ud-row.is-fehl .ud-count { color: var(--text-dim); }
+/* Räumer-Tempo (wie oft brauchte ein Abräum-Lauf wie viele Würfe): die Beschriftung trägt
+   hier „N Würfe" statt einer einzelnen Holzzahl und braucht deshalb etwas mehr Platz. */
+.ud-row.is-tempo .ud-val { width: 62px; }
 .ueber-dist-empty { text-align: center; color: var(--text-dim); font-size: 0.9rem; margin: 28px 0; line-height: 1.5; }
 .ueber-dist-empty span { font-size: 0.78rem; }
 .ub-table {

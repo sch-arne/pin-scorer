@@ -51,7 +51,7 @@ export function wettkampfHubView() {
   // Reiner Anzeige-Zustand (Ansicht + die drei Filter), nicht gespeichert und nicht gesynct —
   // jedes Gerät wählt für sich. Ein Klick setzt den Wert und rendert neu.
   let hubAnsicht = 'durchgaenge';           // 'durchgaenge' | 'statistik' | 'wurfbild'
-  let auswertungFilter = leererAuswertungFilter(); // { bahn, satz, teil }
+  let auswertungFilter = leererAuswertungFilter(); // { bahn, satz, teil, bild }
 
   // ── Sportwinner-Rückschreiben (nur Vereins-PC) ───────────────────────────────
   // Ist der Wettkampf aus Sportwinner importiert UND wurde die App von der Brücke mit
@@ -508,6 +508,9 @@ export function wettkampfHubView() {
       b.addEventListener('click', () => setFilter({ satz: wert(b.dataset.mbSatz) })));
     root.querySelectorAll('[data-mb-teil]').forEach((b) =>
       b.addEventListener('click', () => setFilter({ teil: b.dataset.mbTeil })));
+    // „Bild": im Wurf-Bild zwischen allen Würfen und nur denen auf das volle Bild umschalten.
+    root.querySelectorAll('[data-mb-bild]').forEach((b) =>
+      b.addEventListener('click', () => setFilter({ bild: b.dataset.mbBild })));
 
     // Zuschauer-Modus: keine Bearbeitungs-Handler binden; Aufstellungs-Felder sperren.
     if (zuschauer) {

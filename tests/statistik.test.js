@@ -153,3 +153,58 @@ test('leerer Name -> "Spieler N"', () => {
   const { players } = computeGameStats(cfg, [[blk([1, 1, 1]), blk([1, 1, 1])]], ranges);
   assert.equal(players[0].name, 'Spieler 1');
 });
+
+test('Räumer-Verteilung: wie oft brauchte ein Lauf wie viele Würfe?', () => {
+  // Ein Teilsatz Abräumen à 6 Würfe, 1 Satz. Drei Läufe mit 1, 2 und 3 Würfen:
+  //   Lauf 1: 9                 -> in 1 Wurf abgeräumt
+  //   Lauf 2: 6, 3              -> in 2 Würfen
+  //   Lauf 3: 5, 2, 2           -> in 3 Würfen
+  const cfg = {
+    spielerListe: [{ name: 'R' }], saetze: 1, ersteBahn: 1, wuerfeProSatz: 6,
+    teilsaetze: [{ modus: 'abraeumen', wuerfe: 6 }],
+  };
+  const r = teilsatzRanges(cfg);
+  const bloecke = [[
+    {
+      wuerfe: [9, 6, 3, 5, 2, 2],
+      kegel: [[1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 5, 6], [7, 8, 9], [1, 2, 3, 4, 5], [6, 7], [8, 9]],
+      koenig: [false, false, false, false, false, false], overrides: [null], done: true,
+    },
+  ]];
+  const p = computeGameStats(cfg, bloecke, r).players[0];
+  assert.equal(p.raeumer, 3);
+  assert.equal(p.raeumSchnitt, 2);                 // (1 + 2 + 3) / 3
+  // Index = Würfe je Räumer, Wert = Häufigkeit. Index 0 bleibt leer.
+  assert.deepEqual(p.raeumVert, [0, 1, 1, 1]);
+
+  // Würfe auf das volle Bild: der jeweils erste Wurf eines Laufs (9, 6, 5).
+  const ts = p.saetze[0].teilsaetze[0];
+  assert.deepEqual(ts.wuerfeVoll, [true, true, false, true, false, false]);
+  assert.equal(p.vollChance, 3);
+});
+
+test('Räumer-Verteilung: über Sätze und Teilsätze aufsummiert', () => {
+  // 2 Sätze mit je einem Abräum-Teilsatz à 2 Würfe. Satz 1: ein Räumer in 1 Wurf (9) und einer
+  // in 1 Wurf (9). Satz 2: ein Räumer in 2 Würfen (7, 2). -> zweimal „1 Wurf", einmal „2 Würfe".
+  const cfg = {
+    spielerListe: [{ name: 'R' }], saetze: 2, ersteBahn: 1, wuerfeProSatz: 2,
+    teilsaetze: [{ modus: 'abraeumen', wuerfe: 2 }],
+  };
+  const r = teilsatzRanges(cfg);
+  const alle = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const bloecke = [[
+    { wuerfe: [9, 9], kegel: [alle, alle], koenig: [false, false], overrides: [null], done: true },
+    { wuerfe: [7, 2], kegel: [[1, 2, 3, 4, 5, 6, 7], [8, 9]], koenig: [false, false], overrides: [null], done: true },
+  ]];
+  const p = computeGameStats(cfg, bloecke, r).players[0];
+  assert.equal(p.raeumer, 3);
+  assert.deepEqual(p.raeumVert, [0, 2, 1]);
+});
+
+test('Räumer-Verteilung: ohne Abräumen leer', () => {
+  const bloecke = [[blk([9, 8, 7]), blk([6, 5, 4])], [blk([1, 1, 1]), blk([1, 1, 1])]];
+  const { players } = computeGameStats(config, bloecke, ranges);
+  assert.deepEqual(players[0].raeumVert, []);
+  // In der Volle kam jeder Wurf aus dem vollen Bild.
+  assert.deepEqual(players[0].saetze[0].teilsaetze[0].wuerfeVoll, [true, true, true]);
+});

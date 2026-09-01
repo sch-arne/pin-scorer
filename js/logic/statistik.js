@@ -5,6 +5,26 @@
 import { satzHolz } from './holz.js';
 import { isAbraeumMode, abraeumScan, volleKranz } from './abraeumen.js';
 
+// Räumer-Verteilung: Index = Zahl der Würfe, die EIN Lauf bis zum Abräumen gebraucht hat
+// (1 = mit einem Wurf geräumt), Wert = wie oft das vorkam. Index 0 bleibt immer 0.
+// Beantwortet „wie oft brauche ich wie viele Würfe, bis wieder das volle Bild steht?" —
+// die Feinauflösung hinter der Kennzahl `raeumSchnitt` (Ø Würfe/Räumer).
+// Die Arrays sind unterschiedlich lang (ein zäher Lauf braucht mehr Würfe), deshalb füllt
+// das Addieren beim Ziel auf.
+export function addRaeumVert(ziel, quelle) {
+  (quelle || []).forEach((n, i) => {
+    while (ziel.length <= i) ziel.push(0);
+    ziel[i] += n || 0;
+  });
+  return ziel;
+}
+
+// Einen abgeräumten Lauf mit `len` Würfen in die Verteilung eintragen.
+function zaehleRaeumer(vert, len) {
+  while (vert.length <= len) vert.push(0);
+  vert[len] += 1;
+}
+
 // Kennzahlen EINES Teilsatzes (ein ranges-Bereich in einem Satz-Block). Das ist die feinste
 // Ebene der Auswertung: die Spieler-Werte weiter unten sind schlicht die Summe darüber, und die
 // Mannschafts-Auswertung (logic/mannschaft-statistik.js) filtert genau hier nach Bahn/Satz/
@@ -23,17 +43,21 @@ function teilsatzMetrik(blk, r, ov) {
   let raeumer = 0;      // vollständig abgeräumte Läufe
   let raeumWuerfe = 0;  // dafür benötigte Würfe (Ø Würfe/Räumer = Tempo)
   let vollChance = 0;   // Würfe aus vollem Bild (Nenner der 9er-Quote)
+  const raeumVert = []; // Verteilung: wie oft brauchte ein Lauf wie viele Würfe?
+  // Kam Wurf i (relativ zum Teilsatz) aus dem VOLLEN Bild? Parallel zu `wuerfe` — damit
+  // Ansichten die Würfe auf das volle Bild getrennt betrachten können (Wurf-Bild-Filter).
+  const wuerfeVoll = wuerfe.map(() => r.modus === 'volle');
   let runLen = 0;
   for (let k = r.start; k < end; k += 1) {
     const hit = scan ? !!scan.kranzAt[k] : (r.modus === 'volle' && volleKranz(blk, k));
     if (hit) kranz += 1;
     if (!scan) continue;
-    if (scan.before[k] && scan.before[k].count === 9) vollChance += 1;
+    if (scan.before[k] && scan.before[k].count === 9) { vollChance += 1; wuerfeVoll[k - r.start] = true; }
     runLen += 1;
     const after = scan.before[k + 1]; // Zustand VOR dem Folgewurf = Zustand NACH Wurf k
     // Ein frischer Lauf (volles Bild) direkt nach dem Wurf heißt: der Lauf wurde abgeräumt.
     if (after && after.count === 9 && after.exact === true && after.picked === false) {
-      raeumer += 1; raeumWuerfe += runLen; runLen = 0;
+      raeumer += 1; raeumWuerfe += runLen; zaehleRaeumer(raeumVert, runLen); runLen = 0;
     }
   }
   // In der Volle steht vor JEDEM Wurf das volle Bild.
@@ -42,6 +66,7 @@ function teilsatzMetrik(blk, r, ov) {
     modus: r.modus,
     manual,
     wuerfe,                                        // einzeln erfasste Würfe (leer bei Override)
+    wuerfeVoll,                                    // je Wurf: kam er aus dem vollen Bild?
     soll: r.soll,
     holz: manual ? ov : wuerfe.reduce((a, w) => a + w, 0),
     // Ein manuell eingetragenes Ergebnis zählt als vollständiger Teilsatz (Soll-Würfe), sonst
@@ -52,6 +77,7 @@ function teilsatzMetrik(blk, r, ov) {
     kranz,                                          // nur König 5 blieb stehen
     raeumer,
     raeumWuerfe,
+    raeumVert,                                      // Index = Würfe je Räumer, Wert = Häufigkeit
     vollChance,
   };
 }
@@ -92,6 +118,7 @@ export function computeGameStats(config, bloecke, ranges) {
     const vollChance = sumTs(alleTs, 'vollChance');
     const raeumer = sumTs(alleTs, 'raeumer');
     const raeumWuerfe = sumTs(alleTs, 'raeumWuerfe');
+    const raeumVert = alleTs.reduce((acc, ts) => addRaeumVert(acc, ts.raeumVert), []);
     return {
       index: i,
       name: sp.name || ('Spieler ' + (i + 1)),
@@ -108,6 +135,7 @@ export function computeGameStats(config, bloecke, ranges) {
       kranz: sumTs(alleTs, 'kranz'),                  // Kränze (nur König 5 blieb stehen)
       raeumer,                                        // vollständig abgeräumte Läufe
       raeumSchnitt: raeumer ? raeumWuerfe / raeumer : 0, // Ø Würfe je Räumer (Tempo)
+      raeumVert,                                      // Verteilung: wie oft wie viele Würfe je Räumer
       vollChance,                                     // Würfe aus vollem Bild (Nenner der Quote)
       rang: 1,
     };
