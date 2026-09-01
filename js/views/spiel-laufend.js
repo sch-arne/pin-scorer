@@ -167,6 +167,39 @@ function normalizeErfassung(e, c) {
   return base;
 }
 
+// Räumer-Tempo als Balken-Histogramm: wie oft brauchte ein (Kranz-)Abräum-Lauf wie viele
+// Würfe, bis wieder das volle Bild stand? Quelle ist `raeumVert` aus logic/statistik.js
+// (Index = Würfe je Räumer). Gezeigt werden alle Wurfzahlen von 1 bis zur höchsten
+// vorgekommenen — auch die Lücken dazwischen, sonst täuscht die Reihe Lückenlosigkeit vor.
+// `skala` (optional) macht mehrere Spieler vergleichbar; ohne sie skaliert jede Liste selbst.
+function raeumTempoRows(vert, skala) {
+  const max = (vert || []).length - 1;
+  if (max < 1) return '';
+  const gesamt = vert.reduce((a, n) => a + (n || 0), 0);
+  const norm = Math.max(1, skala || Math.max(...vert.map((n) => n || 0)));
+  let rows = '';
+  for (let n = 1; n <= max; n += 1) {
+    const anz = vert[n] || 0;
+    const pct = gesamt ? Math.round((anz / gesamt) * 100) : 0;
+    rows += `
+      <div class="ud-row is-tempo${n === 1 ? ' is-neuner' : ''}">
+        <span class="ud-val">${n}<span class="ud-note">${n === 1 ? 'Wurf' : 'Würfe'}</span></span>
+        <span class="ud-bar"><span class="ud-total" style="width:${(anz / norm) * 100}%"><span class="ud-fill" style="width:100%"></span></span></span>
+        <span class="ud-count">${anz}<span class="ud-pct">${pct}%</span></span>
+      </div>`;
+  }
+  return rows;
+}
+
+// Der ganze Block inkl. Überschrift — leer, solange kein Lauf abgeräumt wurde.
+function raeumTempoBlock(stats, skala) {
+  const rows = raeumTempoRows(stats.raeumVert, skala);
+  if (!rows) return '';
+  return `
+    <p class="mba-sub">Räumer-Tempo<small>${stats.raeumer} Räumer · Ø ${stats.raeumSchnitt.toFixed(1)} Würfe bis zum vollen Bild</small></p>
+    <div class="ueber-dist">${rows}</div>`;
+}
+
 // ── View ──────────────────────────────────────────────────────────────────
 
 export function spielLaufendView() {
@@ -216,12 +249,18 @@ export function spielLaufendView() {
   //                  sind das je Spalte andere Sätze — genau das zeigt „was fiel auf Bahn X".
   //   wbTeilFilter — 'alle' oder ein Teilsatz-Modus ('volle'/'abraeumen'/'kranz-abraeumen'):
   //                  nur die Würfe der Teilsätze dieses Modus zählen.
+  //   wbBildFilter — 'alle' oder 'voll': beim (Kranz-)Abräumen nur die Würfe auf das VOLLE Bild
+  //                  zählen, also den jeweils ersten Wurf eines Laufs. Die Folgewürfe auf das
+  //                  Restbild können gar keine hohen Zahlen bringen und ziehen die Verteilung
+  //                  sonst nach unten; so wird das Abräumen mit der Volle vergleichbar.
+  //                  In Volle-Teilsätzen steht ohnehin vor jedem Wurf das volle Bild.
   // Satz und Bahn sind ALTERNATIVEN (ein Satz liegt je Spieler auf genau einer Bahn — kombiniert
   // ergäbe das meist eine leere Auswahl): eine Wahl setzt die andere Dimension auf 'alle' zurück.
-  // Der Teilsatz-Filter ist mit beiden frei kombinierbar.
+  // Teilsatz- und Bild-Filter sind mit beiden frei kombinierbar.
   let wbSatzFilter = 'alle';
   let wbBahnFilter = 'alle';
   let wbTeilFilter = 'alle';
+  let wbBildFilter = 'alle';
   // Sortierung der Übersichts-Zeilen (klickbare Kopfzellen Bahn/Satz). Standard: nach Satz aufsteigend.
   // Ein Klick auf eine Spalte sortiert danach absteigend; erneuter Klick auf dieselbe Spalte toggelt.
   let ueberSortKey = 'satz'; // 'satz' | 'bahn'
@@ -1556,6 +1595,7 @@ export function spielLaufendView() {
             ${metric(p.fehl, 'Fehlwürfe')}
             ${metric(p.wurfCount, 'Würfe')}
           </div>
+          ${raeumTempoBlock(p)}
           <div class="stats-saetze">${satzRows}</div>
         </div>`;
     }).join('');
@@ -1973,7 +2013,15 @@ export function spielLaufendView() {
         ${hasAbraeum && stats.raeumer ? metric(stats.raeumSchnitt.toFixed(1), 'Ø Würfe/Räumer') : ''}
         ${metric(stats.fehl, 'Fehlwürfe')}
         ${metric(stats.wurfCount, 'Würfe')}
-      </div>`;
+      </div>
+      ${raeumTempoBlock(stats, raeumSkala())}`;
+  }
+
+  // Gemeinsame Skala des Räumer-Tempos über ALLE Spieler: in der Mehr-Spieler-Übersicht stehen
+  // die Histogramme nebeneinander — gleiche Balkenlänge muss dort gleiche Häufigkeit heißen.
+  function raeumSkala() {
+    const players = computeGameStats(c, state.bloecke, ranges).players;
+    return Math.max(1, ...players.flatMap((p) => (p.raeumVert || []).map((n) => n || 0)));
   }
 
   // Spieler-Übersicht (inline, ein Spieler; Bahn-/Satz-Leiste bleibt oben): Satztabelle +
@@ -2018,22 +2066,35 @@ export function spielLaufendView() {
   }
 
   // Die im Wurf-Bild aktuell aktiven Filter greifen? (für Hinweise/Leer-Text).
-  function wbFilterAktiv() { return wbSatzFilter !== 'alle' || wbBahnFilter !== 'alle' || wbTeilFilter !== 'alle'; }
+  function wbFilterAktiv() {
+    return wbSatzFilter !== 'alle' || wbBahnFilter !== 'alle' || wbTeilFilter !== 'alle' || wbBildFilter !== 'alle';
+  }
 
   // Einzelwürfe eines Spielers nach den aktiven Wurf-Bild-Filtern einsammeln:
   //  - Satz-Filter: nur den gewählten Satz-Block (Index als String).
   //  - Bahn-Filter: nur die Satz-Blöcke, die DIESER Spieler auf der gewählten Bahn gespielt hat.
   //  - Teilsatz-Filter: nur die Würfe der Teilsätze mit dem gewählten Modus (per ranges-Bereich).
-  // Satz und Bahn schließen sich gegenseitig aus (siehe Filter-Deklaration), der Teilsatz-Filter
-  // ist mit beiden kombinierbar (z. B. „Bahn 3 · Volle").
+  //  - Bild-Filter: in Abräum-Teilsätzen nur die Würfe, vor denen alle 9 Kegel standen (Beginn
+  //    eines Laufs). Welche das sind, weiß nur der Lauf-Scan — dieselbe Bedingung wie hinter
+  //    der 9er-Quote (vollChance) in logic/statistik.js.
+  // Satz und Bahn schließen sich gegenseitig aus (siehe Filter-Deklaration), Teilsatz- und
+  // Bild-Filter sind mit beiden kombinierbar (z. B. „Bahn 3 · Abräumen · nur volles Bild").
   function gefilterteWuerfe(arr, sp) {
     const out = [];
+    const nurVoll = wbBildFilter === 'voll';
     arr.forEach((b, st) => {
       if (wbSatzFilter !== 'alle' && String(st) !== wbSatzFilter) return;
       if (wbBahnFilter !== 'alle' && String(laneOf(sp, st)) !== wbBahnFilter) return;
       const w = Array.isArray(b.wuerfe) ? b.wuerfe : [];
-      if (wbTeilFilter === 'alle') { out.push(...w); return; }
-      ranges.forEach((r) => { if (r.modus === wbTeilFilter) out.push(...w.slice(r.start, r.end)); });
+      ranges.forEach((r) => {
+        if (wbTeilFilter !== 'alle' && r.modus !== wbTeilFilter) return;
+        const end = Math.min(r.end, w.length);
+        const scan = (nurVoll && isAbraeumMode(r.modus)) ? abraeumScan(b, r) : null;
+        for (let k = r.start; k < end; k += 1) {
+          if (scan && !(scan.before[k] && scan.before[k].count === 9)) continue;
+          out.push(w[k]);
+        }
+      });
     });
     return out;
   }
@@ -2068,11 +2129,20 @@ export function spielLaufendView() {
         .join('');
       modusRow = `<div class="wb-row"><span class="wb-row-lbl">Teilsatz</span><div class="wb-chips">${modChips}</div></div>`;
     }
+    // Bild-Zeile nur, wenn überhaupt abgeräumt wird — in reinen Volle-Programmen steht vor
+    // jedem Wurf das volle Bild, der Filter wäre wirkungslos.
+    let bildRow = '';
+    if (modi.some(isAbraeumMode)) {
+      const bildChips = chip('data-wb-bild', 'alle', wbBildFilter, 'Alle Würfe')
+        + chip('data-wb-bild', 'voll', wbBildFilter, 'Nur volles Bild');
+      bildRow = `<div class="wb-row"><span class="wb-row-lbl">Bild</span><div class="wb-chips">${bildChips}</div></div>`;
+    }
     return `
       <div class="wb-filter">
         <div class="wb-row"><span class="wb-row-lbl">Satz</span><div class="wb-chips">${satzChips}</div></div>
         ${bahnRow}
         ${modusRow}
+        ${bildRow}
       </div>`;
   }
 
@@ -2113,8 +2183,9 @@ export function spielLaufendView() {
         </div>`);
     }
     // Kopfzeile: bei aktivem Filter „X von Gesamt", sonst nur die Gesamtzahl.
+    const bildHinweis = wbBildFilter === 'voll' ? ' Nur Würfe auf das volle Bild.' : '';
     const kopf = wbFilterAktiv()
-      ? `<strong>${total}</strong> von ${gesamt} Würfen · Balken = Gesamt, gefüllt = Filter.`
+      ? `<strong>${total}</strong> von ${gesamt} Würfen · Balken = Gesamt, gefüllt = Filter.${bildHinweis}`
       : `${gesamt} Würfe erfasst · wie häufig welches Holz-Ergebnis fiel.`;
     return `
       <p class="ueber-edithint">${kopf}</p>
@@ -2545,6 +2616,8 @@ export function spielLaufendView() {
       b.addEventListener('click', () => { wbBahnFilter = b.dataset.wbBahn; wbSatzFilter = 'alle'; render(); }));
     root.querySelectorAll('[data-wb-teil]').forEach((b) =>
       b.addEventListener('click', () => { wbTeilFilter = b.dataset.wbTeil; render(); }));
+    root.querySelectorAll('[data-wb-bild]').forEach((b) =>
+      b.addEventListener('click', () => { wbBildFilter = b.dataset.wbBild; render(); }));
 
     // Klickbare Sortier-Kopfzellen der Übersicht (Bahn/Satz). Enter/Leertaste ebenso (role=button).
     root.querySelectorAll('[data-sort]').forEach((th) => {

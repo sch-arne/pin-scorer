@@ -21,7 +21,7 @@ const MODUS_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen':
 
 // Standard-Filter der Ansicht (Hub-State). Der aktive Tab (Statistik/Wurf-Bild) kommt vom
 // Umschalter im Hub und wird als `ui.tab` hereingereicht.
-export function leererAuswertungFilter() { return { bahn: ALLE, satz: ALLE, teil: ALLE }; }
+export function leererAuswertungFilter() { return { bahn: ALLE, satz: ALLE, teil: ALLE, bild: ALLE }; }
 
 // Eine Chip-Zeile der Filterleiste.
 function chipRow(label, attr, werte, cur, alleLabel) {
@@ -76,21 +76,42 @@ function reihe(titel, zeilen, praefix, skala, hinweis) {
     <div class="ueber-dist">${rows}</div>`;
 }
 
+// Räumer-Tempo einer Mannschaft: wie oft brauchte ein (Kranz-)Abräum-Lauf wie viele Würfe, bis
+// wieder das volle Bild stand? `skala` läuft über beide Tafeln (vergleichbare Balkenlängen).
+function raeumTempo(k, skala) {
+  const vert = k.raeumVert || [];
+  const max = vert.length - 1;
+  if (max < 1 || !k.raeumer) return '';
+  const rows = [];
+  for (let n = 1; n <= max; n += 1) {
+    const anz = vert[n] || 0;
+    const pct = k.raeumer ? Math.round((anz / k.raeumer) * 100) : 0;
+    rows.push(barRow(n, n === 1 ? 'Wurf' : 'Würfe', skala ? (anz / skala) * 100 : 0, anz, `${pct}%`, ` is-tempo${n === 1 ? ' is-neuner' : ''}`));
+  }
+  return `
+    <p class="mba-sub">Räumer-Tempo<small>${k.raeumer} Räumer · Ø ${k.raeumSchnitt.toFixed(1)} Würfe bis zum vollen Bild</small></p>
+    <div class="ueber-dist">${rows.join('')}</div>`;
+}
+
 // Wurf-Bild einer Mannschaft: wie häufig welches Holz-Ergebnis fiel (nur einzeln erfasste Würfe).
-function wurfBild(k, skala) {
-  if (!k.erfasst) {
-    return `<p class="ueber-dist-empty">Keine einzeln erfassten Würfe in dieser Auswahl.<br><span>Nur als Summe eingetragene Ergebnisse zählen hier nicht mit.</span></p>`;
+// `nurVoll` schaltet auf die Würfe am vollen Bild um (beim Abräumen der erste Wurf eines Laufs).
+function wurfBild(k, skala, nurVoll) {
+  const vert = nurVoll ? k.verteilungVoll : k.verteilung;
+  const summe = nurVoll ? k.erfasstVoll : k.erfasst;
+  if (!summe) {
+    return `<p class="ueber-dist-empty">Keine ${nurVoll ? 'Würfe auf das volle Bild' : 'einzeln erfassten Würfe'} in dieser Auswahl.<br><span>Nur als Summe eingetragene Ergebnisse zählen hier nicht mit.</span></p>`;
   }
   const rows = [];
   for (let v = 9; v >= 0; v -= 1) {
-    const n = k.verteilung[v];
-    const pct = k.erfasst ? Math.round((n / k.erfasst) * 100) : 0;
+    const n = vert[v];
+    const pct = summe ? Math.round((n / summe) * 100) : 0;
     const cls = v === 9 ? ' is-neuner' : v === 0 ? ' is-fehl' : '';
     const note = v === 9 ? '☆' : v === 0 ? 'Fehl' : '';
     rows.push(barRow(v, note, skala ? (n / skala) * 100 : 0, n, `${pct}%`, cls));
   }
+  const was = nurVoll ? 'Würfe auf das volle Bild' : 'erfasste Würfe';
   return `
-    <p class="mba-sub">Wurf-Bild<small>${k.erfasst} erfasste Würfe · gleiche Skala in beiden Mannschaften</small></p>
+    <p class="mba-sub">Wurf-Bild<small>${summe} ${was} · gleiche Skala in beiden Mannschaften</small></p>
     <div class="ueber-dist">${rows.join('')}</div>`;
 }
 
@@ -123,11 +144,17 @@ export function mannschaftAuswertungSection(wettkampf, stats, ui, kz) {
 
   // Filterleiste: Bahn · Satz · Teilsatz (Letzterer nur, wenn das Programm mehrere Modi kennt).
   const filter = { bahn: ui.bahn, satz: ui.satz, teil: ui.teil };
+  const hatAbraeumModus = opt.modi.some((m) => m === 'abraeumen' || m === 'kranz-abraeumen');
+  const nurVoll = ui.bild === 'voll';
   const rows = [
     chipRow('Bahn', 'data-mb-bahn', opt.bahnen.map((b) => ({ val: b, txt: `Bahn ${b}` })), ui.bahn, 'Alle Bahnen'),
     chipRow('Satz', 'data-mb-satz', opt.saetze.map((s) => ({ val: s, txt: `Satz ${s}` })), ui.satz, 'Alle Sätze'),
     opt.modi.length > 1
       ? chipRow('Teilsatz', 'data-mb-teil', opt.modi.map((m) => ({ val: m, txt: MODUS_LABEL[m] || m })), ui.teil, 'Alle')
+      : '',
+    // „Bild" nur, wenn abgeräumt wird — in der Volle steht vor jedem Wurf das volle Bild.
+    (hatAbraeumModus && ui.tab === 'wurfbild')
+      ? chipRow('Bild', 'data-mb-bild', [{ val: 'voll', txt: 'Nur volles Bild' }], ui.bild, 'Alle Würfe')
       : '',
   ].join('');
 
@@ -136,12 +163,14 @@ export function mannschaftAuswertungSection(wettkampf, stats, ui, kz) {
   const daten = teams.map((m) => ({ m, k: mannschaftAuswertung(einzel, m.id, filter, opt) }));
   const maxSchnittBahn = Math.max(1, ...daten.flatMap((d) => d.k.bahnen.map((b) => b.schnitt)));
   const maxSchnittSatz = Math.max(1, ...daten.flatMap((d) => d.k.satzReihe.map((s) => s.schnitt)));
-  const maxVert = Math.max(1, ...daten.flatMap((d) => d.k.verteilung));
+  const maxVert = Math.max(1, ...daten.flatMap((d) => (nurVoll ? d.k.verteilungVoll : d.k.verteilung)));
+  const maxRaeum = Math.max(1, ...daten.flatMap((d) => (d.k.raeumVert || []).map((n) => n || 0)));
 
   const cards = daten.map(({ m, k }, ti) => {
     const body = ui.tab === 'wurfbild'
-      ? wurfBild(k, maxVert)
+      ? wurfBild(k, maxVert, nurVoll)
       : `${kacheln(k, opt)}
+         ${raeumTempo(k, maxRaeum)}
          ${reihe('Bahn-Vergleich', k.bahnen, 'B', maxSchnittBahn, 'Ø Holz je Spieler und Satz')}
          ${reihe('Satz-Verlauf', k.satzReihe, 'S', maxSchnittSatz, 'Ø Holz je Spieler')}`;
     const mirror = facing && ti === 1;

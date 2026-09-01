@@ -10,6 +10,8 @@
 // verschiedenen Bahnen und mehrere Durchgänge laufen über dieselben Bahnen. Alle drei Filter sind
 // deshalb frei kombinierbar („Satz 1 auf Bahn 3, nur Volle").
 
+import { addRaeumVert } from './statistik.js';
+
 export const ALLE = 'alle';
 
 // Ein Filter, in dem nichts eingeschränkt ist.
@@ -68,7 +70,12 @@ function verdichte(list) {
   const starts = new Set();
   const satzSet = new Set();
   const verteilung = Array.from({ length: 10 }, () => 0);
-  let holz = 0; let wurfCount = 0; let erfasst = 0;
+  // Zweite Verteilung: nur die Würfe auf das VOLLE Bild (in der Volle alle, beim Abräumen der
+  // jeweils erste Wurf eines Laufs). Sie macht das Wurf-Bild zwischen Volle und Abräumen
+  // vergleichbar — Reste eines Abräum-Laufs verzerren die Verteilung sonst nach unten.
+  const verteilungVoll = Array.from({ length: 10 }, () => 0);
+  const raeumVert = [];
+  let holz = 0; let wurfCount = 0; let erfasst = 0; let erfasstVoll = 0;
   let neuner = 0; let fehl = 0; let kranz = 0;
   let raeumer = 0; let raeumWuerfe = 0; let vollChance = 0;
   list.forEach(({ p, satz, ts }) => {
@@ -81,13 +88,21 @@ function verdichte(list) {
     raeumer += ts.raeumer || 0;
     raeumWuerfe += ts.raeumWuerfe || 0;
     vollChance += ts.vollChance || 0;
-    (ts.wuerfe || []).forEach((w) => { if (w >= 0 && w <= 9) { verteilung[w] += 1; erfasst += 1; } });
+    addRaeumVert(raeumVert, ts.raeumVert);
+    const voll = ts.wuerfeVoll || [];
+    (ts.wuerfe || []).forEach((w, i) => {
+      if (w < 0 || w > 9) return;
+      verteilung[w] += 1; erfasst += 1;
+      if (voll[i]) { verteilungVoll[w] += 1; erfasstVoll += 1; }
+    });
   });
   return {
     holz,
     wurfCount,                                        // inkl. nur als Summe eingetragener Teilsätze
     erfasst,                                          // einzeln erfasste Würfe (Basis des Wurf-Bildes)
+    erfasstVoll,                                      // davon aus vollem Bild geworfen
     verteilung,
+    verteilungVoll,
     spieler: starts.size,
     saetze: satzSet.size,
     schnittSatz: satzSet.size ? holz / satzSet.size : 0,
@@ -99,6 +114,7 @@ function verdichte(list) {
     kranz,
     raeumer,
     raeumSchnitt: raeumer ? raeumWuerfe / raeumer : 0,
+    raeumVert,                                        // Index = Würfe je Räumer, Wert = Häufigkeit
   };
 }
 

@@ -141,3 +141,43 @@ test('filterAktiv erkennt jede gesetzte Dimension', () => {
   assert.equal(filterAktiv({ bahn: ALLE, satz: 1, teil: ALLE }), true);
   assert.equal(filterAktiv({ bahn: ALLE, satz: ALLE, teil: 'volle' }), true);
 });
+
+test('Räumer-Verteilung und Wurf-Bild am vollen Bild je Mannschaft', () => {
+  // Ein Durchgang, ein Spieler je Team, 1 Satz mit 2 Teilsätzen à 2 Würfe (Volle/Abräumen).
+  //   Anna (mA): Volle 9,7 · Abräumen 9 (Räumer in 1 Wurf), 6 (Lauf offen)
+  //   Ben  (mB): Volle 8,8 · Abräumen 4, 5 (Räumer in 2 Würfen)
+  const alle = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const bl = (wuerfe, kegel) => ({ wuerfe, kegel, koenig: wuerfe.map(() => false), overrides: [null, null], done: true });
+  const g = durchgang('g1',
+    [{ name: 'Anna', mannschaftId: 'mA', teamPos: 1 }, { name: 'Ben', mannschaftId: 'mB', teamPos: 1 }],
+    [
+      [bl([9, 7, 9, 6], [null, null, alle, [1, 2, 3, 4, 5, 6]])],
+      [bl([8, 8, 4, 5], [null, null, [1, 2, 3, 4], [5, 6, 7, 8, 9]])],
+    ],
+    [[1], [2]]);
+  g.config.saetze = 1;
+  const { einzel } = computeWettkampfStats(
+    { mannschaften: TEAMS, durchgaenge: [{ nr: 1, gameId: 'g1' }] }, [g]);
+
+  const a = mannschaftAuswertung(einzel, 'mA', leererFilter());
+  assert.equal(a.raeumer, 1);
+  assert.deepEqual(a.raeumVert, [0, 1]);            // ein Räumer mit einem Wurf
+  // Am vollen Bild: beide Volle-Würfe (9, 7) und beide Abräum-Lauf-Starts (9, 6).
+  assert.equal(a.erfasst, 4);
+  assert.equal(a.erfasstVoll, 4);
+  assert.equal(a.verteilungVoll[9], 2);
+  assert.equal(a.verteilungVoll[7], 1);
+  assert.equal(a.verteilungVoll[6], 1);
+
+  const b = mannschaftAuswertung(einzel, 'mB', leererFilter());
+  assert.equal(b.raeumer, 1);
+  assert.deepEqual(b.raeumVert, [0, 0, 1]);         // ein Räumer mit zwei Würfen
+  // Der 5er kam aus dem Restbild -> zählt nicht zum vollen Bild.
+  assert.equal(b.erfasst, 4);
+  assert.equal(b.erfasstVoll, 3);
+  assert.equal(b.verteilungVoll[8], 2);
+  assert.equal(b.verteilungVoll[4], 1);
+  assert.equal(b.verteilungVoll[5], 0);
+  // Invariante: die Würfe am vollen Bild sind genau die Gelegenheiten der 9er-Quote.
+  assert.equal(b.erfasstVoll, b.vollChance);
+});
