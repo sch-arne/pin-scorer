@@ -17,6 +17,7 @@ import {
 } from '../backend/sw-bruecke.js';
 import { lanePlan } from '../logic/bahnwechsel.js';
 import { teamUebersichtSection } from './wettkampf-teams.js';
+import { mannschaftAuswertungSection, leererAuswertungFilter } from './wettkampf-auswertung.js';
 import { istLizenzWettkampf } from '../logic/spieler-identitaet.js';
 import { esc, fehlerText } from '../util.js';
 import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
@@ -42,6 +43,15 @@ export function wettkampfHubView() {
   let zpollTimer = null;   // Zuschauer-Polling-Intervall (nur-lesen)
   let zpollSig = '';       // letzter Snapshot-Fingerabdruck (Flicker/Scroll-Reset vermeiden)
   let meKonto = null;      // eigener Account (auth.uid()) — fuer die "Das bin ich"-Markierung
+
+  // ── Hauptbereich: Durchgänge ODER Mannschafts-Auswertung ────────────────────
+  // Unter der Mannschafts-Übersicht schaltet eine Leiste zwischen den Durchgängen (Erfassen)
+  // und der Auswertung (Statistik / Wurf-Bild) um — beides zugleich würde die Seite unnötig
+  // lang machen. Start ist immer 'durchgaenge': das ist die Arbeitsansicht.
+  // Reiner Anzeige-Zustand (Ansicht + die drei Filter), nicht gespeichert und nicht gesynct —
+  // jedes Gerät wählt für sich. Ein Klick setzt den Wert und rendert neu.
+  let hubAnsicht = 'durchgaenge';           // 'durchgaenge' | 'statistik' | 'wurfbild'
+  let auswertungFilter = leererAuswertungFilter(); // { bahn, satz, teil }
 
   // ── Sportwinner-Rückschreiben (nur Vereins-PC) ───────────────────────────────
   // Ist der Wettkampf aus Sportwinner importiert UND wurde die App von der Brücke mit
@@ -200,7 +210,7 @@ export function wettkampfHubView() {
     root.classList.toggle('view-kontrollzentrum', kz);
     root.classList.toggle('is-zuschauer', zuschauer);
     root.innerHTML = template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer,
-      ichSlotOf(wettkampf, games));
+      ichSlotOf(wettkampf, games), { ...auswertungFilter, tab: hubAnsicht });
     wire(wettkampf, games, zuschauer);
     paintSw(); // gehaltenen Brücken-Status ins frisch gerenderte DOM malen
     konfliktPanel.paint(); // offene Konflikte ins frisch gerenderte DOM malen
@@ -484,6 +494,21 @@ export function wettkampfHubView() {
     // ist immer aktiv — auch im Zuschauer-Modus.
     root.querySelectorAll('[data-open]').forEach((b) =>
       b.addEventListener('click', () => { setActiveGame(b.dataset.open); navigate('/spiel-laufend'); }));
+    // Ansichts-Leiste (Durchgänge / Statistik / Wurf-Bild) und die drei Auswertungs-Filter.
+    // Reine Anzeige — deshalb VOR dem Zuschauer-Abbruch verdrahtet; ein Zuschauer darf genauso
+    // umschalten und filtern. 'alle' bleibt Zeichenkette, Bahn/Satz werden zu Zahlen (so liegen
+    // sie in den Statistik-Daten). Ein Klick setzt nur den View-State und rendert neu.
+    const wert = (v) => (v === 'alle' ? 'alle' : parseInt(v, 10));
+    const setFilter = (patch) => { auswertungFilter = { ...auswertungFilter, ...patch }; render(); };
+    root.querySelectorAll('[data-hubansicht]').forEach((b) =>
+      b.addEventListener('click', () => { hubAnsicht = b.dataset.hubansicht; render(); }));
+    root.querySelectorAll('[data-mb-bahn]').forEach((b) =>
+      b.addEventListener('click', () => setFilter({ bahn: wert(b.dataset.mbBahn) })));
+    root.querySelectorAll('[data-mb-satz]').forEach((b) =>
+      b.addEventListener('click', () => setFilter({ satz: wert(b.dataset.mbSatz) })));
+    root.querySelectorAll('[data-mb-teil]').forEach((b) =>
+      b.addEventListener('click', () => setFilter({ teil: b.dataset.mbTeil })));
+
     // Zuschauer-Modus: keine Bearbeitungs-Handler binden; Aufstellungs-Felder sperren.
     if (zuschauer) {
       root.querySelectorAll('.roster-name, .roster-lane').forEach((el) => { el.disabled = true; });
@@ -741,7 +766,7 @@ function brueckeRow(wettkampf) {
       : 'Die Übertragung nach Sportwinner läuft über den Vereins-PC, der die Brücke ausführt.'}</p>`;
 }
 
-function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichSlot) {
+function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichSlot, ansichtUi) {
   const metaLine = [
     wettkampf.datum ? new Date(wettkampf.datum).toLocaleDateString('de-DE') : '',
     wettkampf.anlageName || '',
@@ -792,17 +817,37 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichS
       + 'markieren — nur dieses Ergebnis zaehlt dann in deine Statistik.',
   });
 
+  // Umschalter unter der Mannschafts-Übersicht: Durchgänge (Arbeitsansicht) ODER die
+  // Auswertung — Kennzahlen + Wurf-Bild je Mannschaft, filterbar nach Bahn/Satz/Teilsatz.
+  // Auch im Zuschauer-Modus nutzbar (reine Anzeige, nichts zu bearbeiten).
+  const ansicht = ansichtUi.tab;
+  const ansichtBtn = (id, label) =>
+    `<button type="button" role="tab" aria-selected="${ansicht === id}" class="ueber-tab${ansicht === id ? ' is-active' : ''}" data-hubansicht="${id}">${label}</button>`;
+  const secSwitch = `
+      <div class="wk-hub-switch ueber-tabs" role="tablist" aria-label="Ansicht">
+        ${ansichtBtn('durchgaenge', 'Durchgänge')}
+        ${ansichtBtn('statistik', 'Statistik')}
+        ${ansichtBtn('wurfbild', 'Wurf-Bild')}
+      </div>`;
+  const secAuswertung = ansicht === 'durchgaenge'
+    ? '' : mannschaftAuswertungSection(wettkampf, stats, ansichtUi, kz);
+  const secDurchAktiv = ansicht === 'durchgaenge' ? secDurch : '';
+
   // Kontrollzentrum (Vereins-PC): oben über die ganze Breite die Mannschafts-Übersicht — bei zwei
   // Mannschaften stehen sie sich gegenüber (Zahlen zur Mitte). Darunter der Arbeitsbereich: links
   // die kompakten Durchgänge, rechts Mehrgeräte/Sportwinner und das OBS-Overlay. Die Spalten-Wrapper
   // lösen sich auf schmalen Schirmen per CSS (display:contents) auf. Das OBS-Overlay ist eine
   // Desktop-/Vereins-PC-Funktion (Livestream läuft dort) — daher nur im Kontrollzentrum-Layout.
   const secOverlay = (kz && !zuschauer) ? overlaySection(wettkampf) : '';
+  // Im Kontrollzentrum bleibt die Spaltenaufteilung stabil: die Auswertung läuft (wie die
+  // Mannschafts-Übersicht) über die ganze Breite, darunter der Arbeitsbereich. Der kz-main-
+  // Wrapper steht auch leer im Raster, damit die Seitenspalte rechts bleibt und nicht nach
+  // links rutscht.
   const inner = kz
-    ? `${secTeam}
-       <div class="kz-main">${secDurch}</div>
+    ? `${secTeam}${secSwitch}${secAuswertung}
+       <div class="kz-main">${secDurchAktiv}</div>
        <div class="kz-side">${secMehr}${secOverlay}</div>`
-    : `${secTeam}${secDurch}${secMehr}`;
+    : `${secTeam}${secSwitch}${secAuswertung}${secDurchAktiv}${secMehr}`;
 
   return `
     <header class="page-header wk-hub-header">

@@ -5,6 +5,62 @@
 import { satzHolz } from './holz.js';
 import { isAbraeumMode, abraeumScan, volleKranz } from './abraeumen.js';
 
+// Kennzahlen EINES Teilsatzes (ein ranges-Bereich in einem Satz-Block). Das ist die feinste
+// Ebene der Auswertung: die Spieler-Werte weiter unten sind schlicht die Summe darüber, und die
+// Mannschafts-Auswertung (logic/mannschaft-statistik.js) filtert genau hier nach Bahn/Satz/
+// Teilsatz. Ein manuell eingetragenes Ergebnis (Override) liefert Holz und volle Wurfzahl, aber
+// keine Einzelwürfe — Verteilung, 9er, Kränze usw. bleiben dort leer.
+//   blk: Satz-Block, r: ranges-Eintrag { start, end, soll, modus }, ov: overrides[i] (oder null)
+function teilsatzMetrik(blk, r, ov) {
+  const bw = Array.isArray(blk.wuerfe) ? blk.wuerfe : [];
+  const wuerfe = bw.slice(r.start, r.end);
+  const manual = ov != null;
+  const abraeum = isAbraeumMode(r.modus);
+  const end = Math.min(r.end, bw.length);
+  // Abräum-Lauf einmal scannen: liefert Kranz-Treffer und den Bild-Zustand vor jedem Wurf.
+  const scan = abraeum ? abraeumScan(blk, r) : null;
+  let kranz = 0;
+  let raeumer = 0;      // vollständig abgeräumte Läufe
+  let raeumWuerfe = 0;  // dafür benötigte Würfe (Ø Würfe/Räumer = Tempo)
+  let vollChance = 0;   // Würfe aus vollem Bild (Nenner der 9er-Quote)
+  let runLen = 0;
+  for (let k = r.start; k < end; k += 1) {
+    const hit = scan ? !!scan.kranzAt[k] : (r.modus === 'volle' && volleKranz(blk, k));
+    if (hit) kranz += 1;
+    if (!scan) continue;
+    if (scan.before[k] && scan.before[k].count === 9) vollChance += 1;
+    runLen += 1;
+    const after = scan.before[k + 1]; // Zustand VOR dem Folgewurf = Zustand NACH Wurf k
+    // Ein frischer Lauf (volles Bild) direkt nach dem Wurf heißt: der Lauf wurde abgeräumt.
+    if (after && after.count === 9 && after.exact === true && after.picked === false) {
+      raeumer += 1; raeumWuerfe += runLen; runLen = 0;
+    }
+  }
+  // In der Volle steht vor JEDEM Wurf das volle Bild.
+  if (r.modus === 'volle') vollChance = Math.max(0, end - r.start);
+  return {
+    modus: r.modus,
+    manual,
+    wuerfe,                                        // einzeln erfasste Würfe (leer bei Override)
+    soll: r.soll,
+    holz: manual ? ov : wuerfe.reduce((a, w) => a + w, 0),
+    // Ein manuell eingetragenes Ergebnis zählt als vollständiger Teilsatz (Soll-Würfe), sonst
+    // die tatsächlich erfassten Würfe. So steigt "Würfe" auch bei reinen Summen-Eingaben.
+    wurfCount: manual ? r.soll : wuerfe.length,
+    neuner: wuerfe.filter((w) => w === 9).length,  // Maximalwürfe (Alle Neune / voller Abräumer)
+    fehl: wuerfe.filter((w) => w === 0).length,    // Fehlwürfe (kein Kegel getroffen)
+    kranz,                                          // nur König 5 blieb stehen
+    raeumer,
+    raeumWuerfe,
+    vollChance,
+  };
+}
+
+// Summe eines Teilsatz-Feldes über eine Liste von Teilsätzen (nur die, die `pick` zulässt).
+function sumTs(list, feld, pick) {
+  return list.reduce((s, ts) => s + ((!pick || pick(ts)) ? (ts[feld] || 0) : 0), 0);
+}
+
 // Auswertung eines (beendeten) Spiels.
 //   config:  game.config  (spielerListe, saetze, bahnplan, ersteBahn, wuerfeProSatz …)
 //   bloecke: erfassung.bloecke  (je Spieler ein Array von Satz-Blöcken)
@@ -15,16 +71,8 @@ export function computeGameStats(config, bloecke, ranges) {
   const players = config.spielerListe.map((sp, i) => {
     const arr = Array.isArray(bloecke[i]) ? bloecke[i] : [];
     const saetze = arr.map((blk, st) => {
-      const blkWuerfe = Array.isArray(blk.wuerfe) ? blk.wuerfe : [];
       const overrides = Array.isArray(blk.overrides) ? blk.overrides : [];
-      // Einzelwürfe je Teilsatz — nur die tatsächlich ERFASSTEN Würfe (leer, wenn ein Teilsatz nur
-      // als Summe/Override eingetragen wurde). So kann der View die gefallenen Kegel je Wurf zeigen,
-      // sofern sie einzeln erfasst wurden.
-      const teilsaetze = ranges.map((r, ti) => ({
-        modus: r.modus,
-        manual: overrides[ti] != null,
-        wuerfe: blkWuerfe.slice(r.start, r.end),
-      }));
+      const teilsaetze = ranges.map((r, ti) => teilsatzMetrik(blk, r, overrides[ti]));
       return {
         satz: st + 1,
         bahn: config.bahnplan?.[i]?.[st] ?? (config.ersteBahn + st),
@@ -32,73 +80,18 @@ export function computeGameStats(config, bloecke, ranges) {
         teilsaetze,
       };
     });
+    // Alle Teilsätze des Spielers am Stück — die Spieler-Kennzahlen sind ihre Summe.
+    const alleTs = saetze.flatMap((s) => s.teilsaetze);
     const gesamt = saetze.reduce((s, x) => s + x.holz, 0);
     // Abräum-Holz je Spieler: Summe der Teilsätze im Abräum-Modus (Abräumen / Kranz-Abräumen)
     // über alle Sätze. Dient u. a. als Feinwertung (z. B. EWP-Gleichstand innerhalb einer
     // Mannschaft) — bei reinen Volle-Programmen (Bohle) bleibt es 0.
-    const abraeum = arr.reduce((tot, b) => tot + ranges.reduce((s, r, i) => {
-      if (!isAbraeumMode(r.modus)) return s;
-      const ov = Array.isArray(b.overrides) ? b.overrides[i] : null;
-      const val = ov != null ? ov : (Array.isArray(b.wuerfe) ? b.wuerfe.slice(r.start, r.end).reduce((a, w) => a + w, 0) : 0);
-      return s + val;
-    }, 0), 0);
-    const wuerfe = arr.flatMap((b) => (Array.isArray(b.wuerfe) ? b.wuerfe : []));
-    // Kränze je Spieler — deckungsgleich mit der ♔-Markierung an den Wurf-Chips: im Kranz-
-    // Abräumen aus dem Lauf-Scan (Wurf lässt nur den König 5 stehen), in der Volle über
-    // volleKranz (eine 8, die genau den König übrig lässt). Nur einzeln erfasste Würfe können
-    // ein Kranz sein; rein als Summe eingetragene Ergebnisse liefern keine Kegelbilder.
-    const kranz = arr.reduce((tot, b) => {
-      const bw = Array.isArray(b.wuerfe) ? b.wuerfe : [];
-      return tot + ranges.reduce((s, r) => {
-        const end = Math.min(r.end, bw.length);
-        const scan = isAbraeumMode(r.modus) ? abraeumScan(b, r) : null;
-        let c = 0;
-        for (let k = r.start; k < end; k += 1) {
-          const hit = scan ? !!scan.kranzAt[k] : (r.modus === 'volle' && volleKranz(b, k));
-          if (hit) c += 1;
-        }
-        return s + c;
-      }, 0);
-    }, 0);
-    // Abräum-Tempo & Neuner-Quote am vollen Bild — ein Durchlauf je Block über alle Teilsätze.
-    //   raeumer / raeumWuerfe: vollständig abgeräumte Läufe und die dafür benötigten Würfe
-    //     (Ø Würfe/Räumer = wie schnell ein volles Bild weggeräumt wird; ein 9er-Räumer = 1 Wurf).
-    //   vollChance: Würfe aus vollem Bild — in der Volle jeder Wurf, im Abräumen nur solange alle 9
-    //     standen (Lauf-Beginn). Nenner der Neuner-Quote: ein 9er setzt ein volles Bild voraus,
-    //     deshalb ist der Zähler schlicht die Gesamt-Neunerzahl.
-    let raeumer = 0;
-    let raeumWuerfe = 0;
-    let vollChance = 0;
-    arr.forEach((b) => {
-      const bw = Array.isArray(b.wuerfe) ? b.wuerfe : [];
-      ranges.forEach((r) => {
-        const end = Math.min(r.end, bw.length);
-        if (isAbraeumMode(r.modus)) {
-          const scan = abraeumScan(b, r);
-          let runLen = 0;
-          for (let k = r.start; k < end; k += 1) {
-            if (scan.before[k] && scan.before[k].count === 9) vollChance += 1;
-            runLen += 1;
-            const after = scan.before[k + 1]; // Zustand VOR dem Folgewurf = Zustand NACH Wurf k
-            // Ein frischer Lauf (volles Bild) direkt nach dem Wurf heißt: der Lauf wurde abgeräumt.
-            if (after && after.count === 9 && after.exact === true && after.picked === false) {
-              raeumer += 1; raeumWuerfe += runLen; runLen = 0;
-            }
-          }
-        } else if (r.modus === 'volle') {
-          vollChance += Math.max(0, end - r.start);
-        }
-      });
-    });
-    const neuner = wuerfe.filter((w) => w === 9).length; // Maximalwürfe (Alle Neune / voller Abräumer)
-    // Wurfzahl je Teilsatz: manuell eingetragenes Ergebnis (Override) zählt als voller Teilsatz
-    // (Soll-Würfe), sonst die tatsächlich erfassten Würfe im Teilsatz-Bereich. So steigt "Würfe"
-    // auch, wenn Ergebnisse nur als Summe (ohne Einzelwürfe) über die Übersicht eingetragen wurden.
-    const wurfCount = arr.reduce((tot, b) => tot + ranges.reduce((s, r, i) => {
-      const manual = Array.isArray(b.overrides) && b.overrides[i] != null;
-      const actual = (Array.isArray(b.wuerfe) ? b.wuerfe.slice(r.start, r.end) : []).length;
-      return s + (manual ? r.soll : actual);
-    }, 0), 0);
+    const abraeum = sumTs(alleTs, 'holz', (ts) => isAbraeumMode(ts.modus));
+    const wurfCount = sumTs(alleTs, 'wurfCount');
+    const neuner = sumTs(alleTs, 'neuner');
+    const vollChance = sumTs(alleTs, 'vollChance');
+    const raeumer = sumTs(alleTs, 'raeumer');
+    const raeumWuerfe = sumTs(alleTs, 'raeumWuerfe');
     return {
       index: i,
       name: sp.name || ('Spieler ' + (i + 1)),
@@ -111,8 +104,8 @@ export function computeGameStats(config, bloecke, ranges) {
       wurfCount,
       neuner,                                         // Maximalwürfe (Alle Neune / voller Abräumer)
       neunerQuote: vollChance ? neuner / vollChance : 0, // Anteil 9er an Würfen aus vollem Bild
-      fehl: wuerfe.filter((w) => w === 0).length,    // Fehlwürfe (kein Kegel getroffen)
-      kranz,                                          // Kränze (nur König 5 blieb stehen)
+      fehl: sumTs(alleTs, 'fehl'),                    // Fehlwürfe (kein Kegel getroffen)
+      kranz: sumTs(alleTs, 'kranz'),                  // Kränze (nur König 5 blieb stehen)
       raeumer,                                        // vollständig abgeräumte Läufe
       raeumSchnitt: raeumer ? raeumWuerfe / raeumer : 0, // Ø Würfe je Räumer (Tempo)
       vollChance,                                     // Würfe aus vollem Bild (Nenner der Quote)
