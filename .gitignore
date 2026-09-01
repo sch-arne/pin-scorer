@@ -7,3 +7,7 @@ js/backend/config.local.js
 
 # Lokaler Sportwinner-Test-Roster (nicht deployen)
 roster.json
+
+# Lokale Overlay-Vorschau (Standbild der eigenen Bahn + Testharness, nicht deployen)
+_ov_preview.html
+_ov_bg.jpg

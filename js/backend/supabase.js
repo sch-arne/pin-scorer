@@ -12,14 +12,28 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.112';
 
-// Lokaler Config-Override fuer die Entwicklung: Nur auf localhost/127.0.0.1 wird
-// versucht, eine git-ignorierte ./config.local.js zu laden (z. B. mit den Werten
-// einer separaten Test-Datenbank). In Produktion existiert die Datei nicht — der
-// Import scheitert still und die Produktionswerte unten greifen.
+// Lokaler Config-Override fuer die Entwicklung: Auf einem ENTWICKLUNGS-Host wird versucht,
+// eine git-ignorierte ./config.local.js zu laden (die Werte der separaten Test-Datenbank).
+// In Produktion (GitHub Pages) existiert die Datei nicht — der Import scheitert still und
+// die Produktionswerte unten greifen.
+//
+// Als Entwicklungs-Host zaehlt NICHT nur localhost, sondern auch eine private LAN-Adresse.
+// Grund: der Zwei-Geraete-Test laeuft ueber die LAN-IP des Dev-Rechners (das Handy erreicht
+// kein localhost). Mit der alten localhost-Pruefung sprach genau dieser Test unbemerkt gegen
+// die PRODUKTIONS-Datenbank — inklusive aller Schreibvorgaenge und mit Fehlern, sobald der
+// Code eine Spalte nutzt, die dort noch nicht migriert ist.
 // WICHTIG: Das Top-Level-await funktioniert nur, weil dieses Modul ausschliesslich
 // LAZY (per dynamischem import()) geladen wird — siehe Kopf-Kommentar.
+function istEntwicklungsHost(host) {
+  if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(host)) return true;
+  if (/\.local$/i.test(host)) return true;                       // mDNS (macbook.local)
+  if (/^10\./.test(host)) return true;                           // 10.0.0.0/8
+  if (/^192\.168\./.test(host)) return true;                     // 192.168.0.0/16
+  return /^172\.(1[6-9]|2\d|3[01])\./.test(host);                // 172.16.0.0/12
+}
+
 let _override = {};
-if (['localhost', '127.0.0.1'].includes(location.hostname)) {
+if (istEntwicklungsHost(location.hostname)) {
   try {
     _override = await import('./config.local.js');
   } catch {
@@ -35,6 +49,11 @@ export const SUPABASE_ANON_KEY =
 
 if (_override.SUPABASE_URL) {
   console.info('[supabase] Lokale Config aktiv (Test-DB):', _override.SUPABASE_URL);
+} else if (istEntwicklungsHost(location.hostname)) {
+  // Dev-Host ohne config.local.js: alles laeuft gegen die PRODUKTIONS-DB. Das ist beim
+  // Testen fast nie gewollt und war bisher nicht zu erkennen.
+  console.warn('[supabase] Entwicklungs-Host OHNE config.local.js — es wird die '
+    + 'PRODUKTIONS-Datenbank benutzt:', SUPABASE_URL);
 }
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {

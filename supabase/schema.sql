@@ -296,3 +296,46 @@ begin
   begin execute 'alter publication supabase_realtime add table spiel';          exception when duplicate_object then null; end;
   begin execute 'alter publication supabase_realtime add table wettkampf';       exception when duplicate_object then null; end;
 end $$;
+
+-- --- Spieler-Identität: wer ist WER in einem Spiel? --------------------------
+-- Bisher trug NUR spiel_ergebnis.passnummer die LizenzID — und die wird erst bei
+-- Spielende geschrieben. Für die Anonymisierung (Trigger, siehe policies.sql) und für
+-- die Zuordnung „dieser Slot bin ich" braucht die Aufstellung sie ab dem Anlegen.
+--
+-- WICHTIG (Datenschutz): spiel_spieler wird von KEINER Zuschauer-/Overlay-RPC
+-- ausgeliefert (spiel_zuschauer/wettkampf_zuschauer geben nur id/position/name/start_bahn
+-- zurück). Die LizenzID liegt damit ausschließlich hinter der RLS — anders als bisher,
+-- wo sie über wettkampf.config_json.sportwinner an `anon` durchgereicht wurde.
+alter table spiel_spieler add column if not exists passnummer text;
+create index if not exists idx_spiel_spieler_passnummer on spiel_spieler(passnummer);
+
+-- Wer hat die Ergebniszeile ERFASST (Gerät/Account des Schreibers) — getrennt von
+-- profil_id, das ab jetzt ausschließlich „das bin ICH als Spieler" bedeutet. Vorher
+-- stand in profil_id der Erfasser, wodurch alle mit erfassten Gegner/Mitspieler in
+-- der eigenen Account-Statistik landeten.
+alter table spiel_ergebnis add column if not exists erfasst_von uuid references auth.users(id) on delete set null;
+create index if not exists idx_spiel_ergebnis_erfasst_von on spiel_ergebnis(erfasst_von);
+
+-- Zeitstempel der serverseitigen Anonymisierung bei Spielende (macht den Trigger
+-- pins_spiel_anonymisieren idempotent; siehe policies.sql).
+alter table spiel add column if not exists anonymisiert_am timestamptz;
+
+-- --- MIGRATION (einmalig) — profil_id war der ERFASSER -----------------------
+-- Alt-Daten: pushResults setzte profil_id für JEDEN vom Gerät gesteuerten Spieler auf
+-- das eigene Konto. Diese Bedeutung zieht auf erfasst_von um; profil_id behält die
+-- Zuordnung nur dort, wo sie über die LizenzID belegbar ist (passnummer der Zeile =
+-- passnummer des verknüpften Profils). Alles übrige wird gelöst — nicht auflösbare
+-- Zuordnungen lassen sich in den Statistiken per RPC ergebnis_mir_zuordnen nachtragen.
+update spiel_ergebnis
+   set erfasst_von = profil_id
+ where erfasst_von is null and profil_id is not null;
+
+update spiel_ergebnis e
+   set profil_id = null
+ where e.profil_id is not null
+   and not exists (
+     select 1 from profil p
+      where p.id = e.profil_id
+        and p.passnummer is not null
+        and p.passnummer = e.passnummer
+   );

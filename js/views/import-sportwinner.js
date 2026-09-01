@@ -13,6 +13,7 @@ import { navigate, currentQuery } from '../router.js';
 import { esc } from '../util.js';
 import { parseRoster, parseBahnen, teamLanesByBahnart } from '../logic/roster-import.js';
 import { buildWettkampf } from '../logic/wettkampf-build.js';
+import { ichSlotAusRoster } from '../logic/spieler-identitaet.js';
 import { planDurchgaenge } from '../logic/wettkampf.js';
 import { divisors, nearestDivisor, throwsPerPart } from '../logic/teilsaetze.js';
 import { MODI, BAHNWECHSEL, PRESETS, ART_LABEL } from '../logic/sportkegeln-presets.js';
@@ -76,6 +77,8 @@ export function importSportwinnerView() {
     newBahnenText: '',     // Bahnen-Eingabe für die neue Anlage (z. B. "2-5")
     playedLanes: [],       // aktuell bespielte Bahnnummern
     autoMatched: false,    // Best-Treffer schon einmal automatisch gesetzt?
+    ichSlot: null,         // "<mannschaftId>|<teamPos>" der eigenen LizenzID in dieser
+                           // Aufstellung — rein lokale Markierung, siehe erkenneIch()
   };
 
   function setPhase(p) { state.phase = p; render(); }
@@ -138,11 +141,25 @@ export function importSportwinnerView() {
       const auth = await import('../backend/auth.js');
       const user = await auth.currentUser();
       state.darfAnlegen = auth.isPermanent(user);
+      if (state.darfAnlegen) await erkenneIch(auth);
     } catch (e) {
       state.darfAnlegen = false;
     }
     state.authChecked = true;
     render();
+  }
+
+  // „Das bin ich" automatisch bestimmen: steht die im Profil hinterlegte LizenzID in dieser
+  // Aufstellung, wird der zugehörige Wettkampf-Slot vorgemerkt. Daraus leitet sich später je
+  // Durchgang ab, WELCHE Ergebniszeile dem eigenen Account zugeordnet wird — alle übrigen
+  // bleiben neutral und landen damit nicht in der eigenen Statistik. Rein lokal: ichSlot wird
+  // nicht in die DB gespiegelt (siehe sync.js wettkampfConfigFuerDb).
+  async function erkenneIch(auth) {
+    if (!state.spec) return;
+    try {
+      const profil = await auth.getProfil();
+      state.ichSlot = ichSlotAusRoster(state.spec.sportwinner, profil && profil.passnummer);
+    } catch (e) { state.ichSlot = null; }
   }
 
   // Bestehende Anlagen laden und (einmalig) den Best-Treffer vorwählen.
@@ -357,6 +374,10 @@ export function importSportwinnerView() {
         sportwinner: spec.sportwinner,
       });
 
+      // „Das bin ich" (aus der eigenen LizenzID erkannt) an den Wettkampf hängen: darüber
+      // bekommt beim Spielende genau EINE Ergebniszeile je Durchgang die eigene profil_id.
+      if (state.ichSlot) wettkampf.ichSlot = state.ichSlot;
+
       games.forEach((g) => saveGame(g));
       saveWettkampf(wettkampf);
       setActiveWettkampf(wettkampf.id);
@@ -367,6 +388,9 @@ export function importSportwinnerView() {
       const { remoteId } = await sync.linkWettkampf(wettkampf, games);
       const { wettkampf: fresh, games: freshGames } = await sync.pullWettkampf(remoteId);
       deleteWettkampf(wettkampf.id);
+      // ichSlot reist bewusst NICHT über die DB (rein lokale Markierung) — nach dem Pull
+      // wieder aufsetzen, sonst ginge sie beim Ersetzen der lokalen Kopie verloren.
+      if (state.ichSlot) fresh.ichSlot = state.ichSlot;
       freshGames.forEach((g) => saveGame(g));
       saveWettkampf(fresh);
       setActiveWettkampf(fresh.id);
@@ -489,13 +513,16 @@ function stepper(field, value, min) {
     </div>`;
 }
 
-function teamBlock(m) {
-  const rows = (m.spieler || []).map((p) => `
-    <div class="player-row">
+function teamBlock(m, ichSlot) {
+  const rows = (m.spieler || []).map((p) => {
+    const ich = !!ichSlot && ichSlot === `${m.id}|${p.teamPos}`;
+    return `
+    <div class="player-row${ich ? ' is-ich' : ''}">
       <span class="player-idx">${p.teamPos}</span>
-      <span class="player-name">${esc(p.name || '—')}</span>
+      <span class="player-name">${esc(p.name || '—')}${ich ? ' <small class="rank-team">★ das bist du</small>' : ''}</span>
       ${p.pass ? `<small class="rank-team">Pass ${esc(p.pass)}</small>` : ''}
-    </div>`).join('') || '<p class="field-hint">Keine Aufstellung.</p>';
+    </div>`;
+  }).join('') || '<p class="field-hint">Keine Aufstellung.</p>';
   return `
     <div class="roster-team">
       <h3 class="section-label">${esc(m.name)}</h3>
@@ -637,7 +664,14 @@ function previewBody(s) {
 
     <section class="field">
       <label class="field-label">Mannschaften & Aufstellung <small class="field-note">· aus Sportwinner</small></label>
-      ${spec.mannschaften.map(teamBlock).join('')}
+      ${spec.mannschaften.map((m) => teamBlock(m, s.ichSlot)).join('')}
+      <p class="field-hint">${s.ichSlot
+        ? '★ Deine LizenzID wurde in der Aufstellung erkannt — nur diese Ergebnisse zählen in deine Statistik.'
+        : 'ℹ Hinterlege deine LizenzID unter „Spieler", damit deine eigenen Ergebnisse automatisch in deiner Statistik landen.'}</p>
+      <p class="field-hint">🔒 Datenschutz: Die Namen werden bis zum Spielende an die verbundenen
+        Geräte und Zuschauer übertragen und danach automatisch anonymisiert — dann steht dort
+        der öffentliche Anzeigename des jeweiligen Profils, sonst „Mannschaft + Position".
+        LizenzIDen verlassen dieses Gerät nicht im Klartext.</p>
     </section>
 
     <section class="field field-readout">

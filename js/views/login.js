@@ -263,7 +263,12 @@ async function renderLoggedIn(auth, body, user) {
     try {
       await auth.saveProfil(felder);
       msg.textContent = '✓ Gespeichert.';
-      if (setzePass) { renderLoggedIn(auth, body, user); } // Feld ab jetzt gesperrt zeigen
+      if (setzePass) {
+        // sync.js cacht die LizenzID (meinePassnummer) — nach dem erstmaligen Setzen
+        // verwerfen, damit die Auto-Zuordnung „das bin ich" sofort greift.
+        try { (await import('../backend/sync.js')).resetPassCache(); } catch (e) { /* egal */ }
+        renderLoggedIn(auth, body, user); // Feld ab jetzt gesperrt zeigen
+      }
     } catch (e) {
       const t = errText(e);
       msg.textContent = /geändert werden|set_once|nur einmalig/i.test(t)
@@ -349,7 +354,13 @@ async function renderDevices(host) {
 // --- Konto löschen (Danger-Zone, Zwei-Schritt-Bestätigung) -------------------
 
 function renderDanger(auth, host, msg) {
-  host.innerHTML = '<button type="button" id="acc-delete" class="acc-link acc-link-danger">Konto löschen</button>';
+  host.innerHTML = `
+    <p class="acc-hint">🔒 <strong>Datenschutz.</strong> Namen aus einer Sportwinner-Aufstellung werden nur
+      bis zum Spielende an die verbundenen Geräte und Zuschauer übertragen. Danach ersetzt der Server sie
+      automatisch: durch den öffentlichen <em>Anzeigenamen</em> des Profils, wenn die LizenzID des Spielers
+      dort hinterlegt ist — sonst durch „Mannschaft + Position". LizenzIDen sind nie öffentlich abrufbar.
+      Beim Löschen des Kontos werden auch deine Ergebnisse in fremd erfassten Spielen entfernt.</p>
+    <button type="button" id="acc-delete" class="acc-link acc-link-danger">Konto löschen</button>`;
   host.querySelector('#acc-delete').addEventListener('click', () => {
     host.innerHTML = `
       <p class="acc-hint acc-warn">⚠️ Dein Konto wird <strong>unwiderruflich</strong> gelöscht — inklusive aller

@@ -17,7 +17,8 @@ import {
 } from '../backend/sw-bruecke.js';
 import { lanePlan } from '../logic/bahnwechsel.js';
 import { teamUebersichtSection } from './wettkampf-teams.js';
-import { esc } from '../util.js';
+import { istLizenzWettkampf } from '../logic/spieler-identitaet.js';
+import { esc, fehlerText } from '../util.js';
 import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
 
 const STATUS_LBL = { vorbereitung: 'Vorbereitung', laufend: 'Läuft', offen: 'Offen', fertig: 'Fertig' };
@@ -40,6 +41,7 @@ export function wettkampfHubView() {
   let syncMsg = '';        // Statuszeile der Mehrgeräte-Sektion
   let zpollTimer = null;   // Zuschauer-Polling-Intervall (nur-lesen)
   let zpollSig = '';       // letzter Snapshot-Fingerabdruck (Flicker/Scroll-Reset vermeiden)
+  let meKonto = null;      // eigener Account (auth.uid()) — fuer die "Das bin ich"-Markierung
 
   // ── Sportwinner-Rückschreiben (nur Vereins-PC) ───────────────────────────────
   // Ist der Wettkampf aus Sportwinner importiert UND wurde die App von der Brücke mit
@@ -197,7 +199,8 @@ export function wettkampfHubView() {
     if (!zuschauer) reconcileWettkampfStatus(wettkampf, games);
     root.classList.toggle('view-kontrollzentrum', kz);
     root.classList.toggle('is-zuschauer', zuschauer);
-    root.innerHTML = template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer);
+    root.innerHTML = template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer,
+      ichSlotOf(wettkampf, games));
     wire(wettkampf, games, zuschauer);
     paintSw(); // gehaltenen Brücken-Status ins frisch gerenderte DOM malen
     konfliktPanel.paint(); // offene Konflikte ins frisch gerenderte DOM malen
@@ -229,6 +232,59 @@ export function wettkampfHubView() {
         cell.style.fontSize = `${size}px`;
       }
     });
+  }
+
+  // ── „Das bin ich" ───────────────────────────────────────────────────────────
+  // Welcher Wettkampf-Slot ("<mannschaftId>|<teamPos>") ist als eigener markiert?
+  // Zwei Quellen, beide gleichwertig:
+  //   * wettkampf.ichSlot — rein lokal, beim Sportwinner-Import aus der eigenen LizenzID erkannt,
+  //   * spiel_spieler.profil_id — serverseitig, gilt GERÄTEÜBERGREIFEND und ist der Weg, über
+  //     den sich ein Mitspieler selbst markiert, der den Wettkampf nur per Code betreten hat.
+  function ichSlotOf(wettkampf, games) {
+    if (wettkampf && wettkampf.ichSlot) return wettkampf.ichSlot;
+    if (!meKonto) return null;
+    for (const g of games || []) {
+      const owners = g.spielerOwners || {};
+      for (const pos of Object.keys(owners)) {
+        if (!owners[pos] || owners[pos].profil !== meKonto) continue;
+        const sp = (g.config?.spielerListe || [])[pos];
+        if (sp && sp.mannschaftId && sp.teamPos) return `${sp.mannschaftId}|${sp.teamPos}`;
+      }
+    }
+    return null;
+  }
+
+  // Markierung für (Mannschaft, Position) umschalten. Sie gilt für den ganzen Wettkampf, wird
+  // aber je Durchgang-Spiel einzeln gesetzt — im Paarkreuz sitzt derselbe Spieler in jedem
+  // Durchgang auf einem anderen Index. Die RPC schreibt ausschließlich das eigene Konto.
+  async function toggleIch(wettkampf, games, teamId, teamPos) {
+    if (istLizenzWettkampf(wettkampf)) {
+      setSyncMsg('In einem Sportwinner-Wettkampf erfolgt die Zuordnung über die LizenzID.');
+      return;
+    }
+    if (!syncMod) { setSyncMsg('Nur mit Verbindung möglich.'); return; }
+    if (!meKonto) { try { meKonto = await syncMod.kontoId(); } catch (e) { /* egal */ } }
+    const slot = `${teamId}|${teamPos}`;
+    const an = ichSlotOf(wettkampf, games) !== slot; // an = jetzt markieren, sonst lösen
+    let belegt = false;
+    for (const g of games || []) {
+      const idx = (g.config?.spielerListe || [])
+        .findIndex((p) => p.mannschaftId === teamId && p.teamPos === teamPos);
+      const spielerId = idx >= 0 && g.spielerOwners && g.spielerOwners[idx] && g.spielerOwners[idx].id;
+      if (!spielerId) continue;
+      try {
+        if (an) { if (!(await syncMod.spielerBinIch(spielerId))) belegt = true; }
+        else await syncMod.spielerBinIchLoesen(spielerId);
+      } catch (e) { setSyncMsg('Markierung fehlgeschlagen — online?'); return; }
+    }
+    // Die lokale Import-Markierung mitziehen, damit beide Quellen nicht auseinanderlaufen.
+    const w = getWettkampf(wettkampf.id);
+    if (w) { w.ichSlot = an ? slot : null; saveWettkampf(w); }
+    setSyncMsg(belegt
+      ? 'Diese Position ist bereits einem anderen Konto zugeordnet.'
+      : (an ? '★ Als eigener Spieler markiert — deine Ergebnisse zählen in deine Statistik.'
+            : 'Markierung entfernt.'));
+    await reload();
   }
 
   // Spielernamen der Aufstellung (Mannschaft + Position) im richtigen Durchgang-Spiel setzen.
@@ -309,7 +365,8 @@ export function wettkampfHubView() {
   async function reconcileUnlinked(w) {
     const locals = getWettkampfGames(w.id).filter((g) => !g.remoteId);
     for (const g of locals) {
-      await syncMod.linkGame(g, { wettkampfRemoteId: w.remoteId });
+      const ident = await syncMod.spielerIdentitaet(g, w);
+      await syncMod.linkGame(g, { wettkampfRemoteId: w.remoteId, ...ident });
       deleteGame(g.id);
     }
   }
@@ -343,6 +400,7 @@ export function wettkampfHubView() {
     if (!w || !w.linked || !w.remoteId) return;
     try {
       syncMod = await import('../backend/sync.js');
+      try { meKonto = await syncMod.kontoId(); } catch (e) { meKonto = null; }
       await reconcileUnlinked(w);
       await reload();
       subscribeNow();
@@ -397,10 +455,13 @@ export function wettkampfHubView() {
       subscribeNow();
       setSyncMsg('Geteilt · Code ' + (fresh.beitrittsCode || ''));
     } catch (e) {
+      // Die echte Ursache zeigen statt pauschal "online sein": RLS-Ablehnung und eine noch
+      // nicht eingespielte SQL-Migration sind sonst nicht von einem Netzproblem zu trennen.
+      console.error('[teilen] Wettkampf teilen fehlgeschlagen', e);
       const m = (e && e.message) || '';
       setSyncMsg(/angemeldet|login|auth/i.test(m)
         ? 'Zum Teilen anmelden (Menü → Spieler).'
-        : 'Teilen fehlgeschlagen — online sein und erneut versuchen.');
+        : 'Teilen fehlgeschlagen: ' + fehlerText(e, 'online sein und erneut versuchen'));
     }
   }
 
@@ -442,6 +503,13 @@ export function wettkampfHubView() {
         render();
       });
     });
+    // „Das bin ich": jeder, der den Wettkampf sehen darf, markiert hier SICH SELBST — auch ein
+    // Mitspieler, der nur per Code beigetreten ist und nichts erfasst. Nur diese Position
+    // bekommt später die eigene profil_id (siehe RPC spieler_bin_ich).
+    root.querySelectorAll('[data-ich-team]').forEach((b) =>
+      b.addEventListener('click', () =>
+        toggleIch(wettkampf, games, b.dataset.ichTeam, parseInt(b.dataset.ichPos, 10))));
+
     // Startbahn eines Spielers (nur Team-Bahnen).
     root.querySelectorAll('.roster-lane').forEach((sel) =>
       sel.addEventListener('change', () => {
@@ -527,8 +595,9 @@ export function wettkampfHubView() {
   // sonst still fehlschlagen (lokale Anzeige bleibt).
   function pushWettkampfConfigNow(wettkampf) {
     if (!wettkampf.remoteId || !syncMod) return;
-    const { remoteId, beitrittsCode, linked, updatedAt, durchgaenge, id, ...rest } = wettkampf;
-    syncMod.pushWettkampfConfig(remoteId, { ...rest }).catch(() => {});
+    // Das Aussortieren der Remote-/Laufzeit-Felder UND der Personendaten im sportwinner-Block
+    // erledigt sync.pushWettkampfConfig (wettkampfConfigFuerDb) — eine Quelle der Wahrheit.
+    syncMod.pushWettkampfConfig(wettkampf.remoteId, wettkampf).catch(() => {});
   }
 
   render();
@@ -672,7 +741,7 @@ function brueckeRow(wettkampf) {
       : 'Die Übertragung nach Sportwinner läuft über den Vereins-PC, der die Brücke ausführt.'}</p>`;
 }
 
-function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer) {
+function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichSlot) {
   const metaLine = [
     wettkampf.datum ? new Date(wettkampf.datum).toLocaleDateString('de-DE') : '',
     wettkampf.anlageName || '',
@@ -711,7 +780,17 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer) {
         </div>
         <div class="wk-dg-list">${durchgaengeSection}</div>
       </section>`;
-  const secTeam = teamUebersichtSection(wettkampf, games, stats, wertung, kz);
+  // "Das bin ich": in einem Sportwinner-Wettkampf steht die Zuordnung ueber die amtliche LizenzID
+  // fest. Sie wird dort weder umgeschaltet NOCH ANGEZEIGT — die Aufstellung bleibt die amtliche
+  // Tafel, ohne Hervorhebung einzelner Personen. Nur manuell angelegte Wettkaempfe (ohne
+  // LizenzIDen) lassen die Mitspieler sich selbst zuordnen; dort wird die Markierung gezeigt.
+  const ichAus = zuschauer || istLizenzWettkampf(wettkampf);
+  const secTeam = teamUebersichtSection(wettkampf, games, stats, wertung, kz, {
+    ichSlot: ichAus ? null : ichSlot,
+    ichEditable: !ichAus,
+    ichHinweis: ichAus ? '' : '★ Tippe auf deine Startnummer, um dich als eigenen Spieler zu '
+      + 'markieren — nur dieses Ergebnis zaehlt dann in deine Statistik.',
+  });
 
   // Kontrollzentrum (Vereins-PC): oben über die ganze Breite die Mannschafts-Übersicht — bei zwei
   // Mannschaften stehen sie sich gegenüber (Zahlen zur Mitte). Darunter der Arbeitsbereich: links

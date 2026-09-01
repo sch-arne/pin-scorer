@@ -11,7 +11,7 @@
 //   game.config            -> spiel.config_json
 //   game.spiel             -> spiel.spielart
 //   game.status            -> spiel.status
-//   config.spielerListe[i] -> spiel_spieler { position:i, name, start_bahn }
+//   config.spielerListe[i] -> spiel_spieler { position:i, name, start_bahn, passnummer, profil_id }
 //   erfassung.bloecke[i][s]-> satz_block { spieler_id(pos i), satz:s, block_json }
 //
 // aktiverSpieler/aktiverSatz sind reine Geraete-UI-Zustaende und werden NICHT
@@ -19,6 +19,14 @@
 
 import { supabase } from './supabase.js';
 import { ensureGeraet, geraetId, kontoId } from './geraet.js';
+import { getGame, getWettkampf } from '../store.js';
+import {
+  mergeSpielerNamen, passByPosition, resolveIchIndex, istLizenzWettkampf,
+} from '../logic/spieler-identitaet.js';
+
+export { istLizenzWettkampf };
+import { sportwinnerOhnePersonendaten } from '../logic/wettkampf-build.js';
+import { schreibeVertraeglich as dbSchreibeVertraeglich } from '../logic/db-spalten.js';
 
 export { ensureGeraet, geraetId, kontoId };
 
@@ -38,8 +46,21 @@ function emptyBlock(config) {
 }
 
 // Remote-Zeilen -> lokales Spiel-Objekt (in der App-Struktur).
+//
+// Namen: ist das Spiel serverseitig anonymisiert (spiel.anonymisiert_am, gesetzt beim Uebergang
+// auf `beendet`), behaelt eine bereits vorhandene LOKALE Kopie ihre Klarnamen. Wer waehrend des
+// Spiels verbunden war, soll sie weiter sehen; nur wer erst danach beitritt/pullt, bekommt die
+// anonymisierte Fassung (Anzeigename bzw. neutraler Platzhalter). Bei nicht anonymisierten
+// Spielen gewinnt weiterhin der Server, damit Umbenennungen im Kontrollzentrum ankommen.
 function assembleLocalGame(sp, spieler, blocks) {
-  const config = sp.config_json || {};
+  let config = sp.config_json || {};
+  if (sp.anonymisiert_am) {
+    const lokal = getGame('r-' + sp.id);
+    const lokaleListe = lokal && lokal.config && lokal.config.spielerListe;
+    if (lokaleListe) {
+      config = { ...config, spielerListe: mergeSpielerNamen(config.spielerListe, lokaleListe) };
+    }
+  }
   const nSaetze = config.saetze || 0;
   const posOf = {};
   spieler.forEach((s) => { posOf[s.id] = s.position; });
@@ -62,6 +83,11 @@ function assembleLocalGame(sp, spieler, blocks) {
     createdAt: sp.erstellt_am,
     spiel: sp.spielart,
     status: sp.status,
+    anonymisiertAm: sp.anonymisiert_am || null,
+    // Rein lokale "Das bin ich"-Markierung eines Einzelspiels: sie reist nicht ueber die DB
+    // (serverseitig steckt sie in spiel_spieler.profil_id) und wuerde beim Pull sonst
+    // verloren gehen. Aus der vorhandenen lokalen Kopie uebernehmen.
+    ichIndex: (getGame('r-' + sp.id) || {}).ichIndex ?? null,
     config,
     erfassung: { aktiverSpieler: 0, aktiverSatz: 0, bloecke },
     // Besitz-Landkarte fuer die UI-Sperren (position -> {id, besitzer, heartbeat}).
@@ -70,12 +96,81 @@ function assembleLocalGame(sp, spieler, blocks) {
   };
 }
 
+// position -> { id, besitzer, heartbeat, profil }
+//   besitzer/heartbeat = ERFASSUNGS-Lock (welches Geraet schreibt gerade die Wuerfe)
+//   profil             = "das bin ich"-Markierung (welcher ACCOUNT ist dieser Spieler)
+// Bewusst getrennt: der Lock wandert zwischen Geraeten, die Person bleibt dieselbe.
 function ownersMap(spieler) {
   const m = {};
   spieler.forEach((s) => {
-    m[s.position] = { id: s.id, besitzer: s.besitzer_geraet, heartbeat: s.heartbeat_am };
+    m[s.position] = {
+      id: s.id, besitzer: s.besitzer_geraet, heartbeat: s.heartbeat_am, profil: s.profil_id || null,
+    };
   });
   return m;
+}
+
+// Eigene LizenzID (profil.passnummer) — best effort, null bei fehlendem Profil/ohne ID.
+// Gecacht je Konto, weil sie beim Verknuepfen eines Wettkampfs sonst pro Durchgang neu
+// abgefragt wuerde. Die LizenzID ist per DB-Trigger ohnehin nur EINMAL setzbar.
+let passCache = null; // { konto, pass }
+export async function meinePassnummer() {
+  const konto = await kontoId();
+  if (!konto) return null;
+  if (passCache && passCache.konto === konto) return passCache.pass;
+  try {
+    const { data } = await supabase.from('profil').select('passnummer').eq('id', konto).maybeSingle();
+    passCache = { konto, pass: (data && data.passnummer) || null };
+    return passCache.pass;
+  } catch (e) {
+    return null; // offline -> keine Auto-Zuordnung, die manuelle Markierung greift weiter
+  }
+}
+
+// Nach dem erstmaligen Setzen der LizenzID im Profil den Cache verwerfen.
+export function resetPassCache() { passCache = null; }
+
+// Wer ist wer in DIESEM Spiel? -> { passByPos, ichIndex } fuer linkGame/pushResults.
+//   passByPos: Positionen mit LizenzID
+//   ichIndex:  die Position, die der angemeldete Account selbst spielt (oder null)
+// `wettkampf` ist optional (Einzelspiele haben keinen) und liefert die Sportwinner-Zuordnung
+// sowie die manuelle Wettkampf-Markierung (ichSlot).
+//
+// Zwei Quellen fuer die LizenzIDen, in dieser Reihenfolge:
+//   1) der LOKALE Sportwinner-Roster — nur das importierende Geraet (Vereins-PC) hat ihn,
+//   2) die Aufstellung in der DB (spiel_spieler.passnummer), sobald das Spiel geteilt ist.
+// Quelle 2 ist entscheidend fuer BEIGETRETENE Geraete: seit die Paesse nicht mehr ueber
+// wettkampf.config_json mitreisen (Datenschutz), waere dort sonst keine LizenzID bekannt —
+// weder fuers Wiederfinden fremder Ergebnisse noch fuer die eigene Zuordnung.
+export async function spielerIdentitaet(game, wettkampf = null) {
+  const config = (game && game.config) || {};
+  const passByPos = passByPosition(config, wettkampf && wettkampf.sportwinner);
+  const konto = await kontoId();
+
+  let dbProfilPos = null; // Position, die in der DB bereits meinem Konto zugeordnet ist
+  if (game && game.remoteId) {
+    try {
+      const { data } = await supabase.from('spiel_spieler')
+        .select('position, passnummer, profil_id').eq('spiel_id', game.remoteId);
+      (data || []).forEach((r) => {
+        if (r.passnummer && !passByPos[r.position]) passByPos[r.position] = r.passnummer;
+        if (konto && r.profil_id === konto) dbProfilPos = r.position;
+      });
+    } catch (e) { /* alte DB ohne die Spalte / offline -> lokaler Roster genuegt */ }
+  }
+
+  // Sportwinner-Wettkampf: die amtliche Aufstellung nennt die LizenzID jedes Spielers, damit
+  // steht die Zuordnung fest. Manuelle Markierungen werden dort BEWUSST ignoriert — sie duerften
+  // die amtliche Zuordnung nicht ueberstimmen (siehe istLizenzWettkampf).
+  const ichIndex = resolveIchIndex(config, {
+    nurLizenz: istLizenzWettkampf(wettkampf),
+    ichSlot: (wettkampf && wettkampf.ichSlot) || null,
+    ichIndex: Number.isInteger(game && game.ichIndex) ? game.ichIndex
+      : (dbProfilPos != null ? dbProfilPos : null),
+    passByPos,
+    meinePass: await meinePassnummer(),
+  });
+  return { passByPos, ichIndex };
 }
 
 // Ist ein Spieler von einem FREMDEN, aktiven Geraet gehalten? (fuer UI/Politeness)
@@ -84,6 +179,19 @@ export function istFremdAktiv(owner, meineUid) {
   if (owner.besitzer === meineUid) return false;
   if (!owner.heartbeat) return false;
   return Date.now() - new Date(owner.heartbeat).getTime() < STALE_MS;
+}
+
+// --- Vertraeglich schreiben: neue Spalten, alte DB ---------------------------
+// Warum das noetig ist, steht in js/logic/db-spalten.js. Kurz: die SQL-Skripte werden von
+// Hand eingespielt, deshalb kann die DB eine neue Spalte noch nicht kennen — und dann darf
+// nicht der ganze Vorgang (Teilen!) scheitern, sondern nur das Zusatzfeld ausfallen.
+function schreibeVertraeglich(table, rows, optionale, run) {
+  return dbSchreibeVertraeglich(table, rows, optionale, run, {
+    onFallback: (t, opt, error) => console.warn(
+      `[sync] ${t}: Spalte(n) ${opt.join(', ')} fehlen in dieser Datenbank — SQL-Migration `
+      + '(supabase/schema.sql) noch nicht eingespielt. Schreibe ohne sie.',
+      error.message || error),
+  });
 }
 
 // --- Verknuepfen / Beitreten ------------------------------------------------
@@ -96,8 +204,15 @@ export function istFremdAktiv(owner, meineUid) {
 // verknuepft (spiel.wettkampf_id + durchgang_nr). Bei Einzelspielen bleiben diese Spalten
 // ungenannt — so bleibt das Einzelspiel-Sharing auch auf einer DB ohne die Wettkampf-
 // Migration lauffaehig (PostgREST wuerde sonst eine unbekannte Spalte melden).
+//
+// opts.passByPos: { position -> LizenzID } aus der Sportwinner-Aufstellung. Landet an
+//   spiel_spieler.passnummer (hinter der RLS, NICHT im config_json) und ist die Grundlage
+//   fuer die Anonymisierung bei Spielende und fuers Wiederfinden eigener Ergebnisse.
+// opts.ichIndex: die Position, die der angemeldete Account SELBST spielt (oder null).
+//   Nur diese Zeile bekommt profil_id — mit erfasste Mitspieler/Gegner bleiben NULL und
+//   tauchen dadurch nicht in der Account-Statistik des Erfassers auf.
 export async function linkGame(game, opts = {}) {
-  const { wettkampfRemoteId = null } = opts;
+  const { wettkampfRemoteId = null, passByPos = null, ichIndex = null } = opts;
   const geraet = await ensureGeraet();
   // Besitzer des Spiels ist der ACCOUNT (auth.uid()), NICHT das Geraet: die RLS
   // (spiel_insert/update/delete/select) prueft `besitzer = auth.uid()`. Die Geraete-ID
@@ -132,11 +247,19 @@ export async function linkGame(game, opts = {}) {
   if (e2) throw e2;
 
   // Aufstellung anlegen — laut RLS startet sie UNBESETZT (besitzer_geraet null).
-  const rows = (config.spielerListe || []).map((p, i) => ({
-    spiel_id: remoteId, position: i, name: p.name, start_bahn: p.startBahn,
-  }));
-  const { data: spieler, error: e3 } = await supabase
-    .from('spiel_spieler').insert(rows).select('id, position');
+  // passnummer/profil_id werden nur gesetzt, wenn vorhanden. Kennt die DB die (neue) Spalte
+  // passnummer noch gar nicht, schreibt schreibeVertraeglich die Aufstellung ohne sie —
+  // sonst wuerde ein fehlendes SQL-Update das Teilen komplett verhindern.
+  const rows = (config.spielerListe || []).map((p, i) => {
+    const row = { spiel_id: remoteId, position: i, name: p.name, start_bahn: p.startBahn };
+    if (passByPos && passByPos[i]) row.passnummer = passByPos[i];
+    if (ichIndex != null && i === ichIndex) row.profil_id = konto;
+    return row;
+  });
+  const { data: spieler, error: e3 } = await schreibeVertraeglich(
+    'spiel_spieler', rows, ['passnummer'],
+    (rs) => supabase.from('spiel_spieler').insert(rs).select('id, position'),
+  );
   if (e3) throw e3;
   const posToId = {};
   spieler.forEach((s) => { posToId[s.position] = s.id; });
@@ -180,12 +303,16 @@ export async function pullGame(remoteId) {
   return assembleLocalGame(sp, spieler || [], blocks || []);
 }
 
-// Beendete EINZELSPIELE des angemeldeten Accounts geraeteuebergreifend laden.
+// Beendete EINZELSPIELE, die dieser Account ERFASST hat, geraeteuebergreifend laden.
 // Grundlage ist die RLS: der Ersteller (spiel.besitzer = auth.uid()) darf seine eigenen
 // Spiele auf JEDEM Geraet vollstaendig lesen (pins_ist_spiel_besitzer). So erscheinen
 // beendete Spiele in den Statistiken auch auf einem Geraet, das dem Spiel nie beigetreten
 // ist, und lassen sich von dort wieder aufrufen. Wettkampf-Durchgaenge (wettkampf_id gesetzt)
 // bleiben aussen vor — sie gehoeren in den Wettkampf-Hub, nicht in die Einzelspiel-Historie.
+//
+// ACHTUNG (Bedeutung): das ist die „von diesem Geraet/Account ERFASST"-Liste, nicht die
+// eigene Spieler-Historie. Wer selbst gespielt hat, steht in pullMeineSpiele() — auf einem
+// Vereins-PC sind das voellig verschiedene Mengen.
 // Gibt vollstaendige lokale Spiel-Objekte zurueck (id 'r-'+remoteId), zuletzt gespielt zuerst.
 export async function pullAccountFinishedGames() {
   const konto = await kontoId();
@@ -203,6 +330,101 @@ export async function pullAccountFinishedGames() {
     try { games.push(await pullGame(row.id)); } catch { /* ein defektes Spiel ueberspringt die Liste nicht */ }
   }
   return games;
+}
+
+// --- Eigene Spieler-Historie (accountbasierte Statistik) --------------------
+//
+// DIE Quelle fuer „meine Statistik": die Ergebnis-Snapshots, in denen ICH der Spieler bin.
+// Zwei Wege, per RLS beide erlaubt (spiel_ergebnis_select):
+//   1) profil_id = auth.uid()          -> selbst markiert oder beim Erfassen zugeordnet
+//   2) passnummer = meine LizenzID     -> auch in FREMD erfassten Spielen (z.B. Vereins-PC)
+// Dedupliziert ueber die Zeilen-id (dieselbe Zeile kann ueber beide Wege kommen).
+// Wettkampf-Durchgaenge sind ausdruecklich MIT dabei — sie tragen als einzige die LizenzID.
+export const ERGEBNIS_COLS =
+  'id,spiel_id,spieler_id,gesamt,schnitt_satz,schnitt_wurf,bester_satz,neuner,fehl,'
+  + 'wurf_count,rang,erstellt_am,profil_id,passnummer,erfasst_von';
+
+export async function pullMeineErgebnisse() {
+  const konto = await kontoId();
+  if (!konto) return [];
+  const meinPass = await meinePassnummer();
+  const [own, byPass] = await Promise.all([
+    supabase.from('spiel_ergebnis').select(ERGEBNIS_COLS).eq('profil_id', konto),
+    meinPass
+      ? supabase.from('spiel_ergebnis').select(ERGEBNIS_COLS).eq('passnummer', meinPass)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const byId = new Map();
+  (own.data || []).forEach((r) => byId.set(r.id, r));
+  (byPass.data || []).forEach((r) => { if (!byId.has(r.id)) byId.set(r.id, r); });
+  return [...byId.values()]
+    .sort((a, b) => (b.erstellt_am || '').localeCompare(a.erstellt_am || ''));
+}
+
+// Die Spiele zu einer Ergebnisliste laden (fuer die Spielkarten in den Statistiken).
+// Fehlgeschlagene einzelne Spiele werden uebersprungen — ein defektes Spiel darf die
+// gesamte Historie nicht kippen. `limit` deckelt die Zahl der Einzelabfragen.
+export async function pullSpieleZuErgebnissen(ergebnisse, { limit = 40 } = {}) {
+  const ids = [...new Set((ergebnisse || []).map((r) => r.spiel_id).filter(Boolean))].slice(0, limit);
+  const games = [];
+  for (const id of ids) {
+    try { games.push(await pullGame(id)); } catch (e) { /* kein Zugriff / geloescht */ }
+  }
+  return games;
+}
+
+// ALLE Ergebniszeilen zu einer Menge von Spielen (nicht nur die eigenen) — Grundlage fuer
+// die nachtraegliche Zuordnung „welcher Spieler war ich?". Die RLS gibt sie frei, wenn man
+// Mitglied/Ersteller des Spiels ist (spiel_ergebnis_select).
+export async function pullErgebnisseFuerSpiele(spielIds) {
+  const ids = [...new Set((spielIds || []).filter(Boolean))];
+  if (!ids.length) return [];
+  const { data, error } = await supabase
+    .from('spiel_ergebnis').select(ERGEBNIS_COLS).in('spiel_id', ids);
+  if (error) throw error;
+  return data || [];
+}
+
+// --- "Das bin ich" an der Aufstellung ---------------------------------------
+//
+// Markiert eine Spieler-Position als den eigenen Account (spiel_spieler.profil_id). Laeuft
+// ueber eine security-definer-RPC, weil die normale spiel_spieler-Policy an den ERFASSUNGS-
+// Lock gebunden ist: solange ein anderes Geraet (z.B. der Vereins-PC) den Spieler aktiv
+// bespielt, duerfte ein Mitspieler die Zeile sonst gar nicht anfassen. Geschrieben wird
+// ausschliesslich das eigene Konto. Rueckgabe false = Position gehoert schon jemand anderem.
+export async function spielerBinIch(spielerId) {
+  const { data, error } = await supabase.rpc('spieler_bin_ich', { p_spieler: spielerId });
+  if (error) throw error;
+  return !!data;
+}
+
+export async function spielerBinIchLoesen(spielerId) {
+  const { error } = await supabase.rpc('spieler_bin_ich_loesen', { p_spieler: spielerId });
+  if (error) throw error;
+}
+
+// Alle noch freien Ergebniszeilen einsammeln, deren Aufstellungs-Zeile ich selbst markiert
+// habe. Noetig, weil die Ergebniszeilen der ERFASSER schreibt und laut RLS keine fremde
+// profil_id eintragen darf — der Spieler holt sich die Zuordnung selbst ab. Rueckgabe: Anzahl.
+export async function meineErgebnisseBeanspruchen() {
+  const { data, error } = await supabase.rpc('meine_ergebnisse_beanspruchen');
+  if (error) throw error;
+  return data || 0;
+}
+
+// Ein Ergebnis nachtraeglich dem eigenen Account zuordnen („das war ich") bzw. die
+// Zuordnung wieder loesen. Beide laufen ueber security-definer-RPCs, weil die normale
+// spiel_ergebnis-Policy den Geraete-Besitz des Spielers verlangt — den hat ein anderes
+// Geraet womoeglich laengst abgegeben. Rueckgabe von zuordnen: true = Zeile wurde gesetzt.
+export async function ergebnisMirZuordnen(ergebnisId) {
+  const { data, error } = await supabase.rpc('ergebnis_mir_zuordnen', { p_ergebnis: ergebnisId });
+  if (error) throw error;
+  return !!data;
+}
+
+export async function ergebnisZuordnungLoesen(ergebnisId) {
+  const { error } = await supabase.rpc('ergebnis_zuordnung_loesen', { p_ergebnis: ergebnisId });
+  if (error) throw error;
 }
 
 // Einem Spiel per Beitritts-Code beitreten (RPC), dann vollstaendig laden.
@@ -242,6 +464,24 @@ export async function zuschauerGame(code) {
 // zweites Gerät tritt EINMAL dem Wettkampf bei (wettkampf_beitreten) und sieht/
 // beschreibt darüber automatisch alle Durchgänge (auch später ergänzte).
 
+// Die lokale Wettkampf-Struktur in die Form bringen, die in wettkampf.config_json darf.
+// Entfernt werden:
+//   * Remote-/Laufzeit-Felder (remoteId, beitrittsCode, linked, updatedAt, durchgaenge, id) —
+//     die Durchgänge werden relational über spiel.wettkampf_id rekonstruiert,
+//   * `ichSlot` — die rein lokale „Das bin ich"-Markierung; sie gehört niemandem sonst und
+//     reist serverseitig ohnehin als spiel_spieler.profil_id mit,
+//   * die Personendaten im `sportwinner`-Block (pass/extId, siehe sportwinnerOhnePersonendaten):
+//     config_json wird über die Zuschauer-/Overlay-RPCs an `anon` ausgeliefert.
+function wettkampfConfigFuerDb(wettkampf) {
+  const {
+    remoteId, beitrittsCode, zuschauerCode, linked, updatedAt, durchgaenge, id, ichSlot,
+    ...rest
+  } = wettkampf;
+  const config = { ...rest };
+  if (config.sportwinner) config.sportwinner = sportwinnerOhnePersonendaten(config.sportwinner);
+  return config;
+}
+
 // Lokalen Wettkampf + seine Durchgänge in Supabase spiegeln.
 // games = die lokalen Durchgang-Spiele (aus getWettkampfGames). Gibt
 // {remoteId, beitrittsCode} zurück; die Durchgänge werden per linkGame gespiegelt.
@@ -252,8 +492,7 @@ export async function linkWettkampf(wettkampf, games) {
 
   // config_json = die lokale Wettkampf-Struktur OHNE Remote-/Laufzeit-Felder und ohne
   // die (geräte-lokalen) Durchgang-IDs — die Durchgänge werden relational rekonstruiert.
-  const { remoteId, beitrittsCode, linked, updatedAt, durchgaenge, id, ...rest } = wettkampf;
-  const config = { ...rest };
+  const config = wettkampfConfigFuerDb(wettkampf);
 
   const { data: w, error: e1 } = await supabase
     .from('wettkampf')
@@ -275,9 +514,12 @@ export async function linkWettkampf(wettkampf, games) {
   if (e2) throw e2;
 
   // Jeden Durchgang als normales Spiel spiegeln (mit wettkampf_id + durchgang_nr).
+  // Die LizenzIDen der Aufstellung und die eigene Spieler-Position reisen dabei je Durchgang
+  // an spiel_spieler mit — NICHT ueber config_json (siehe wettkampfConfigFuerDb).
   const links = [];
   for (const g of games) {
-    const res = await linkGame(g, { wettkampfRemoteId: remoteWkId });
+    const ident = await spielerIdentitaet(g, wettkampf);
+    const res = await linkGame(g, { wettkampfRemoteId: remoteWkId, ...ident });
     links.push({ gameId: g.id, remoteId: res.remoteId, beitrittsCode: res.beitrittsCode });
   }
 
@@ -323,6 +565,10 @@ export async function pullWettkampf(remoteId) {
     datum: w.datum || base.datum,
     anlageId: w.anlage_id || base.anlageId,
     durchgaenge,
+    // Rein lokale "Das bin ich"-Markierung (<mannschaftId>|<teamPos>): sie wird bewusst NICHT
+    // in config_json gespiegelt (siehe wettkampfConfigFuerDb) und muss deshalb aus der
+    // vorhandenen lokalen Kopie uebernommen werden — sonst waere sie nach jedem reload weg.
+    ichSlot: (getWettkampf(localWkId) || {}).ichSlot || null,
     createdAt: base.createdAt || w.erstellt_am,
     updatedAt: w.aktualisiert_am,
   };
@@ -394,8 +640,13 @@ export async function pushWettkampfStatus(remoteId, status) {
 // Wettkampf-Config (Stammdaten-Struktur: Mannschaften inkl. Logos, Programm …) aktualisieren.
 // Laut RLS darf das NUR der Ersteller (wettkampf.besitzer); auf anderen Geräten schlägt es
 // still fehl (lokale Anzeige bleibt), analog zu pushConfig für Durchgänge.
+//
+// `config` ist die LOKALE Wettkampf-Struktur; sie wird hier durch dieselbe Bereinigung
+// geschickt wie beim Verknüpfen (wettkampfConfigFuerDb), damit LizenzIDen/extIds auch bei
+// jedem späteren Push draußen bleiben.
 export async function pushWettkampfConfig(remoteId, config) {
-  const { error } = await supabase.from('wettkampf').update({ config_json: config }).eq('id', remoteId);
+  const { error } = await supabase.from('wettkampf')
+    .update({ config_json: wettkampfConfigFuerDb(config || {}) }).eq('id', remoteId);
   if (error) throw error;
 }
 
@@ -525,9 +776,10 @@ export async function pushConfig(remoteId, config) {
 // rows = [{ spiel_id, spieler_id, profil_id, gesamt, schnitt_satz, ... }].
 export async function pushResults(rows) {
   if (!rows || !rows.length) return;
-  const { error } = await supabase
-    .from('spiel_ergebnis')
-    .upsert(rows, { onConflict: 'spiel_id,spieler_id' });
+  const { error } = await schreibeVertraeglich(
+    'spiel_ergebnis', rows, ['erfasst_von'],
+    (rs) => supabase.from('spiel_ergebnis').upsert(rs, { onConflict: 'spiel_id,spieler_id' }),
+  );
   if (error) throw error;
 }
 
