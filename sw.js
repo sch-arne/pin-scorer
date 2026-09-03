@@ -3,7 +3,7 @@
 // Verbindungsaussetzern. Cache-first für die App-Shell, Netzwerk-Fallback.
 // Bei Änderungen an den App-Dateien CACHE hochzählen (v1 -> v2 ...).
 
-const CACHE = 'pin-scorer-v46';
+const CACHE = 'pin-scorer-v50';
 
 // Relative Pfade -> funktionieren auch unter GitHub-Pages-Unterpfad /<repo>/
 const SHELL = [
@@ -19,14 +19,22 @@ const SHELL = [
   './js/backend/sync.js',
   './js/backend/auth.js',
   './js/backend/sw-bruecke.js',
+  './js/backend/anlagen.js',
   './js/data/standardbilder-default.js',
   './js/util.js',
+  './js/reveal-code.js',
   './js/wakelock.js',
   './js/logic/teilsaetze.js',
   './js/logic/abraeumen.js',
   './js/logic/holz.js',
   './js/logic/bahnwechsel.js',
   './js/logic/statistik.js',
+  './js/logic/historie.js',
+  './js/logic/ergebnis-snapshot.js',
+  './js/logic/loeschen.js',
+  './js/logic/wurfprotokoll.js',
+  './js/logic/wurf-csv.js',
+  './js/logic/mannschaft-export.js',
   './js/logic/wettkampf.js',
   './js/logic/wettkampf-build.js',
   './js/logic/wettkampf-wertung.js',
@@ -34,14 +42,25 @@ const SHELL = [
   './js/logic/sportwinner-ergebnis.js',
   './js/logic/sportwinner-konflikte.js',
   './js/logic/sportkegeln-presets.js',
+  './js/logic/spielarten.js',
+  './js/logic/spieler-identitaet.js',
+  './js/logic/mannschaft-statistik.js',
+  './js/logic/db-spalten.js',
   './js/views/menu.js',
   './js/views/neues-spiel.js',
   './js/views/import-sportwinner.js',
   './js/views/beitreten.js',
   './js/views/login.js',
   './js/views/setup-wk.js',
+  './js/views/setup-wettkampf.js',
+  './js/views/wettkampf-hub.js',
+  './js/views/wettkampf-teams.js',
+  './js/views/wettkampf-auswertung.js',
+  './js/views/loeschen.js',
+  './js/views/anlagen.js',
   './js/views/spiel-laufend.js',
   './js/views/statistiken.js',
+  './js/views/spiel-zuordnung.js',
   './js/views/overlay.js',
   './js/views/sportwinner-konflikt-panel.js',
   './assets/icon-192.png',

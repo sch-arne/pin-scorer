@@ -32,6 +32,22 @@ function istEntwicklungsHost(host) {
   return /^172\.(1[6-9]|2\d|3[01])\./.test(host);                // 172.16.0.0/12
 }
 
+// TEST-SCHALTER (nur auf Entwicklungs-Hosts): Setzt der E2E-Runner den localStorage-Schluessel
+// `pins-scorer:e2e-offline`, bricht dieses Modul absichtlich ab. Jeder Aufrufer laedt es nur
+// LAZY (dynamic import) und faengt den Fehlschlag ohnehin ab — die App verhaelt sich damit
+// exakt so wie ohne Verbindung, nur eben deterministisch.
+//
+// Warum ueberhaupt im Produktionscode? Die local-first-Zusage ("ohne Netz geht alles Lokale
+// weiter, nichts geht verloren") ist die wichtigste Eigenschaft der App und war bisher gar
+// nicht automatisiert pruefbar: Mit Netz nimmt der Code den Online-Pfad, ohne Netz den
+// Offline-Pfad — ein Test waere je nach Umgebung mal so, mal so ausgegangen. Der Schalter
+// greift nie in Produktion (GitHub Pages ist kein Entwicklungs-Host).
+if (istEntwicklungsHost(location.hostname)) {
+  let aus = false;
+  try { aus = localStorage.getItem('pins-scorer:e2e-offline') !== null; } catch { aus = false; }
+  if (aus) throw new Error('[supabase] E2E-Offline-Schalter aktiv — kein Client');
+}
+
 let _override = {};
 if (istEntwicklungsHost(location.hostname)) {
   try {

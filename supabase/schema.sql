@@ -339,3 +339,24 @@ update spiel_ergebnis e
         and p.passnummer is not null
         and p.passnummer = e.passnummer
    );
+
+-- --- „Gelöscht" heißt in der Datenbank: VERBORGEN ----------------------------
+-- Ein Spiel/Wettkampf, das einmal in der Datenbank lag, wird beim Löschen NICHT entfernt:
+-- die Aufzeichnung bleibt stehen. Sie gehört nicht nur dem Erfasser — Mitspieler und Gegner
+-- haben dasselbe Spiel erlebt, ihre Profile hängen über die LizenzID an den Ergebniszeilen,
+-- und ein laufender Freigabe-Link (Mit-Erfassen, Zuschauer, OBS-Overlay) gilt weiter.
+--
+-- Verborgen wird deshalb ausschließlich die EIGENE Sicht, und zwar je Konto: wer etwas bei
+-- sich entfernt, verschwindet selbst aus dem Spiel — für alle anderen ändert sich NICHTS.
+-- Genau dafür ist das hier eine eigene Zeile je (Konto, Objekt) statt einer Spalte an der
+-- gemeinsamen Zeile: eine Spalte an `spiel` wäre geteilter Zustand und träfe zwangsläufig
+-- auch die anderen.
+--
+-- Rein LOKALE Spiele kennt die Datenbank gar nicht; die verschwinden ganz (store.deleteGame).
+create table if not exists verborgen (
+  konto        uuid not null references auth.users(id) on delete cascade,
+  art          text not null check (art in ('spiel', 'wettkampf')),
+  objekt_id    uuid not null,               -- spiel.id bzw. wettkampf.id
+  verborgen_am timestamptz not null default now(),
+  primary key (konto, art, objekt_id)
+);

@@ -9,9 +9,11 @@
 //   • Kriterium 1 — Gesamtholz: gesamtholzPunkte an die Mannschaft mit dem höheren Gesamtholz
 //     (Summe aller Spieler); bei Gleichstand geteilt.
 //   • Kriterium 2 — EWP: alle Spieler des Wettkampfs (min. 1 Holz gespielt) in eine gemeinsame
-//     Rangliste; der Beste bekommt N EWP (bei 2×6 = 12), der Schlechteste 1. Team-EWP = Summe
-//     der eigenen Spieler. Der Gast bekommt kriterium2Punkte, sobald seine Team-EWP-Summe die
-//     Schwelle (ewpSchwelle) erreicht; sonst das Heim-Team.
+//     Rangliste; der Beste bekommt N EWP (N = volle Feldgröße, bei 2×6 = 12), dann absteigend.
+//     Die Skala ist bewusst die des GANZEN Feldes, nicht die der schon gespielten Spieler —
+//     die konfigurierte ewpSchwelle bezieht sich darauf und die Anzeige (Hub/Overlay) ebenso.
+//     Team-EWP = Summe der eigenen Spieler. Der Gast bekommt kriterium2Punkte, sobald seine
+//     Team-EWP-Summe die Schwelle (ewpSchwelle) erreicht; sonst das Heim-Team.
 //   Gleichstand-Feinregeln bei GLEICHEM Spielerergebnis (Gesamtholz) für die EWP-Vergabe:
 //     – zwischen den Mannschaften: der GAST bekommt die höhere EWP;
 //     – innerhalb einer Mannschaft: der Spieler mit dem höheren ABRÄUM-Ergebnis.
@@ -99,7 +101,13 @@ export function computeWertung(wettkampf, stats, games) {
   const awayId = teams[1].id;
   const einzel = (stats && stats.einzel) || [];
   const minHolz = (cfg.ewp && cfg.ewp.minHolz != null) ? cfg.ewp.minHolz : 1;
-  assignEwp(einzel, homeId, minHolz);
+  // WICHTIG: mit der vollen Feldgroesse werten (Spieler je Mannschaft x Anzahl Mannschaften).
+  // Die konfigurierte ewpSchwelle (z. B. 31 bei 2x6) bezieht sich auf die Skala des GANZEN Feldes;
+  // ohne fieldSize wuerde waehrend des Wettkampfs nur ueber die bereits gespielten Spieler
+  // skaliert (z. B. bester = 8 statt 12) und die Schwelle waere unerreichbar -> der Zusatzpunkt
+  // ginge dauerhaft ans Heim-Team. Ausserdem zeigt der Hub/das Overlay genau diese Skala an.
+  const fieldSize = (wettkampf && wettkampf.spielerJeMannschaft || 0) * teams.length;
+  assignEwp(einzel, homeId, minHolz, fieldSize);
 
   const acc = (id) => einzel.filter((p) => p.mannschaftId === id)
     .reduce((s, p) => ({ holz: s.holz + (p.gesamt || 0), ewp: s.ewp + (p.ewp || 0) }), { holz: 0, ewp: 0 });

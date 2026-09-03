@@ -1,0 +1,39 @@
+# Tests bei jedem Push und Pull Request.
+#
+# Zwei Stufen, beide ohne npm-Abhaengigkeiten (das Projekt hat bewusst keine node_modules):
+#   1) Logik-Tests  — node --test ueber tests/*.test.js (Sekunden)
+#   2) E2E-Tests    — tools/e2e-headless.mjs faehrt die echte App in headless Chrome (~1-2 min)
+#
+# Chrome ist auf ubuntu-latest vorinstalliert; python3 ebenfalls (fuer tools/devserver.py).
+
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Logik-Tests
+        run: node --test
+
+      - name: Chrome bereitstellen
+        uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - name: End-to-End-Tests
+        run: node tools/e2e-headless.mjs --chrome "${{ steps.chrome.outputs.chrome-path }}"

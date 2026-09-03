@@ -12,11 +12,14 @@
 //   - Satz-Status pending/live/done, Bahn je Satz aus bahnplan
 
 import { getActiveGame, getGame, saveGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings, getWettkampf, getWettkampfGames, saveWettkampf } from '../store.js';
+import { UNMOUNT_EVENT } from '../router.js';
 import { esc, fehlerText } from '../util.js';
 import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
 import { computeGameStats } from '../logic/statistik.js';
+import { ergebnisZeilen } from '../logic/ergebnis-snapshot.js';
 import { buildProtokollHTML, printProtokollHTML } from '../logic/wurfprotokoll.js';
+import { buildWurfCSV, csvDateiname, downloadCSV } from '../logic/wurf-csv.js';
 import { computeWettkampfStats, wettkampfBaseStatus } from '../logic/wettkampf.js';
 import { computeWertung, assignEwp } from '../logic/wettkampf-wertung.js';
 import { teamUebersichtSection } from './wettkampf-teams.js';
@@ -475,7 +478,7 @@ export function spielLaufendView() {
     clearInterval(swKonfliktTimer);
     window.removeEventListener('keydown', onKey);
     kzMedia.removeEventListener('change', render);
-    window.removeEventListener('hashchange', teardownSync);
+    window.removeEventListener(UNMOUNT_EVENT, teardownSync);
   }
   function startRealtime() {
     if (unsub) return;
@@ -534,7 +537,7 @@ export function spielLaufendView() {
     await poll();
     zpollTimer = setInterval(poll, 2500);
   }
-  window.addEventListener('hashchange', teardownSync);
+  window.addEventListener(UNMOUNT_EVENT, teardownSync);
 
   // Lokales Spiel teilen: in Supabase spiegeln, ab jetzt verknüpft + Realtime.
   async function shareGame() {
@@ -607,22 +610,11 @@ export function spielLaufendView() {
       const wk = game.wettkampfId ? getWettkampf(game.wettkampfId) : null;
       const { passByPos, ichIndex } = await syncMod.spielerIdentitaet(game, wk);
       const { players } = computeGameStats(c, state.bloecke, ranges);
-      const rows = [];
-      players.forEach((p, sp) => {
-        if (!canEdit(sp)) return;
-        const pid = owners[sp] && owners[sp].id;
-        if (!pid) return;
-        const row = {
-          spiel_id: game.remoteId, spieler_id: pid,
-          profil_id: (ichIndex != null && sp === ichIndex) ? meKonto : null,
-          erfasst_von: meKonto,
-          gesamt: p.gesamt, schnitt_satz: p.schnittSatz, schnitt_wurf: p.schnittWurf,
-          bester_satz: p.bester, neuner: p.neuner, fehl: p.fehl, wurf_count: p.wurfCount, rang: p.rang,
-        };
-        // passnummer nur setzen, wenn vorhanden — so bleibt das Rückschreiben auch auf einer
-        // DB ohne die (neue) Spalte lauffähig (PostgREST würde eine unbekannte Spalte melden).
-        if (passByPos[sp]) row.passnummer = passByPos[sp];
-        rows.push(row);
+      const rows = ergebnisZeilen(players, {
+        spielId: game.remoteId,
+        // Nur Positionen, die DIESES Gerät steuert — fremde schreibt deren Gerät selbst.
+        spielerIdFuer: (sp) => (canEdit(sp) && owners[sp] ? owners[sp].id : null),
+        konto: meKonto, passByPos, ichIndex,
       });
       if (rows.length) await syncMod.pushResults(rows);
     } catch (e) {
@@ -1520,8 +1512,21 @@ export function spielLaufendView() {
     } catch (e) { toast('Protokoll konnte nicht erstellt werden'); }
   }
 
+  // Die Rohdaten als CSV-Datei (Excel/Calc): eine Zeile je Einzelwurf, ohne Kennzahlen —
+  // Spieler, Satz, Bahn, Teilsatz, Modus, Wurf-Nr, Holz und das Kegelbild.
+  function exportCsv(indices) {
+    if (!indices || !indices.length) { toast('Keine Spieler ausgewählt'); return; }
+    try {
+      const meta = protokollMeta();
+      const text = buildWurfCSV(game, ranges, indices);
+      downloadCSV(csvDateiname(meta, indices.map((i) => playerName(i))), text);
+      toast(indices.length === 1 ? `CSV für ${playerName(indices[0])} gespeichert` : `CSV mit ${indices.length} Spielern gespeichert`);
+    } catch (e) { toast('CSV konnte nicht erstellt werden'); }
+  }
+
   // Export-Box im Statistik-Screen: bei mehreren Spielern je ein Häkchen (Standard: alle),
-  // sonst nur der Druck-Knopf. Ein Spieler pro A4-Seite.
+  // sonst nur die Knöpfe. Die Auswahl gilt für beide Ausgaben — PDF (ein Spieler pro A4-Seite)
+  // und CSV (alle gewählten Spieler in EINER Datei, Spaltenname „Spieler").
   function protokollExportBox(players, multi) {
     if (!printSel) printSel = new Set(players.map((p) => p.index));
     const list = multi ? `
@@ -1534,9 +1539,13 @@ export function spielLaufendView() {
       </div>` : '';
     return `
       <div class="wp-export">
-        <div class="wp-export-head">🖨 Wurfprotokoll (PDF)</div>
+        <div class="wp-export-head">📄 Wurfprotokoll exportieren</div>
         ${list}
-        <button type="button" class="erf-btn done" data-act="print-protokoll">Drucken / Als PDF speichern</button>
+        <div class="wp-export-btns">
+          <button type="button" class="erf-btn done" data-act="print-protokoll">🖨 Drucken / Als PDF speichern</button>
+          <button type="button" class="erf-btn" data-act="export-csv">⤓ Als CSV speichern</button>
+        </div>
+        <p class="wp-export-hint">CSV: eine Zeile je Wurf (Satz, Bahn, Teilsatz, Holz, Kegelbild) — Rohdaten für Excel/Calc, ohne Kennzahlen.</p>
       </div>`;
   }
 
@@ -1686,6 +1695,13 @@ export function spielLaufendView() {
                 <span class="erf-setting-hint">Blatt für <strong>${esc(playerName(state.aktiverSpieler))}</strong> — satzweise mit Kegelbild je Wurf. In der Endansicht (🏁) sind alle Spieler wählbar.</span>
               </div>
               <button type="button" class="erf-btn done" data-act="print-protokoll-current">🖨 Drucken</button>
+            </div>
+            <div class="erf-setting-row">
+              <div class="erf-setting-text">
+                <span class="erf-setting-label">Als CSV speichern</span>
+                <span class="erf-setting-hint">Wurfdaten von <strong>${esc(playerName(state.aktiverSpieler))}</strong> als Tabelle (Excel/Calc): eine Zeile je Wurf mit Satz, Bahn, Teilsatz, Holz und Kegelbild — ohne Kennzahlen.</span>
+              </div>
+              <button type="button" class="erf-btn" data-act="export-csv-current">⤓ CSV</button>
             </div>
             <h3 class="erf-settings-sub">Standard-Kegelbilder</h3>
             ${standardbilderEditor()}
@@ -2014,7 +2030,19 @@ export function spielLaufendView() {
         ${metric(stats.fehl, 'Fehlwürfe')}
         ${metric(stats.wurfCount, 'Würfe')}
       </div>
-      ${raeumTempoBlock(stats, raeumSkala())}`;
+      ${raeumTempoBlock(stats, raeumSkala())}
+      ${exportRow(sp)}`;
+  }
+
+  // Export-Zeile unter den Kennzahlen EINES Spielers (Desktop-Statistik-Spalte und mobile
+  // Statistik-Ansicht): dieselben Daten einmal als druckfertiges PDF, einmal als CSV-Tabelle.
+  // Immer nur DIESER Spieler — die Mehrfach-Auswahl gibt es in der Endansicht (🏁).
+  function exportRow(sp) {
+    return `
+      <div class="stats-export">
+        <button type="button" class="erf-btn erf-btn-sm" data-export-pdf="${sp}" title="Wurfprotokoll als PDF drucken">🖨 PDF</button>
+        <button type="button" class="erf-btn erf-btn-sm" data-export-csv="${sp}" title="Wurfdaten als CSV-Tabelle speichern (eine Zeile je Wurf)">⤓ CSV</button>
+      </div>`;
   }
 
   // Gemeinsame Skala des Räumer-Tempos über ALLE Spieler: in der Mehr-Spieler-Übersicht stehen
@@ -2549,6 +2577,18 @@ export function spielLaufendView() {
       printProtokoll(root.querySelector('[data-wp-player]') ? sel : state.bloecke.map((_, i) => i));
     });
     act('print-protokoll-current', () => { settingsOpen = false; render(); printProtokoll([state.aktiverSpieler]); });
+    // CSV: im Statistik-Screen die angehakten Spieler (eine Datei), im ⚙-Menü der aktive Spieler.
+    act('export-csv', () => {
+      const sel = [];
+      root.querySelectorAll('[data-wp-player]').forEach((cb) => { if (cb.checked) sel.push(parseInt(cb.dataset.wpPlayer, 10)); });
+      exportCsv(root.querySelector('[data-wp-player]') ? sel : state.bloecke.map((_, i) => i));
+    });
+    act('export-csv-current', () => { settingsOpen = false; render(); exportCsv([state.aktiverSpieler]); });
+    // Export-Knöpfe je Spieler in der Statistik-Ansicht (Desktop-Spalten / mobile Statistik).
+    root.querySelectorAll('[data-export-pdf]').forEach((b) =>
+      b.addEventListener('click', () => printProtokoll([parseInt(b.dataset.exportPdf, 10)])));
+    root.querySelectorAll('[data-export-csv]').forEach((b) =>
+      b.addEventListener('click', () => exportCsv([parseInt(b.dataset.exportCsv, 10)])));
     root.querySelectorAll('[data-wp-player]').forEach((cb) =>
       cb.addEventListener('change', () => {
         const i = parseInt(cb.dataset.wpPlayer, 10);

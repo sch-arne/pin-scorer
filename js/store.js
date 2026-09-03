@@ -8,6 +8,7 @@
 // keiner Anlage verknuepft ist.
 
 import { DEFAULT_STANDARDBILDER } from './data/standardbilder-default.js';
+import { wettkampfBaseStatus } from './logic/wettkampf.js';
 
 const KEY_GAMES = 'pins-scorer:games';
 const KEY_ACTIVE = 'pins-scorer:active-game';
@@ -117,20 +118,37 @@ export function deleteWettkampf(id) {
   if (getActiveWettkampf() === id) write(KEY_ACTIVE_WK, null); // toten Zeiger nicht stehen lassen
 }
 
-// Fortsetzbare Wettkämpfe (Setup begonnen oder laufend), zuletzt bearbeitete zuerst.
-export function getResumableWettkaempfe() {
-  return getWettkaempfe()
-    .filter((w) => w.status === 'setup' || w.status === 'laufend')
-    .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+// Tatsaechlicher Status eines Wettkampfs — die EINE Quelle fuer „laeuft noch" vs. „fertig".
+//
+// Die gespeicherte `status`-Spalte veraltet leicht: sie wird nur gesetzt, wenn der Hub offen
+// war (reconcileWettkampfStatus). Hat ein anderes Geraet den letzten Durchgang beendet oder
+// wurde ein Satz nachtraeglich wieder geoeffnet, stimmt sie nicht mehr. Deshalb leiten wir
+// den Status wie der Hub aus den ERFASSUNGSDATEN der Durchgaenge ab. Dadurch landet ein
+// beendeter Wettkampf zuverlaessig in der Historie (Statistiken) und verschwindet ebenso
+// zuverlaessig aus „Neues Spiel" — beide Listen fragen dieselbe Funktion.
+export function wettkampfStatus(w) {
+  if (!w) return 'setup';
+  return wettkampfBaseStatus(w, getWettkampfGames(w.id));
 }
 
-// Beendete Wettkämpfe (alle Durchgänge fertig), zuletzt bearbeitete zuerst. Anders als bei
-// Einzelspielen (die in den Statistiken landen) gibt es für Wettkämpfe keine eigene Historie —
-// sie bleiben daher unter „Neues Spiel" zum Ansehen (Rangliste/Overlay) erreichbar.
+const nachDatum = (a, b) =>
+  (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || '');
+
+// Fortsetzbare Wettkämpfe (noch nicht alle Durchgänge fertig), zuletzt bearbeitete zuerst.
+export function getResumableWettkaempfe() {
+  return getWettkaempfe().filter((w) => wettkampfStatus(w) !== 'beendet').sort(nachDatum);
+}
+
+// Beendete Wettkämpfe (alle Durchgänge fertig), zuletzt bearbeitete zuerst. Sie sind die
+// Historie und erscheinen in den Statistiken — nicht mehr unter „Neues Spiel".
 export function getBeendeteWettkaempfe() {
-  return getWettkaempfe()
-    .filter((w) => w.status === 'beendet')
-    .sort((a, b) => (b.updatedAt || b.createdAt || '').localeCompare(a.updatedAt || a.createdAt || ''));
+  return getWettkaempfe().filter((w) => wettkampfStatus(w) === 'beendet').sort(nachDatum);
+}
+
+// Wettkämpfe mit erfassten Ergebnissen (laufend ODER beendet) — die Wettkampf-Seite der
+// Statistik-Historie. Reine Setup-Wettkämpfe (noch kein Wurf) haben nichts auszuwerten.
+export function getWettkaempfeMitErgebnis() {
+  return getWettkaempfe().filter((w) => wettkampfStatus(w) !== 'setup').sort(nachDatum);
 }
 
 export function setActiveWettkampf(id) {

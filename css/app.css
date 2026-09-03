@@ -15,6 +15,13 @@
 
 * { box-sizing: border-box; }
 
+/* `hidden` muss GELTEN. Ohne diese Regel gewinnt jede Klasse, die selbst ein `display`
+   setzt (z.B. .stat-filter { display: flex }), gegen das `display: none` des Browsers —
+   Autor-Regeln schlagen die des User-Agents unabhaengig von der Spezifitaet. Die Leiste
+   stand dann sichtbar da, obwohl das JS sie ausgeblendet hatte. Die Views blenden ueber
+   `el.hidden` aus; diese eine Regel macht das fuer alle verlaesslich. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -199,6 +206,8 @@ body {
   margin-bottom: 14px;
   border-bottom: 1px solid var(--border);
 }
+/* Knopf am Zeilenende: nicht mitten im Wort umbrechen (kurze Labels wie „⤓ CSV"). */
+.erf-setting-row > .erf-btn { flex: 0 0 auto; padding: 0 14px; white-space: nowrap; }
 
 .erf-setting-text {
   display: flex;
@@ -1585,6 +1594,22 @@ button.mini-pin { cursor: pointer; }
 .mba-mirror .stats-metrics { direction: rtl; }
 .mba-mirror .stats-metric { direction: ltr; }
 
+/* Mannschafts-Export: je Mannschaft eine Zeile mit Name + Stand links und den beiden
+   Ausgabe-Knöpfen (PDF/CSV) rechts. Auf schmalen Schirmen rutschen die Knöpfe unter den
+   Namen (flex-wrap), damit nichts abgeschnitten wird. */
+.wk-export-list { display: flex; flex-direction: column; gap: 10px; }
+.wk-export-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.wk-export-team { flex: 1 1 160px; min-width: 0; font-weight: 700; }
+.wk-export-team small { display: block; font-weight: 400; font-size: 0.78rem; color: var(--text-dim); }
+.wk-export-btns { display: flex; gap: 8px; }
+.wk-export-btns .btn-mini:disabled { opacity: 0.45; cursor: default; }
+
 /* Durchgänge als Statuskarten: farbiger Status-Rand links, oben Nummer-Chip + „Durchgang N"
    + Status-Badge, darunter die Aktion; Löschen als kleiner Button oben rechts. Mobil einspaltig
    (volle Breite), am Desktop als Kachel-Raster (siehe Kontrollzentrum-Media-Query). */
@@ -1701,6 +1726,24 @@ button.mini-pin { cursor: pointer; }
 .wp-export-player { display: flex; align-items: center; gap: 7px; font-size: 0.9rem; cursor: pointer; }
 .wp-export-player input { width: 17px; height: 17px; }
 .wp-export .erf-btn { width: 100%; display: flex; align-items: center; justify-content: center; }
+/* PDF + CSV nebeneinander (auf schmalen Schirmen untereinander). */
+.wp-export-btns { display: flex; flex-wrap: wrap; gap: 10px; }
+.wp-export-btns .erf-btn { flex: 1 1 200px; width: auto; }
+.wp-export-hint { margin: 8px 0 0; font-size: 0.78rem; color: var(--text-dim); }
+
+/* Export-Zeile je Spieler unter den Kennzahlen (Desktop-Statistik-Spalte / mobile Statistik). */
+.stats-export { display: flex; gap: 8px; margin-top: 12px; }
+.erf-btn-sm {
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+}
 
 /* Übersicht-Button in der Satz-Zeile (▦): quadratisch, hebt sich von den Satz-Pills ab. */
 .erf-stab-more {
@@ -2193,7 +2236,18 @@ button.mini-pin { cursor: pointer; }
 .stat-open-hint { margin-top: 6px; font-size: 0.75rem; color: var(--text-dim); text-align: right; }
 .stat-card.is-openable:hover .stat-open-hint { color: var(--accent); }
 .stat-card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+/* 🗑 an der Historien-Karte. Steht bewusst in der Kopfzeile (nicht am Rand): die Karte selbst
+   ist anklickbar, der Knopf muss sich davon sichtbar absetzen. Fehlt er, gehoert der Eintrag
+   nicht mir (ueber die LizenzID gefundenes, fremd erfasstes Spiel). */
+.stat-del {
+  flex: none; margin-left: 8px; padding: 2px 6px; border-radius: 8px;
+  background: none; border: none; color: var(--text-dim);
+  font-size: 0.95rem; line-height: 1; cursor: pointer;
+}
+.stat-del:hover, .stat-del:focus-visible { color: var(--accent); background: var(--surface-2); }
 .stat-date { font-size: 0.8rem; color: var(--text-dim); }
+/* Titelzeile einer Wettkampf-Karte (ein Wettkampf = ein Eintrag, nicht ein Durchgang). */
+.stat-titel { font-weight: 700; font-size: 0.95rem; margin-bottom: 4px; }
 .stat-prow { display: flex; align-items: center; justify-content: space-between; padding: 3px 0; }
 .stat-pname { font-size: 0.95rem; color: var(--text); }
 .stat-ptotal { color: var(--accent); font-weight: 800; }
@@ -2526,6 +2580,8 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
   background: none; border: none; color: var(--text-dim); font-size: 0.8rem;
   text-decoration: underline; cursor: pointer; padding: 0; align-self: flex-start;
 }
+/* Endgültige Aktion (Wettkampf löschen) — sichtbar, aber bewusst unauffälliger als ein Knopf. */
+.link-btn.is-danger { color: #e08585; }
 .ov-url-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
 .ov-url-input {
   flex: 1 1 auto; min-width: 0; background: var(--surface-2); color: var(--text);
@@ -2605,6 +2661,14 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 }
 .stat-zuordnung .field-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
 .stat-zuordnung select { flex: 1 1 auto; min-width: 0; }
+
+/* Woher kennt das Profil dieses Ergebnis (LizenzID / ausdrueckliche Zuordnung)? */
+.stat-quelle { margin: 6px 0 0; font-size: 0.78rem; color: var(--text-dim); }
+
+/* Filterleiste ueber der Historie: Spielart, Anlage, Reihenfolge. Auf schmalen Schirmen
+   duerfen die drei Auswahlen umbrechen, statt zu schrumpfen. */
+.stat-filter { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 12px; }
+.stat-filter select { flex: 1 1 30%; min-width: 8.5em; margin: 0; }
 
 /* --- „Das bin ich" in der Aufstellungstabelle (Wettkampf-Hub) ----------------
    Die Positionsnummer ist zugleich der Umschalter: unmarkiert nur die Zahl mit blassem

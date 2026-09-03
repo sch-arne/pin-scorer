@@ -1,5 +1,5 @@
 // Setup für "Sportkegeln-Wettkampf". Zwei Tabs:
-//   „Programm":     Name/Datum, Anlage (PFLICHT) + bespielte Bahnen, Bahnart, Bahnwechsel,
+//   „Programm":     Name/Datum, Anlage (optional) + bespielte Bahnen, Bahnart, Bahnwechsel,
 //                   Sätze, Würfe/Satz, Teilsätze.
 //   „Mannschaften": Anzahl Mannschaften (+ Namen), je Mannschaft die Startbahn(en) aus den
 //                   bespielten Bahnen, Spieler je Mannschaft.
@@ -16,6 +16,17 @@ import { buildWettkampf } from '../logic/wettkampf-build.js';
 import { MODI, BAHNWECHSEL, PRESETS, ART_LABEL } from '../logic/sportkegeln-presets.js';
 
 const TAB_ORDER = ['programm', 'mannschaften', 'wertung'];
+
+// Erstellbar? Die bespielten Bahnen stehen fest (mit oder ohne Anlage) und jede Mannschaft hat
+// mindestens eine Startbahn. Eine Anlage ist NICHT nötig — ohne sie bleibt der Wettkampf lokal;
+// das Teilen verlangt sie dann im Hub nach (views/wettkampf-hub.js).
+// Absichtlich eine Funktion für BEIDE Stellen: die Prüfung stand früher doppelt (create() und
+// das Ausgrauen im template) und lief beim Ändern auseinander.
+function istErstellbar(s) {
+  return !!(s.playedLanes.length
+    && s.mannschaften.every((m) => m.lanes.length >= 1)
+    && s.spielerJeMannschaft >= 1);
+}
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const uid = (p) => p + Math.random().toString(36).slice(2, 8);
 const sortNum = (arr) => arr.slice().sort((a, b) => a - b);
@@ -32,13 +43,20 @@ function defaultState() {
     wuerfeProSatz: p.wuerfeProSatz,
     teilsaetze: [...p.teilsaetze],
     bahnwechsel: p.bahnwechsel,
-    // Anlage (Pflicht):
+    // Anlage (optional). MIT Anlage sind die bespielten Bahnen deren echte Bahnen; OHNE Anlage
+    // wählt man frei Anzahl + erste Bahn (wie im Training-Setup). Ein Wettkampf ohne Anlage
+    // bleibt LOKAL — geteilt (Mehrgeräte/OBS-Overlay) werden kann er erst, wenn ihm im Hub
+    // eine Anlage zugewiesen wurde. Grund: die Anlage ist der gemeinsame Bezugspunkt, über den
+    // andere Geräte und das Overlay die Bahnen derselben Halle zuordnen.
     anlagen: [],
     anlageId: null,
     anlageBahnen: [],       // [{ id, nummer, bahnart }] der gewählten Anlage, nach Nummer sortiert
     anlageLoading: false,
     anlageError: '',
-    playedLanes: [],        // bespielte Bahnnummern (Teilmenge der Anlage), Standard: alle
+    playedLanes: [],        // bespielte Bahnnummern (mit Anlage: Teilmenge davon), Standard: alle
+    // Nur ohne Anlage: frei gewählter, fortlaufender Bahnbereich.
+    freiBahnen: 4,
+    freiErsteBahn: 1,
     // Mannschaften:
     mannschaften: [{ id: uid('m'), name: 'Mannschaft 1', lanes: [] }, { id: uid('m'), name: 'Mannschaft 2', lanes: [] }],
     spielerJeMannschaft: 6,
@@ -103,7 +121,11 @@ export function setupWettkampfView() {
   }
 
   async function selectAnlage(id) {
-    if (!id) { state.anlageId = null; state.anlageBahnen = []; state.playedLanes = []; state.anlageError = ''; update(); return; }
+    if (!id) {
+      // Zurück auf „ohne Anlage": der frei gewählte Bahnbereich greift wieder (update -> syncFreieBahnen).
+      state.anlageId = null; state.anlageBahnen = []; state.playedLanes = []; state.anlageError = '';
+      update(); return;
+    }
     state.anlageId = id;
     state.anlageBahnen = [];
     state.playedLanes = [];
@@ -123,6 +145,16 @@ export function setupWettkampfView() {
     }
     state.anlageLoading = false;
     update();
+  }
+
+  // Ohne Anlage: die bespielten Bahnen sind der frei gewählte, fortlaufende Bereich. Wird vor
+  // jedem Render angeglichen, damit Anzahl/erste Bahn und playedLanes nie auseinanderlaufen.
+  function syncFreieBahnen(s) {
+    if (s.anlageId) return;
+    const lanes = Array.from({ length: s.freiBahnen }, (_, i) => s.freiErsteBahn + i);
+    if (lanes.join(',') === s.playedLanes.join(',')) return;
+    s.playedLanes = lanes;
+    assignDefaultLanes(s);   // Bahnbereich geändert -> Team-Aufteilung neu
   }
 
   // Bespielte Bahn an-/abwählen. Abgewählte Bahnen fallen auch aus den Team-Zuordnungen.
@@ -196,7 +228,9 @@ export function setupWettkampfView() {
   function setField(field, val) {
     if (Number.isNaN(val)) { update(); return; }
     if (field === 'mannschaftenCount') { setAnzahlMannschaften(val); return; }
-    if (field === 'saetze') state.saetze = clamp(val, 1, 99);
+    if (field === 'freiBahnen') state.freiBahnen = clamp(val, 1, 24);
+    else if (field === 'freiErsteBahn') state.freiErsteBahn = clamp(val, 1, 999);
+    else if (field === 'saetze') state.saetze = clamp(val, 1, 99);
     else if (field === 'gesamtholzPunkte') state.wertung.gesamtholzPunkte = clamp(val, 0, 99);
     else if (field === 'kriterium2Punkte') state.wertung.kriterium2Punkte = clamp(val, 0, 99);
     else if (field === 'spielerJeMannschaft') {
@@ -214,6 +248,8 @@ export function setupWettkampfView() {
   }
 
   function currentOf(field) {
+    if (field === 'freiBahnen') return state.freiBahnen;
+    if (field === 'freiErsteBahn') return state.freiErsteBahn;
     if (field === 'saetze') return state.saetze;
     if (field === 'wuerfeProSatz') return state.wuerfeProSatz;
     if (field === 'gesamtholzPunkte') return state.wertung.gesamtholzPunkte;
@@ -229,15 +265,8 @@ export function setupWettkampfView() {
     update();
   }
 
-  // Erstellbar? Anlage + Bahnen gewählt, jede Mannschaft hat ≥1 Startbahn.
-  function canCreate() {
-    return !!(state.anlageId && state.anlageBahnen.length && state.playedLanes.length
-      && state.mannschaften.every((m) => m.lanes.length >= 1)
-      && state.spielerJeMannschaft >= 1);
-  }
-
   function create() {
-    if (!canCreate()) { update(); return; }
+    if (!istErstellbar(state)) { update(); return; }
     const anlage = state.anlagen.find((a) => a.id === state.anlageId);
     const { wettkampf, games } = buildWettkampf({
       name: state.name,
@@ -263,6 +292,7 @@ export function setupWettkampfView() {
   }
 
   function update() {
+    syncFreieBahnen(state);
     root.innerHTML = template(state);
     wire();
   }
@@ -346,7 +376,7 @@ function stepper(field, value, min) {
 }
 
 function anlageOptionsHtml(s) {
-  return `<option value="">— Anlage wählen —</option>`
+  return `<option value="">— Ohne Anlage (bleibt auf diesem Gerät) —</option>`
     + s.anlagen.map((a) => `<option value="${esc(a.id)}"${s.anlageId === a.id ? ' selected' : ''}>${esc(a.name)}${a.ort ? ` (${esc(a.ort)})` : ''}</option>`).join('');
 }
 
@@ -366,17 +396,36 @@ function anlageSection(s) {
       </div>
       <p class="field-hint">Gewählt: ${s.playedLanes.length} von ${s.anlageBahnen.length}</p>
     </section>` : '';
+  // Ohne Anlage: freier, fortlaufender Bahnbereich (wie im Training-Setup).
+  const freieBahnen = s.anlageId ? '' : `
+    <section class="field">
+      <label class="field-label">Bespielte Bahnen</label>
+      <div class="chips bahnen-row">
+        ${stepper('freiBahnen', s.freiBahnen, 1)}
+        <div class="inline-num">
+          <span class="inline-num-label">1. Bahn</span>
+          <div class="inline-stepper">
+            <button type="button" class="step-btn sm" data-step="dec" data-field="freiErsteBahn" aria-label="erste Bahn weniger">−</button>
+            <input class="step-val sm" type="number" inputmode="numeric" min="1" value="${s.freiErsteBahn}" data-input="freiErsteBahn" />
+            <button type="button" class="step-btn sm" data-step="inc" data-field="freiErsteBahn" aria-label="erste Bahn mehr">+</button>
+          </div>
+        </div>
+      </div>
+      <p class="field-hint">Bahn ${s.freiErsteBahn}–${s.freiErsteBahn + s.freiBahnen - 1}</p>
+    </section>`;
   return `
     <section class="field">
-      <label class="field-label" for="wk-anlage">Anlage <small class="field-note">· Pflicht</small></label>
+      <label class="field-label" for="wk-anlage">Anlage <small class="field-note">· optional</small></label>
       <select class="select-full" data-field="anlage" id="wk-anlage">
         ${anlageOptionsHtml(s)}
       </select>
       ${s.anlageLoading ? '<p class="field-hint">Lade Bahnen …</p>' : ''}
       ${s.anlageError ? `<p class="field-hint">${esc(s.anlageError)}</p>` : ''}
-      ${!s.anlagen.length && !s.anlageLoading ? '<p class="field-hint">Keine Anlagen verfügbar — bitte zuerst unter „Anlagen" eine anlegen (Konto nötig).</p>' : ''}
-      ${s.anlageId && anlageActive && !s.anlageBahnen.length ? '<p class="field-hint">Diese Anlage hat keine Bahnen.</p>' : ''}
+      ${s.anlageId ? '' : '<p class="field-hint">Ohne Anlage bleibt der Wettkampf auf <strong>diesem Gerät</strong>. Zum Teilen (Mehrgeräte-Erfassung, OBS-Overlay) braucht er eine Anlage — die lässt sich später im Wettkampf nachtragen.</p>'}
+      ${!s.anlagen.length && !s.anlageLoading ? '<p class="field-hint">Keine Anlagen verfügbar — unter <a href="#/anlagen">Anlagen</a> eine anlegen (Konto nötig).</p>' : ''}
+      ${s.anlageId && !anlageActive && !s.anlageLoading ? '<p class="field-hint">Diese Anlage hat keine Bahnen.</p>' : ''}
     </section>
+    ${freieBahnen}
     ${bahnenChips}`;
 }
 
@@ -450,9 +499,8 @@ function tabProgramm(s) {
 
 function tabMannschaften(s) {
   const played = sortNum(s.playedLanes);
-  const anlageReady = !!(s.anlageId && s.anlageBahnen.length && played.length);
-  if (!anlageReady) {
-    return '<p class="field-hint">Bitte zuerst im Tab „Programm" eine Anlage und die bespielten Bahnen wählen.</p>';
+  if (!played.length) {
+    return '<p class="field-hint">Bitte zuerst im Tab „Programm" die bespielten Bahnen festlegen.</p>';
   }
   const laneChips = (team) => played.map((n) => {
     const a = artOfLane(s, n);
@@ -574,9 +622,7 @@ function template(s) {
     : s.tab === 'mannschaften' ? tabMannschaften(s)
     : tabWertung(s);
   const isLast = s.tab === 'wertung';
-  const ok = !!(s.anlageId && s.anlageBahnen.length && s.playedLanes.length
-    && s.mannschaften.every((m) => m.lanes.length >= 1) && s.spielerJeMannschaft >= 1);
-  const disabled = isLast && !ok;
+  const disabled = isLast && !istErstellbar(s);
   return `
     <header class="page-header">
       <a class="back-btn" href="#/neues-spiel" aria-label="Zurück">←</a>
