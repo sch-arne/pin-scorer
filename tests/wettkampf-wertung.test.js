@@ -131,3 +131,38 @@ test('fmtPunkte: ganze Zahl schlicht, halbe mit Komma', () => {
   assert.equal(fmtPunkte(1.5), '1,5');
   assert.equal(fmtPunkte(0), '0');
 });
+
+test('computeWertung: EWP-Punkt rechnet auf der vollen Feldgröße (Zwischenstand)', () => {
+  // 2x6 Schere, Schwelle 31 (Vereinsvorgabe) — erst je 4 Spieler gewertet, der Gast dominiert.
+  // Die EWP-Skala muss die des ganzen Feldes sein (bester = 12), sonst bleibt die Schwelle
+  // unerreichbar und der Zusatzpunkt ginge fälschlich ans Heim-Team.
+  const teams = [{ id: 'A', name: 'Heim' }, { id: 'B', name: 'Gast' }];
+  const wk = { mannschaften: teams, spielerJeMannschaft: 6, programm: { preset: 'schere' },
+    wertung: { modus: 'duell', gesamtholzPunkte: 2, kriterium2: 'ewp', kriterium2Punkte: 1, ewp: { minHolz: 1 }, ewpSchwelle: 31 } };
+  const einzel = [
+    p('B', 560), p('B', 555), p('B', 550), p('B', 545),
+    p('A', 500), p('A', 495), p('A', 490), p('A', 485),
+    p('B', 0), p('B', 0), p('A', 0), p('A', 0), // noch nicht gespielt
+  ];
+  const w = computeWertung(wk, { einzel }, []);
+  assert.equal(w.away.ewpSumme, 42); // 12+11+10+9
+  assert.equal(w.home.ewpSumme, 26); // 8+7+6+5
+  assert.equal(w.away.ewpPunkt, 1);  // 42 >= 31 → Zusatzpunkt an den Gast
+  assert.equal(w.home.ewpPunkt, 0);
+  assert.equal(w.away.spielpunkte, 3);
+  assert.equal(w.home.spielpunkte, 0);
+});
+
+test('computeWertung: Team-EWP-Summen decken sich mit der angezeigten Skala', () => {
+  // Der Hub/das Overlay ruft assignEwp nach computeWertung mit derselben Feldgröße erneut auf —
+  // beide Wege müssen dieselben Summen liefern (sonst weicht die Anzeige von der Punktvergabe ab).
+  const teams = [{ id: 'A', name: 'Heim' }, { id: 'B', name: 'Gast' }];
+  const wk = { mannschaften: teams, spielerJeMannschaft: 6, programm: { preset: 'schere' },
+    wertung: { modus: 'duell', gesamtholzPunkte: 2, kriterium2: 'ewp', kriterium2Punkte: 1, ewp: { minHolz: 1 }, ewpSchwelle: 31 } };
+  const einzel = [p('A', 540), p('A', 520), p('B', 530), p('B', 510), p('B', 505)];
+  const w = computeWertung(wk, { einzel }, []);
+  assignEwp(einzel, 'A', 1, 12); // wie in wettkampf-hub.js / overlay.js
+  const sum = (id) => einzel.filter((x) => x.mannschaftId === id).reduce((s, x) => s + (x.ewp || 0), 0);
+  assert.equal(sum('A'), w.home.ewpSumme);
+  assert.equal(sum('B'), w.away.ewpSumme);
+});

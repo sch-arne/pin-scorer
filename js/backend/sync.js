@@ -26,6 +26,10 @@ import {
 
 export { istLizenzWettkampf };
 import { sportwinnerOhnePersonendaten } from '../logic/wettkampf-build.js';
+import { ohneVerborgene } from '../logic/loeschen.js';
+import { computeGameStats } from '../logic/statistik.js';
+import { teilsatzRanges } from '../logic/teilsaetze.js';
+import { ergebnisZeilen } from '../logic/ergebnis-snapshot.js';
 import { schreibeVertraeglich as dbSchreibeVertraeglich } from '../logic/db-spalten.js';
 
 export { ensureGeraet, geraetId, kontoId };
@@ -77,6 +81,15 @@ function assembleLocalGame(sp, spieler, blocks) {
   return {
     id: 'r-' + sp.id,          // stabile lokale id aus der remote-id abgeleitet
     remoteId: sp.id,
+    // Wem gehoert das Spiel? Entscheidet, ob es sich ueberhaupt loeschen/verbergen laesst
+    // (logic/loeschen.js) — ueber die eigene LizenzID gefundene FREMDE Spiele nicht.
+    besitzer: sp.besitzer || null,
+    // Gehoert das Spiel zu einem Wettkampf? Bewusst die REMOTE-id (nicht `wettkampfId`, das
+    // auf einen LOKALEN Wettkampf zeigen wuerde, den es hier evtl. gar nicht gibt): so kann
+    // die Statistik die Durchgaenge eines Wettkampfs zu EINEM Eintrag buendeln und ihn bei
+    // Bedarf per pullWettkampf nachladen. pullWettkampf setzt `wettkampfId` zusaetzlich.
+    wettkampfRemoteId: sp.wettkampf_id || null,
+    durchgangNr: sp.durchgang_nr ?? null,
     linked: true,
     beitrittsCode: sp.beitritts_code,
     zuschauerCode: sp.zuschauer_code,
@@ -286,7 +299,34 @@ export async function linkGame(game, opts = {}) {
     }
   }
 
+  // War das Spiel beim Teilen SCHON fertig, gaebe es sonst nie Ergebnis-Snapshots: geschrieben
+  // werden die ausschliesslich beim Spielende in der Erfassung (spiel-laufend.js/finishRemote),
+  // und da laeuft ein importierter oder nachtraeglich geteilter Durchgang nicht mehr durch.
+  // Ohne diese Zeilen liegen Wuerfe und Aufstellung in der DB, aber die Konto-Statistik findet
+  // nichts — sie fragt genau spiel_ergebnis ab. Deshalb hier nachtragen, wo jeder Weg ins
+  // Teilen vorbeikommt (Einzelspiel, Wettkampf, Sportwinner-Import, nachgereichter Durchgang).
+  if ((game.status || '') === 'beendet') {
+    await ergebnisSnapshot(game, { remoteId, posToId, konto, passByPos, ichIndex });
+  }
+
   return { remoteId, beitrittsCode: sp.beitritts_code, zuschauerCode: sp.zuschauer_code, posToId, geraet };
+}
+
+// Ergebnis-Snapshots eines fertigen Spiels schreiben — dieselben Zeilen wie beim Spielende
+// (logic/ergebnis-snapshot.js). Best effort: die Aufzeichnung selbst (Wuerfe, Aufstellung) ist
+// schon geschrieben und darf an einem fehlgeschlagenen Snapshot nicht scheitern — aber lautlos
+// verschwinden darf er auch nicht.
+async function ergebnisSnapshot(game, { remoteId, posToId, konto, passByPos, ichIndex }) {
+  try {
+    const config = game.config || {};
+    const bloecke = (game.erfassung && game.erfassung.bloecke) || [];
+    const { players } = computeGameStats(config, bloecke, teilsatzRanges(config));
+    await pushResults(ergebnisZeilen(players, {
+      spielId: remoteId, spielerIdFuer: (pos) => posToId[pos], konto, passByPos, ichIndex,
+    }));
+  } catch (e) {
+    console.error('[sync] Ergebnis-Snapshot beim Teilen fehlgeschlagen', e);
+  }
 }
 
 // Vollstaendiges Remote-Spiel laden und als lokales Spiel-Objekt zusammenbauen.
@@ -325,11 +365,53 @@ export async function pullAccountFinishedGames() {
     .is('wettkampf_id', null)
     .order('aktualisiert_am', { ascending: false });
   if (error) throw error;
+  const versteckt = (await verborgeneIds()).spiele;   // was ich bei mir entfernt habe
   const games = [];
-  for (const row of rows || []) {
+  for (const row of (rows || []).filter((r) => !versteckt.has(r.id))) {
     try { games.push(await pullGame(row.id)); } catch { /* ein defektes Spiel ueberspringt die Liste nicht */ }
   }
   return games;
+}
+
+// Beendete WETTKAEMPFE dieses Accounts (geraeteuebergreifend) — das Gegenstueck zu
+// pullAccountFinishedGames eine Ebene hoeher. Die RLS gibt sie ueber `besitzer = auth.uid()`
+// frei (wettkampf_select). Jeder Wettkampf wird vollstaendig geladen (Durchgaenge + Bloecke),
+// damit die Statistik-Karte die Rangliste zeigen und der Hub ihn direkt oeffnen kann —
+// deshalb ist die Zahl bewusst gedeckelt.
+// Rueckgabe: [{ wettkampf, games }], zuletzt bearbeitete zuerst.
+export async function pullAccountFinishedWettkaempfe({ limit = 8 } = {}) {
+  const konto = await kontoId();
+  if (!konto) return [];
+  const { data: rows, error } = await supabase
+    .from('wettkampf')
+    .select('id, aktualisiert_am')
+    .eq('besitzer', konto)
+    .eq('status', 'beendet')
+    .order('aktualisiert_am', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  const versteckt = (await verborgeneIds()).wettkaempfe;
+  const out = [];
+  for (const row of (rows || []).filter((r) => !versteckt.has(r.id))) {
+    try { out.push(await pullWettkampf(row.id)); } catch { /* ein defekter WK kippt die Liste nicht */ }
+  }
+  return out;
+}
+
+// Nur die Koepfe (Name/Datum/Status) zu einer Menge von Wettkampf-IDs — eine Abfrage, ohne
+// die Durchgaenge zu laden. Fuer die Statistik-Karten, die die Durchgaenge ohnehin schon
+// haben und bloss den Namen des Wettkampfs brauchen. Ohne Leserecht (man kennt nur sein
+// eigenes Ergebnis, ist dem Wettkampf aber nie beigetreten) kommt die Zeile schlicht nicht
+// zurueck — die Karte faellt dann auf „Wettkampf" zurueck.
+export async function pullWettkampfKoepfe(ids) {
+  const list = [...new Set((ids || []).filter(Boolean))];
+  if (!list.length) return {};
+  const { data, error } = await supabase
+    .from('wettkampf').select('id, name, datum, status, anlage_id, besitzer, aktualisiert_am').in('id', list);
+  if (error) throw error;
+  const byId = {};
+  (data || []).forEach((w) => { byId[w.id] = w; });
+  return byId;
 }
 
 // --- Eigene Spieler-Historie (accountbasierte Statistik) --------------------
@@ -357,7 +439,11 @@ export async function pullMeineErgebnisse() {
   const byId = new Map();
   (own.data || []).forEach((r) => byId.set(r.id, r));
   (byPass.data || []).forEach((r) => { if (!byId.has(r.id)) byId.set(r.id, r); });
-  return [...byId.values()]
+  // Ein bei mir entferntes Spiel darf auch meine Statistik nicht mehr faerben — sonst waere es
+  // zwar aus der Historie verschwunden, wuerde aber weiter Schnitt und Bestwert bestimmen.
+  // Es ist MEINE Notiz: die Statistik der Mitspieler bleibt unveraendert.
+  const versteckt = (await verborgeneIds()).spiele;
+  return ohneVerborgene([...byId.values()], versteckt)
     .sort((a, b) => (b.erstellt_am || '').localeCompare(a.erstellt_am || ''));
 }
 
@@ -556,6 +642,7 @@ export async function pullWettkampf(remoteId) {
     ...base,
     id: localWkId,
     remoteId: w.id,
+    besitzer: w.besitzer || null,
     linked: true,
     beitrittsCode: w.beitritts_code,
     zuschauerCode: w.zuschauer_code,
@@ -783,22 +870,79 @@ export async function pushResults(rows) {
   if (error) throw error;
 }
 
-// --- Verbindung kappen (ohne zu löschen) ------------------------------------
+// --- Entfernen, ohne zu löschen ---------------------------------------------
+//
+// „Geloescht" heisst fuer alles, was schon in der Datenbank liegt: VERBORGEN — und zwar NUR
+// FUER MICH. Geschrieben wird eine Zeile in `verborgen` (Konto + Objekt), sonst nichts: das
+// Spiel, sein Beitritts- und Zuschauer-Code, das OBS-Overlay und alle anderen Geraete bleiben
+// unberuehrt. Wer etwas bei sich entfernt, fliegt selbst raus — niemand sonst merkt davon
+// etwas. Ausgeblendet wird es dann in pullAccountFinishedGames/-Wettkaempfe (die eigenen
+// Listen) und in pullMeineErgebnisse (die eigene Statistik).
+//
+// Rein LOKALE Spiele kennt die Datenbank gar nicht; die verschwinden ganz (store.deleteGame).
 
-// Die Verbindung eines Spiels lösen: Beitritts-Code entwerten + alle Geräte-Mitgliedschaften
-// entfernen. Danach ist das Spiel weder beitretbar noch (über den Code) sichtbar, und schon
-// verbundene Geräte verlieren den Zugriff — das Spiel selbst und alle Wurf-/Ergebnisdaten
-// bleiben aber in der DB erhalten. Nur der Ersteller darf (die security-definer RPC prüft das).
-export async function cutGameLink(remoteId) {
-  const { error } = await supabase.rpc('spiel_verbindung_kappen', { p_spiel: remoteId });
+async function merkeVerborgen(zeilen) {
+  if (!zeilen.length) return;
+  // upsert statt insert: zweimal Verbergen ist kein Fehler, sondern dasselbe Ergebnis.
+  const { error } = await supabase.from('verborgen')
+    .upsert(zeilen, { onConflict: 'konto,art,objekt_id' });
   if (error) throw error;
 }
 
-// Wie cutGameLink, aber für einen Wettkampf inkl. all seiner Durchgänge (schaltet auch das
-// OBS-Overlay ab, das am Wettkampf-Code hängt).
-export async function cutWettkampfLink(remoteId) {
-  const { error } = await supabase.rpc('wettkampf_verbindung_kappen', { p_wettkampf: remoteId });
+export async function verbergeSpiel(remoteId) {
+  const konto = await kontoId();
+  if (!konto) throw new Error('Nicht angemeldet');
+  await merkeVerborgen([{ konto, art: 'spiel', objekt_id: remoteId }]);
+  await loeseZuordnung([remoteId]);
+}
+
+// Die eigene „das war ich"-Zuordnung an diesen Spielen zuruecknehmen. Best effort und bewusst
+// NACH dem Verbergen: das Verbergen ist die Zusage an den Nutzer, das Loesen der Zuordnung nur
+// das Aufraeumen dahinter — scheitert es, ist das Spiel trotzdem weg (die Anzeige filtert
+// ohnehin ueber `verborgen`). Andersherum haette man eine geloeste Zuordnung an einem Spiel,
+// das weiter sichtbar ist.
+async function loeseZuordnung(spielIds) {
+  const ids = (spielIds || []).filter(Boolean);
+  if (!ids.length) return;
+  try {
+    await supabase.rpc('zuordnung_loesen_fuer_spiele', { p_spiele: ids });
+  } catch (e) { /* Anzeige stimmt auch ohne */ }
+}
+
+// Ein Wettkampf verschwindet nur dann wirklich, wenn auch seine Durchgaenge mitgehen: sonst
+// blieben die eigenen Ergebnisse aus ihnen in der Statistik stehen (pullMeineErgebnisse findet
+// sie ueber die LizenzID). Die Durchgang-IDs kommen aus der DB, weil lokal nicht jeder
+// Durchgang liegen muss (fremde Mannschaft erfasst ihre selbst).
+export async function verbergeWettkampf(remoteId) {
+  const konto = await kontoId();
+  if (!konto) throw new Error('Nicht angemeldet');
+  const { data, error } = await supabase.from('spiel').select('id').eq('wettkampf_id', remoteId);
   if (error) throw error;
+  const durchgaenge = (data || []).map((r) => r.id);
+  await merkeVerborgen([
+    { konto, art: 'wettkampf', objekt_id: remoteId },
+    ...durchgaenge.map((id) => ({ konto, art: 'spiel', objekt_id: id })),
+  ]);
+  await loeseZuordnung(durchgaenge);
+}
+
+// Was habe ICH bei mir entfernt? -> { spiele: Set, wettkaempfe: Set }. Die RLS gibt nur die
+// eigenen Zeilen frei, deshalb braucht die Abfrage keinen Filter. Best effort: faellt sie aus
+// (offline, Migration noch nicht eingespielt), bleiben die Listen vollstaendig stehen, statt
+// ganz zu verschwinden.
+export async function verborgeneIds() {
+  const leer = { spiele: new Set(), wettkaempfe: new Set() };
+  try {
+    const { data, error } = await supabase.from('verborgen').select('art, objekt_id');
+    if (error) throw error;
+    const out = { spiele: new Set(), wettkaempfe: new Set() };
+    (data || []).forEach((r) => {
+      (r.art === 'wettkampf' ? out.wettkaempfe : out.spiele).add(r.objekt_id);
+    });
+    return out;
+  } catch (e) {
+    return leer;
+  }
 }
 
 // --- Realtime ---------------------------------------------------------------

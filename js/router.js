@@ -32,8 +32,15 @@ export function currentQuery() {
   return new URLSearchParams(q);
 }
 
+// Ereignis, mit dem der Router der noch montierten View sagt: du wirst gleich ersetzt,
+// raeum auf (Timer, Realtime-Abos, globale Klassen). Bewusst NICHT "hashchange":
+// navigate() rendert bei gleichem Pfad direkt neu, ohne dass der Browser ein hashchange
+// feuert — eine View, die nur daran haengt, haette ihre Timer dann nie aufgeraeumt.
+export const UNMOUNT_EVENT = 'pins:view-unmount';
+
 function render() {
   if (!mountEl) return;
+  window.dispatchEvent(new CustomEvent(UNMOUNT_EVENT));
   const path = currentPath();
   const fn = routes.get(path) || notFoundHandler;
   mountEl.innerHTML = '';

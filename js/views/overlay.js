@@ -14,7 +14,7 @@
 // Wertung (Spielpunkte + EWP) kommt aus logic/wettkampf-wertung.js; bei Bahnarten ohne
 // hinterlegte Wertung zeigt das Overlay den Kegel-Zwischenstand statt der Spielpunkte.
 
-import { currentQuery } from '../router.js';
+import { currentQuery, UNMOUNT_EVENT } from '../router.js';
 import { computeWettkampfStats, durchgangStatusList } from '../logic/wettkampf.js';
 import { computeWertung, assignEwp, fmtPunkte } from '../logic/wettkampf-wertung.js';
 import { computeBahnState } from '../logic/bahnwechsel.js';
@@ -91,11 +91,11 @@ export function overlayView() {
     document.documentElement.classList.remove('overlay-mode');
     document.body.classList.remove('overlay-mode');
     window.removeEventListener('resize', fit);
-    window.removeEventListener('hashchange', teardown);
+    window.removeEventListener(UNMOUNT_EVENT, teardown);
   }
 
   window.addEventListener('resize', fit);
-  window.addEventListener('hashchange', teardown);
+  window.addEventListener(UNMOUNT_EVENT, teardown);
   fit();
   tick();
   return root;

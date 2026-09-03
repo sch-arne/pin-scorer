@@ -363,6 +363,52 @@ $$;
 
 grant execute on function wettkampf_verbindung_kappen(uuid) to anon, authenticated;
 
+-- --- Verbergen (der „Löschen"-Weg für alles, was in der Datenbank liegt) -----
+--
+-- Bewusst KEINE security-definer-RPC und bewusst kein Eingriff an der gemeinsamen Zeile:
+-- Verbergen ist eine rein persönliche Notiz. Wer etwas bei sich entfernt, schreibt eine
+-- Zeile in `verborgen` und fliegt damit selbst aus seinen Listen — Spiel, Beitritts- und
+-- Zuschauer-Code, OBS-Overlay und alle anderen Geräte bleiben unangetastet.
+--
+-- Ein früherer Entwurf setzte stattdessen `spiel.verborgen_am` und kappte dabei den
+-- Freigabe-Link. Das traf alle Beteiligten mit und ist zurückgenommen; die beiden
+-- Funktionen von damals werden hier entfernt (sie halten keine Daten).
+drop function if exists spiel_verbergen(uuid);
+drop function if exists wettkampf_verbergen(uuid);
+
+-- Beim Verbergen die EIGENE Zuordnung an diesen Spielen lösen: „das war ich" wird
+-- zurückgenommen, an der Aufstellung (spiel_spieler) wie an der Ergebniszeile
+-- (spiel_ergebnis). Sonst bliebe mein Konto an einem Spiel hängen, das ich bei mir entfernt
+-- habe — und meine_ergebnisse_beanspruchen() würde die Zeile bei jedem Öffnen der Statistik
+-- erneut für mich beanspruchen.
+--
+-- Angefasst werden ausschließlich Zeilen, die auf MICH zeigen (profil_id = auth.uid()).
+-- Name, Würfe und Ergebnis bleiben unverändert stehen, und die Zuordnungen der Mitspieler
+-- rührt das nicht an — es ist dieselbe Operation wie ergebnis_zuordnung_loesen, nur für ein
+-- ganzes Spiel auf einmal.
+--
+-- ACHTUNG: das allein genügt NICHT. Steht die eigene LizenzID an der Ergebniszeile
+-- (spiel_ergebnis.passnummer), findet pullMeineErgebnisse sie weiterhin — die Passnummer ist
+-- die Aufzeichnung, wer gespielt hat, und wird bewusst nicht gelöscht. Ausgeblendet wird
+-- deshalb weiterhin über die Tabelle `verborgen`; das hier räumt zusätzlich die Zuordnung ab.
+drop function if exists zuordnung_loesen_fuer_spiele(uuid[]);
+create or replace function zuordnung_loesen_fuer_spiele(p_spiele uuid[])
+returns void
+language plpgsql security definer
+set search_path = public as $$
+begin
+  if auth.uid() is null or p_spiele is null then
+    return;
+  end if;
+  update spiel_ergebnis set profil_id = null
+   where spiel_id = any (p_spiele) and profil_id = auth.uid();
+  update spiel_spieler set profil_id = null
+   where spiel_id = any (p_spiele) and profil_id = auth.uid();
+end;
+$$;
+
+grant execute on function zuordnung_loesen_fuer_spiele(uuid[]) to authenticated;
+
 -- --- RLS aktivieren ----------------------------------------------------------
 alter table geraet          enable row level security;
 alter table wettkampf       enable row level security;
@@ -376,6 +422,7 @@ alter table spiel_geraet    enable row level security;
 alter table spiel_spieler   enable row level security;
 alter table satz_block      enable row level security;
 alter table spiel_ergebnis  enable row level security;
+alter table verborgen       enable row level security;
 
 -- =============================================================================
 -- geraet — jedes Gerät sieht/verwaltet nur die eigenen Bindungen (konto = ich)
@@ -394,6 +441,24 @@ create policy geraet_update on geraet for update
 
 drop policy if exists geraet_delete on geraet;
 create policy geraet_delete on geraet for delete
+  using (konto = auth.uid());
+
+-- =============================================================================
+-- verborgen — was ICH bei mir entfernt habe. Streng self-only: niemand sieht oder
+-- ändert die Notizen eines anderen, und niemand kann für ein fremdes Konto etwas
+-- verbergen. Auf welches Spiel die Zeile zeigt, ist absichtlich NICHT geprüft —
+-- sie sagt nur „zeig mir das nicht mehr" und gibt keine Rechte.
+-- =============================================================================
+drop policy if exists verborgen_select on verborgen;
+create policy verborgen_select on verborgen for select
+  using (konto = auth.uid());
+
+drop policy if exists verborgen_insert on verborgen;
+create policy verborgen_insert on verborgen for insert
+  with check (konto = auth.uid());
+
+drop policy if exists verborgen_delete on verborgen;
+create policy verborgen_delete on verborgen for delete
   using (konto = auth.uid());
 
 -- =============================================================================

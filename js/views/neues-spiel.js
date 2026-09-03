@@ -3,12 +3,11 @@
 
 import { navigate } from '../router.js';
 import {
-  getResumableGames, setActiveGame, deleteGame,
-  getResumableWettkaempfe, getBeendeteWettkaempfe, getWettkampf,
-  setActiveWettkampf, deleteWettkampf,
+  getResumableGames, setActiveGame,
+  getResumableWettkaempfe, setActiveWettkampf,
 } from '../store.js';
 import { SPIELARTEN, labelOf, iconOf } from '../logic/spielarten.js';
-import { vergissWettkampf } from '../backend/sw-bruecke.js';
+import { spielLoeschen, wettkampfLoeschen } from './loeschen.js';
 import { esc } from '../util.js';
 
 function formatDate(iso) {
@@ -26,9 +25,11 @@ export function neuesSpielView() {
     // Durchgänge eines Wettkampfs erscheinen NICHT als einzelne Spiele — sie werden über
     // den Wettkampf-Hub fortgesetzt. Stattdessen listen wir die Wettkämpfe selbst.
     const resumableGames = getResumableGames().filter((g) => !g.wettkampfId);
-    // Laufende UND beendete Wettkämpfe listen: Wettkämpfe haben (anders als Einzelspiele) keine
-    // eigene Historie, daher bleibt ein beendeter Wettkampf hier zum Ansehen erreichbar.
-    const resumableWk = [...getResumableWettkaempfe(), ...getBeendeteWettkaempfe()];
+    // Nur NOCH NICHT fertige Wettkämpfe: „Fortsetzen" ist die Arbeitsliste. Ist der letzte
+    // Durchgang durchgeworfen, wandert der Wettkampf in die Historie (Statistiken) und
+    // verschwindet hier — genau wie ein beendetes Einzelspiel. Der Status wird dabei aus den
+    // Durchgängen abgeleitet (store.wettkampfStatus), nicht aus einem evtl. veralteten Feld.
+    const resumableWk = getResumableWettkaempfe();
     const resumable = [
       ...resumableWk.map((w) => ({ kind: 'wettkampf', obj: w })),
       ...resumableGames.map((g) => ({ kind: 'game', obj: g })),
@@ -58,7 +59,7 @@ export function neuesSpielView() {
     };
 
     const wettkampfCard = (w) => {
-      const statusLabel = w.status === 'beendet' ? 'Beendet' : (w.status === 'laufend' ? 'Läuft' : 'Setup');
+      const statusLabel = w.status === 'laufend' ? 'Läuft' : 'Setup';
       const durchgaenge = w.durchgaenge?.length || 0;
       const meta = [formatDate(w.updatedAt || w.createdAt), esc(w.name || 'Wettkampf'),
         durchgaenge ? `${durchgaenge} Durchg.` : ''].filter(Boolean).join(' · ');
@@ -124,54 +125,12 @@ export function neuesSpielView() {
       }));
     root.querySelectorAll('[data-del]').forEach((b) =>
       b.addEventListener('click', async () => {
-        const g = getResumableGames().find((x) => x.id === b.dataset.del);
-        const linked = !!(g && g.linked && g.remoteId);
-        const frage = linked
-          ? 'Dieses Spiel hier entfernen und den Freigabe-Link deaktivieren? Die aufgezeichneten '
-            + 'Daten bleiben erhalten, aber Beitreten ist danach nicht mehr möglich.'
-          : 'Dieses Spiel wirklich löschen?';
-        if (!window.confirm(frage)) return;
-        if (linked && !(await cutRemote('cutGameLink', g.remoteId))) return;
-        deleteGame(b.dataset.del);
-        render();
+        if (await spielLoeschen(b.dataset.del)) render();
       }));
     root.querySelectorAll('[data-del-wk]').forEach((b) =>
       b.addEventListener('click', async () => {
-        const w = getWettkampf(b.dataset.delWk);
-        const linked = !!(w && w.linked && w.remoteId);
-        const frage = linked
-          ? 'Diesen Wettkampf hier entfernen und den Freigabe-Link (inkl. OBS-Overlay) '
-            + 'deaktivieren? Die aufgezeichneten Daten bleiben erhalten, aber Beitreten und '
-            + 'Overlay funktionieren danach nicht mehr.'
-          : 'Diesen Wettkampf mit allen Durchgängen wirklich löschen?';
-        if (!window.confirm(frage)) return;
-        if (linked && !(await cutRemote('cutWettkampfLink', w.remoteId))) return;
-        // Kam der Wettkampf aus Sportwinner, die Brücke dieses Match vergessen lassen, damit sie
-        // beim nächsten Öffnen nicht den (nun toten) Code wiederfindet. Nur wirksam, wenn die
-        // Brücke in dieser Session bekannt ist (Vereins-PC); sonst still no-op.
-        const swNr = w && w.sportwinner && w.sportwinner.spielNr;
-        if (swNr != null || (w && w.beitrittsCode)) {
-          vergissWettkampf({ code: w.beitrittsCode || '', spielNr: swNr ?? null,
-            heim: w.mannschaften?.[0]?.name, gast: w.mannschaften?.[1]?.name });
-        }
-        deleteWettkampf(b.dataset.delWk);
-        render();
+        if (await wettkampfLoeschen(b.dataset.delWk)) render();
       }));
-  }
-
-  // Remote-Link eines verknüpften Objekts kappen (Code entwerten + Mitgliedschaften lösen).
-  // Gibt true bei Erfolg zurück; bei Fehler (z.B. offline) false + Hinweis, damit der Aufrufer
-  // das lokale Objekt NICHT entfernt und es später erneut versucht werden kann.
-  async function cutRemote(fn, remoteId) {
-    try {
-      const sync = await import('../backend/sync.js');
-      await sync[fn](remoteId);
-      return true;
-    } catch (e) {
-      window.alert('Der Freigabe-Link konnte nicht deaktiviert werden (keine Verbindung?). '
-        + 'Bitte online erneut versuchen — es wurde nichts entfernt.');
-      return false;
-    }
   }
 
   render();

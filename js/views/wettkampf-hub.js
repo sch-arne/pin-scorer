@@ -2,7 +2,7 @@
 // erfassen, die Aufstellung (Spielernamen je Mannschaft) füllen und die zusammengeführte
 // Rangliste (Einzel + Mannschaft) sehen.
 
-import { navigate } from '../router.js';
+import { navigate, UNMOUNT_EVENT } from '../router.js';
 import {
   getActiveWettkampf, getWettkampf, getWettkampfGames, saveWettkampf,
   getGame, saveGame, saveErfassung, setActiveGame, deleteGame, setActiveWettkampf, deleteWettkampf,
@@ -16,8 +16,15 @@ import {
   getBruecke, pushErgebnis, holeStatus, holeSportwinnerLive, brueckeStatusInfo, brueckePushText,
 } from '../backend/sw-bruecke.js';
 import { lanePlan } from '../logic/bahnwechsel.js';
+import { wettkampfLoeschen } from './loeschen.js';
+import { loeschart, VERBERGEN, NUR_HIER } from '../logic/loeschen.js';
 import { teamUebersichtSection } from './wettkampf-teams.js';
 import { mannschaftAuswertungSection, leererAuswertungFilter } from './wettkampf-auswertung.js';
+import {
+  buildMannschaftProtokollHTML, buildMannschaftCSV, mannschaftCsvDateiname, mannschaftExportInfo,
+} from '../logic/mannschaft-export.js';
+import { printProtokollHTML } from '../logic/wurfprotokoll.js';
+import { downloadCSV } from '../logic/wurf-csv.js';
 import { istLizenzWettkampf } from '../logic/spieler-identitaet.js';
 import { esc, fehlerText } from '../util.js';
 import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
@@ -52,6 +59,14 @@ export function wettkampfHubView() {
   // jedes Gerät wählt für sich. Ein Klick setzt den Wert und rendert neu.
   let hubAnsicht = 'durchgaenge';           // 'durchgaenge' | 'statistik' | 'wurfbild'
   let auswertungFilter = leererAuswertungFilter(); // { bahn, satz, teil, bild }
+
+  // ── Anlage nachtragen ────────────────────────────────────────────────────────
+  // Ein Wettkampf ohne Anlage bleibt lokal. Zum Teilen (Mehrgeräte, OBS-Overlay) braucht er
+  // eine — die wird hier nachgetragen. Die Liste wird lazy geladen (Konto nötig); offline
+  // bleibt sie leer und die Sektion sagt das.
+  let anlagenListe = [];
+  let anlagenGeladen = false;
+  let anlageMsg = '';
 
   // ── Sportwinner-Rückschreiben (nur Vereins-PC) ───────────────────────────────
   // Ist der Wettkampf aus Sportwinner importiert UND wurde die App von der Brücke mit
@@ -210,8 +225,11 @@ export function wettkampfHubView() {
     root.classList.toggle('view-kontrollzentrum', kz);
     root.classList.toggle('is-zuschauer', zuschauer);
     root.innerHTML = template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer,
-      ichSlotOf(wettkampf, games), { ...auswertungFilter, tab: hubAnsicht });
+      ichSlotOf(wettkampf, games), { ...auswertungFilter, tab: hubAnsicht },
+      { anlagen: anlagenListe, msg: anlageMsg }, meKonto);
     wire(wettkampf, games, zuschauer);
+    // Fehlt die Anlage, brauchen wir die Auswahlliste — einmalig nachladen.
+    if (!zuschauer && !wettkampf.anlageId) ladeAnlagen();
     paintSw(); // gehaltenen Brücken-Status ins frisch gerenderte DOM malen
     konfliktPanel.paint(); // offene Konflikte ins frisch gerenderte DOM malen
     if (!zuschauer) pushToBruecke(wettkampf, games);
@@ -451,6 +469,12 @@ export function wettkampfHubView() {
   async function shareWettkampf() {
     const w = getWettkampf(getActiveWettkampf());
     if (!w || w.linked) return;
+    // Ohne Anlage gibt es keinen gemeinsamen Bezugspunkt für die Bahnen — andere Geräte und
+    // das Overlay könnten die Bahnnummern keiner realen Halle zuordnen. Deshalb erst zuweisen.
+    if (!w.anlageId) {
+      setSyncMsg('Zum Teilen braucht der Wettkampf eine Anlage — unten zuweisen.');
+      return;
+    }
     setSyncMsg('Teile Wettkampf …');
     try {
       if (!syncMod) syncMod = await import('../backend/sync.js');
@@ -475,6 +499,70 @@ export function wettkampfHubView() {
     }
   }
 
+  // Anlagen-Auswahl lazy nachladen (nur wenn der Wettkampf noch keine Anlage hat).
+  async function ladeAnlagen() {
+    if (anlagenGeladen) return;
+    anlagenGeladen = true;
+    try {
+      const mod = await import('../backend/anlagen.js');
+      anlagenListe = (await mod.listAnlagen()) || [];
+    } catch (e) {
+      anlagenListe = [];
+      anlageMsg = 'Anlagen konnten nicht geladen werden (offline oder nicht angemeldet).';
+    }
+    render();
+  }
+
+  // Eine Anlage nachträglich zuweisen. Bedingung: die Anlage muss Bahnen mit GENAU den
+  // Nummern haben, auf denen bereits gespielt wird — sonst müssten wir Bahnen umnummerieren
+  // und damit Bahnplan, Aufstellung und bereits erfasste Sätze verschieben. Passt es nicht,
+  // sagen wir welche Bahn fehlt; dann legt man sie unter „Anlagen" an.
+  async function zuweiseAnlage(anlageId) {
+    const w = getWettkampf(getActiveWettkampf());
+    if (!w || !anlageId) return;
+    anlageMsg = 'Prüfe Anlage …';
+    render();
+    let bahnen = [];
+    try {
+      const mod = await import('../backend/anlagen.js');
+      bahnen = (await mod.listBahnen(anlageId)) || [];
+    } catch (e) {
+      anlageMsg = 'Bahnen der Anlage konnten nicht geladen werden: ' + fehlerText(e, 'online sein');
+      render();
+      return;
+    }
+    const nummern = new Set(bahnen.map((b) => b.nummer));
+    const gespielt = (w.playedLanes || []).slice().sort((a, b) => a - b);
+    const fehlend = gespielt.filter((n) => !nummern.has(n));
+    if (fehlend.length) {
+      anlageMsg = `Diese Anlage hat die bespielte${fehlend.length === 1 ? ' Bahn' : 'n Bahnen'} `
+        + `${fehlend.join(', ')} nicht. Bitte die Bahn(en) unter „Anlagen" anlegen oder eine `
+        + 'passende Anlage wählen.';
+      render();
+      return;
+    }
+    const anlage = anlagenListe.find((a) => a.id === anlageId);
+    const zuordnung = {};
+    gespielt.forEach((n) => {
+      const b = bahnen.find((x) => x.nummer === n);
+      if (b) zuordnung[n] = { id: b.id, bahnart: b.bahnart || null };
+    });
+    w.anlageId = anlageId;
+    w.anlageName = anlage ? anlage.name : '';
+    if (w.programm) w.programm.anlageId = anlageId;
+    saveWettkampf(w);
+    // Dieselbe Zuordnung in jedes Durchgang-Spiel, damit Satz -> Bahn -> reale Bahn zeigt.
+    getWettkampfGames(w.id).forEach((g) => {
+      if (!g.config) return;
+      g.config.anlageId = anlageId;
+      g.config.anlageName = w.anlageName;
+      g.config.bahnZuordnung = zuordnung;
+      saveGame(g);
+    });
+    anlageMsg = 'Anlage übernommen — der Wettkampf lässt sich jetzt teilen.';
+    render();
+  }
+
   function teardown() {
     clearTimeout(reloadTimer);
     clearInterval(zpollTimer);
@@ -485,7 +573,7 @@ export function wettkampfHubView() {
     cancelAnimationFrame(fitRaf);
     kzMedia.removeEventListener('change', render);
     window.removeEventListener('resize', scheduleFit);
-    window.removeEventListener('hashchange', teardown);
+    window.removeEventListener(UNMOUNT_EVENT, teardown);
   }
 
   function wire(wettkampf, games, zuschauer) {
@@ -511,6 +599,13 @@ export function wettkampfHubView() {
     // „Bild": im Wurf-Bild zwischen allen Würfen und nur denen auf das volle Bild umschalten.
     root.querySelectorAll('[data-mb-bild]').forEach((b) =>
       b.addEventListener('click', () => setFilter({ bild: b.dataset.mbBild })));
+
+    // Mannschafts-Export (PDF/CSV). Reine Ausgabe der ohnehin sichtbaren Daten — deshalb wie die
+    // Ansichts-Filter VOR dem Zuschauer-Abbruch verdrahtet: wer zusehen darf, darf auch drucken.
+    root.querySelectorAll('[data-export-team-pdf]').forEach((b) =>
+      b.addEventListener('click', () => exportTeamPdf(wettkampf, games, b.dataset.exportTeamPdf)));
+    root.querySelectorAll('[data-export-team-csv]').forEach((b) =>
+      b.addEventListener('click', () => exportTeamCsv(wettkampf, games, b.dataset.exportTeamCsv)));
 
     // Zuschauer-Modus: keine Bearbeitungs-Handler binden; Aufstellungs-Felder sperren.
     if (zuschauer) {
@@ -546,7 +641,23 @@ export function wettkampfHubView() {
       }));
 
     const share = root.querySelector('[data-action="share"]');
-    if (share) share.addEventListener('click', shareWettkampf);
+    if (share && !share.disabled) share.addEventListener('click', shareWettkampf);
+
+    // Wettkampf löschen — der Lebenszyklus gehört in den Hub: „Neues Spiel" listet nur noch
+    // die laufenden, ein beendeter Wettkampf wird über die Statistiken hierher geöffnet.
+    const delWk = root.querySelector('[data-action="del-wettkampf"]');
+    if (delWk) delWk.addEventListener('click', async () => {
+      if (await wettkampfLoeschen(wettkampf.id, { konto: meKonto })) navigate('/statistiken');
+    });
+
+    // Anlage nachtragen (nur ohne Anlage sichtbar).
+    const assign = root.querySelector('[data-action="assign-anlage"]');
+    if (assign) assign.addEventListener('click', () => {
+      const sel = root.querySelector('[data-field="hub-anlage"]');
+      const id = sel && sel.value;
+      if (!id) { anlageMsg = 'Bitte zuerst eine Anlage auswählen.'; render(); return; }
+      zuweiseAnlage(id);
+    });
 
     // Team-Logos: Datei wählen → verkleinern → in die Mannschaft schreiben (lokal + Server).
     root.querySelectorAll('input[data-logo]').forEach((inp) =>
@@ -584,6 +695,41 @@ export function wettkampfHubView() {
   function setOverlayMsg(m) {
     const el = root.querySelector('[data-overlay-msg]');
     if (el) el.textContent = m || '';
+  }
+
+  // ── Mannschafts-Export ─────────────────────────────────────────────────────
+  // Hinweiszeile der Export-Sektion (Erfolg/Fehler). Sie ersetzt den erklärenden Text erst,
+  // wenn wirklich etwas passiert ist — der nächste Render setzt ihn wieder her.
+  function setExportMsg(m) {
+    const el = root.querySelector('[data-export-msg]');
+    if (el && m) el.textContent = m;
+  }
+
+  // Alle Wurfprotokolle einer Mannschaft drucken (der Nutzer wählt im Druckdialog „Als PDF
+  // speichern"). Ein Dokument mit einem Blatt je Spieler und Durchgang.
+  function exportTeamPdf(wettkampf, games, mannschaftId) {
+    try {
+      const html = buildMannschaftProtokollHTML(wettkampf, games, mannschaftId);
+      if (!html) { setExportMsg('Für diese Mannschaft ist noch nichts erfasst.'); return; }
+      printProtokollHTML(html);
+    } catch (e) {
+      console.error('[export] Wurfprotokolle fehlgeschlagen', e);
+      setExportMsg('Wurfprotokolle konnten nicht erstellt werden.');
+    }
+  }
+
+  // Alle Wurfdaten einer Mannschaft als eine CSV-Datei herunterladen.
+  function exportTeamCsv(wettkampf, games, mannschaftId) {
+    try {
+      const text = buildMannschaftCSV(wettkampf, games, mannschaftId);
+      if (!text) { setExportMsg('Für diese Mannschaft ist noch nichts erfasst.'); return; }
+      const datei = mannschaftCsvDateiname(wettkampf, mannschaftId);
+      downloadCSV(datei, text);
+      setExportMsg('Gespeichert: ' + datei);
+    } catch (e) {
+      console.error('[export] Wurfdaten-CSV fehlgeschlagen', e);
+      setExportMsg('CSV konnte nicht erstellt werden.');
+    }
   }
 
   // Logo einer Mannschaft setzen/entfernen: lokal speichern, neu rendern und (falls geteilt)
@@ -629,7 +775,7 @@ export function wettkampfHubView() {
   }
 
   render();
-  window.addEventListener('hashchange', teardown);
+  window.addEventListener(UNMOUNT_EVENT, teardown);
   window.addEventListener('resize', scheduleFit); // Zahlen bei Größenänderung neu einpassen
   kzMedia.addEventListener('change', render); // Desktop⇄Handy live umschalten
   initSync();
@@ -725,8 +871,34 @@ function zuschauerSection() {
     </section>`;
 }
 
-function mehrgeraeteSection(wettkampf, syncMsg) {
+// Anlagen-Auswahl zum Nachtragen — nur solange der Wettkampf keine Anlage hat.
+// `ui` = { anlagen, msg }.
+function anlageNachtragSection(wettkampf, ui) {
+  if (wettkampf.anlageId) return '';
+  const bahnen = (wettkampf.playedLanes || []).join(', ');
+  const auswahl = ui.anlagen.length
+    ? `<select class="select-full" data-field="hub-anlage">
+         <option value="">— Anlage wählen —</option>
+         ${ui.anlagen.map((a) => `<option value="${esc(a.id)}">${esc(a.name)}${a.ort ? ` (${esc(a.ort)})` : ''}</option>`).join('')}
+       </select>
+       <button type="button" class="erf-btn" data-action="assign-anlage">Anlage übernehmen</button>`
+    : '<p class="field-hint">Keine Anlagen verfügbar.</p>';
+  return `
+    <section class="field">
+      <label class="field-label">📍 Anlage nachtragen</label>
+      <p class="field-hint">Dieser Wettkampf läuft <strong>ohne Anlage</strong> und bleibt damit auf
+        diesem Gerät. Zum Teilen (Mehrgeräte-Erfassung, OBS-Overlay) braucht er eine Anlage, die die
+        bespielten Bahnen ${esc(bahnen)} enthält.</p>
+      ${auswahl}
+      <p class="field-hint">Noch keine passende Anlage? Unter <a href="#/anlagen">Anlagen</a> anlegen
+        (Konto nötig) und dann hierher zurückkommen.</p>
+      <p class="join-msg" data-anlage-msg role="status">${esc(ui.msg || '')}</p>
+    </section>`;
+}
+
+function mehrgeraeteSection(wettkampf, syncMsg, anlageUi, konto) {
   const linked = !!(wettkampf.linked && wettkampf.remoteId);
+  const ohneAnlage = !wettkampf.anlageId;
   const code = wettkampf.beitrittsCode || '';
   const zcode = wettkampf.zuschauerCode || '';
   const body = linked
@@ -739,8 +911,10 @@ function mehrgeraeteSection(wettkampf, syncMsg) {
          <span class="erf-share-code">${esc(zcode)}</span>
        </div>` : ''}
        <p class="field-hint">Der <b>Eingabe-Code</b> ist zum Mit-Erfassen (Durchgänge parallel, Rangliste läuft live zusammen) — aus Schutz standardmäßig verdeckt, zum Ablesen antippen. Der <b>Zuschauer-Code</b> zeigt alles live, aber nur zum Ansehen. Beide unter „Spiel beitreten" eingeben.</p>`
-    : `<button type="button" class="erf-btn done" data-action="share">🔗 Wettkampf teilen</button>
-       <p class="field-hint">Teilt den Wettkampf geräteübergreifend — andere erfassen Durchgänge parallel mit. Konto nötig.</p>`;
+    : `<button type="button" class="erf-btn done" data-action="share"${ohneAnlage ? ' disabled' : ''}>🔗 Wettkampf teilen</button>
+       <p class="field-hint">${ohneAnlage
+         ? 'Erst eine Anlage zuweisen (siehe unten) — ohne sie lassen sich die Bahnen auf anderen Geräten und im Overlay keiner Halle zuordnen.'
+         : 'Teilt den Wettkampf geräteübergreifend — andere erfassen Durchgänge parallel mit. Konto nötig.'}</p>`;
   return `
     <section class="field">
       <label class="field-label">Mehrgeräte</label>
@@ -748,6 +922,30 @@ function mehrgeraeteSection(wettkampf, syncMsg) {
       <p class="join-msg" data-sync-msg role="status">${esc(syncMsg || '')}</p>
       ${brueckeRow(wettkampf)}
       <div data-sw-konflikte></div>
+    </section>
+    ${anlageNachtragSection(wettkampf, anlageUi)}
+    ${entfernenSection(wettkampf, konto)}`;
+}
+
+// „Wettkampf entfernen" — was der Knopf tut, hängt davon ab, wo der Wettkampf liegt und wem
+// er gehört (logic/loeschen.js). Bei einem fremden (beigetretenen) Wettkampf wird der Knopf
+// gar nicht erst gezeigt: er dürfte ohnehin nichts.
+function entfernenSection(wettkampf, konto) {
+  // Der Hub zeigt immer einen lokal vorhandenen Wettkampf — GESPERRT kann hier nicht auftreten.
+  const art = loeschart(wettkampf, { konto, lokal: true });
+  const hinweis = {
+    [VERBERGEN]: 'Nimmt den Wettkampf mit allen Durchgängen aus deiner Übersicht und deinen '
+      + 'Statistiken — nur für dich. Die aufgezeichneten Daten bleiben in der Datenbank, der '
+      + 'Freigabe-Link (Beitreten und OBS-Overlay) gilt weiter, und wer gerade mit erfasst, '
+      + 'macht ungestört weiter.',
+    [NUR_HIER]: 'Nimmt den Wettkampf von diesem Gerät. Er gehört einem anderen Konto — dort '
+      + 'läuft er unverändert weiter, und du kannst jederzeit mit dem Code wieder beitreten.',
+  }[art] || 'Entfernt den Wettkampf mit allen Durchgängen endgültig — er liegt nur auf diesem Gerät.';
+  return `
+    <section class="field">
+      <label class="field-label">Wettkampf entfernen</label>
+      <button type="button" class="link-btn is-danger" data-action="del-wettkampf">🗑 Wettkampf löschen</button>
+      <p class="field-hint">${hinweis}</p>
     </section>`;
 }
 
@@ -769,7 +967,43 @@ function brueckeRow(wettkampf) {
       : 'Die Übertragung nach Sportwinner läuft über den Vereins-PC, der die Brücke ausführt.'}</p>`;
 }
 
-function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichSlot, ansichtUi) {
+// ── Mannschafts-Export ───────────────────────────────────────────────────────
+// Alles einer Mannschaft auf einmal: die Wurfprotokolle als druckfertiges PDF (ein Blatt je
+// Spieler UND Durchgang) und die Wurfdaten als eine CSV (eine Zeile je Wurf, mit Durchgang-
+// und Mannschafts-Spalte). Der Export je Spieler/Durchgang bleibt daneben in der Erfassung —
+// hier geht es um den kompletten Wettkampf einer Mannschaft, ohne jeden Durchgang zu öffnen.
+// Gebaut wird in logic/mannschaft-export.js; hier stehen nur Knöpfe und Stand.
+function exportSection(wettkampf, games) {
+  const teams = wettkampf.mannschaften || [];
+  if (!teams.length) return '';
+  const zahl = (n, ein, viele) => `${n} ${n === 1 ? ein : viele}`;
+  const rows = teams.map((m) => {
+    const info = mannschaftExportInfo(wettkampf, games, m.id);
+    const leer = !info.blaetter;
+    const stand = leer
+      ? 'noch keine erfassten Würfe'
+      : `${zahl(info.spieler, 'Spieler', 'Spieler')} · ${zahl(info.blaetter, 'Blatt', 'Blätter')} aus ${zahl(info.durchgaenge, 'Durchgang', 'Durchgängen')}`;
+    const dis = leer ? ' disabled' : '';
+    return `
+      <div class="wk-export-row">
+        <span class="wk-export-team">${esc(m.name)}<small>${esc(stand)}</small></span>
+        <span class="wk-export-btns">
+          <button type="button" class="btn-mini" data-export-team-pdf="${esc(m.id)}"${dis}
+            title="Wurfprotokolle aller Spieler dieser Mannschaft drucken / als PDF speichern">🖨 PDF</button>
+          <button type="button" class="btn-mini" data-export-team-csv="${esc(m.id)}"${dis}
+            title="Wurfdaten aller Spieler dieser Mannschaft als CSV-Tabelle speichern">⤓ CSV</button>
+        </span>
+      </div>`;
+  }).join('');
+  return `
+      <section class="field kz-export">
+        <div class="field-row"><label class="field-label">📄 Mannschafts-Export</label></div>
+        <div class="wk-export-list">${rows}</div>
+        <p class="field-hint" data-export-msg role="status">PDF: ein Blatt je Spieler und Durchgang. CSV: eine Zeile je Wurf (Durchgang, Mannschaft, Spieler, Satz, Bahn, Teilsatz, Holz, Kegelbild) — Rohdaten für Excel/Calc.</p>
+      </section>`;
+}
+
+function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichSlot, ansichtUi, anlageUi, konto) {
   const metaLine = [
     wettkampf.datum ? new Date(wettkampf.datum).toLocaleDateString('de-DE') : '',
     wettkampf.anlageName || '',
@@ -799,7 +1033,7 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichS
 
   const durchgaengeSection = durchgaenge || '<p class="field-hint">Noch keine Durchgänge.</p>';
 
-  const secMehr = zuschauer ? zuschauerSection() : mehrgeraeteSection(wettkampf, syncMsg);
+  const secMehr = zuschauer ? zuschauerSection() : mehrgeraeteSection(wettkampf, syncMsg, anlageUi, konto);
   const secDurch = `
       <section class="field kz-durchgaenge">
         <div class="field-row">
@@ -842,6 +1076,9 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichS
   // lösen sich auf schmalen Schirmen per CSS (display:contents) auf. Das OBS-Overlay ist eine
   // Desktop-/Vereins-PC-Funktion (Livestream läuft dort) — daher nur im Kontrollzentrum-Layout.
   const secOverlay = (kz && !zuschauer) ? overlaySection(wettkampf) : '';
+  // Mannschafts-Export (Wurfprotokolle + Wurfdaten einer ganzen Mannschaft) — in jeder Ansicht
+  // sichtbar; im Kontrollzentrum unten in der Seitenspalte, mobil am Seitenende.
+  const secExport = exportSection(wettkampf, games);
   // Im Kontrollzentrum bleibt die Spaltenaufteilung stabil: die Auswertung läuft (wie die
   // Mannschafts-Übersicht) über die ganze Breite, darunter der Arbeitsbereich. Der kz-main-
   // Wrapper steht auch leer im Raster, damit die Seitenspalte rechts bleibt und nicht nach
@@ -849,12 +1086,15 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichS
   const inner = kz
     ? `${secTeam}${secSwitch}${secAuswertung}
        <div class="kz-main">${secDurchAktiv}</div>
-       <div class="kz-side">${secMehr}${secOverlay}</div>`
-    : `${secTeam}${secSwitch}${secAuswertung}${secDurchAktiv}${secMehr}`;
+       <div class="kz-side">${secMehr}${secOverlay}${secExport}</div>`
+    : `${secTeam}${secSwitch}${secAuswertung}${secDurchAktiv}${secMehr}${secExport}`;
 
+  // Zurück dorthin, wo der Wettkampf gelistet ist: fertige stehen in der Historie
+  // (Statistiken), noch laufende unter „Neues Spiel".
+  const zurueck = wettkampfBaseStatus(wettkampf, games) === 'beendet' ? '#/statistiken' : '#/neues-spiel';
   return `
     <header class="page-header wk-hub-header">
-      <a class="back-btn" href="#/neues-spiel" aria-label="Zurück">←</a>
+      <a class="back-btn" href="${zurueck}" aria-label="Zurück">←</a>
       <div class="wk-hub-heading">
         <h1 class="page-title">${esc(wettkampf.name || 'Wettkampf')}</h1>
         ${metaLine ? `<p class="wk-hub-meta">${esc(metaLine)}</p>` : ''}

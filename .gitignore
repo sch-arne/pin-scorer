@@ -11,3 +11,6 @@ roster.json
 # Lokale Overlay-Vorschau (Standbild der eigenen Bahn + Testharness, nicht deployen)
 _ov_preview.html
 _ov_bg.jpg
+
+# Test-Exporte des CSV-Downloads (landen im Projektordner, wenn der Browser hier speichert)
+Wurfdaten_*.csv

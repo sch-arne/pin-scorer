@@ -251,17 +251,19 @@ const STYLE = `
   @page { size: A4 portrait; margin: 8mm; }
 `;
 
-// Öffentliches API: aus einem Spiel das Protokoll-Dokument (ganzer HTML-String) bauen.
+// Die A4-Seiten EINES Spiels bauen (ohne Dokument-Rahmen) — je gewähltem Spieler eine Seite.
+// Getrennt vom Rahmen, damit der Mannschafts-Export (logic/mannschaft-export.js) die Seiten
+// mehrerer Durchgänge hintereinander in EIN Dokument legen kann.
 //   game:          { config, erfassung }
 //   playerIndices: welche Spieler (Index in spielerListe); default alle
 //   meta:          { titel, sub, istWettkampf, teamNameById }
-export function buildProtokollHTML(game, ranges, playerIndices, meta) {
+export function buildProtokollSeiten(game, ranges, playerIndices, meta) {
   const c = game.config;
   const bloecke = (game.erfassung && game.erfassung.bloecke) || [];
   const { players } = computeGameStats(c, bloecke, ranges);
   const idx = (playerIndices && playerIndices.length) ? playerIndices : players.map((p) => p.index);
 
-  const pages = idx.map((i) => {
+  return idx.map((i) => {
     const p = players[i];
     if (!p) return '';
     const sp = c.spielerListe[i] || {};
@@ -273,10 +275,19 @@ export function buildProtokollHTML(game, ranges, playerIndices, meta) {
     const arr = (bloecke[i] || []).map((b) => ({ ...b }));
     return playerPage(rich, arr, ranges, meta);
   }).join('');
+}
 
+// Fertige Seiten in das Druck-Dokument fassen (Kopf, Druck-CSS). `titel` ist zugleich der
+// Dokumenttitel — Chrome & Co. schlagen ihn beim „Als PDF speichern" als Dateinamen vor.
+export function protokollDokument(titel, seiten) {
   return `<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">`
-    + `<title>Wurfprotokoll — ${esc(meta.titel)}</title><style>${STYLE}</style></head>`
-    + `<body>${pages}</body></html>`;
+    + `<title>Wurfprotokoll — ${esc(titel)}</title><style>${STYLE}</style></head>`
+    + `<body>${seiten}</body></html>`;
+}
+
+// Öffentliches API: aus einem Spiel das Protokoll-Dokument (ganzer HTML-String) bauen.
+export function buildProtokollHTML(game, ranges, playerIndices, meta) {
+  return protokollDokument(meta.titel, buildProtokollSeiten(game, ranges, playerIndices, meta));
 }
 
 // Das Dokument über einen unsichtbaren iframe drucken (Nutzer wählt „Als PDF speichern").

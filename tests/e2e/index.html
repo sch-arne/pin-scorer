@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pin-Scorer · End-to-End-Tests</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #0f1115; color: #e7e9ee;
+      display: grid; grid-template-columns: minmax(420px, 1fr) auto; min-height: 100vh;
+    }
+    #left { padding: 16px 20px; overflow: auto; max-height: 100vh; }
+    #right { padding: 16px; border-left: 1px solid #262a33; background: #12151b; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .sub { color: #8d94a3; margin: 0 0 14px; font-size: 12px; }
+    button {
+      font: inherit; background: #2b6cb0; color: #fff; border: 0; border-radius: 8px;
+      padding: 8px 14px; cursor: pointer;
+    }
+    button:disabled { opacity: .5; cursor: default; }
+    .bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+    #summary { font-weight: 600; }
+    .s-pass { color: #4ade80; } .s-fail { color: #f87171; } .s-run { color: #fbbf24; }
+    .suite { margin: 0 0 6px; font-weight: 600; color: #c7ccd8; border-top: 1px solid #262a33; padding-top: 10px; }
+    .t { display: grid; grid-template-columns: 22px 1fr auto; gap: 6px; padding: 2px 0; align-items: baseline; }
+    .t.fail { color: #fca5a5; }
+    .t .ms { color: #6b7280; font-size: 11px; }
+    pre.err {
+      white-space: pre-wrap; background: #1c1114; border: 1px solid #5b2130; color: #fecaca;
+      padding: 8px 10px; border-radius: 6px; margin: 4px 0 8px 28px; font-size: 12px;
+    }
+    .frame-wrap { width: 620px; height: 500px; overflow: hidden; border: 1px solid #262a33; border-radius: 8px; }
+    iframe.app-frame { border: 0; transform-origin: top left; background: #0f1115; }
+    .note { font-size: 11px; color: #8d94a3; margin-top: 8px; max-width: 600px; }
+  </style>
+</head>
+<body>
+  <div id="left">
+    <h1>Pin-Scorer · End-to-End-Tests</h1>
+    <p class="sub">Fährt die echte App im iframe und bedient sie über das DOM.</p>
+    <div class="bar">
+      <button id="run">Alle Tests laufen lassen</button>
+      <span id="summary" class="s-run">bereit</span>
+    </div>
+    <div id="results"></div>
+  </div>
+  <div id="right">
+    <div class="frame-wrap"><div id="host"></div></div>
+    <p class="note">
+      Der Runner sichert alle <code>pins-scorer:*</code>-Einträge im localStorage vor dem Lauf
+      und stellt sie danach wieder her.
+    </p>
+  </div>
+  <script type="module" src="./runner.js"></script>
+</body>
+</html>

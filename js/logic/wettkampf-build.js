@@ -129,7 +129,7 @@ export function buildWettkampf(spec) {
     durchgaenge: [],
   };
   // Wertungskriterien (Punktvergabe) — im Setup „Wertung"-Tab definiert. Reist über
-  // config_json durch link/pullWettkampf mit; von computeWertung noch nicht konsumiert.
+  // config_json durch link/pullWettkampf mit und wird von computeWertung ausgewertet.
   if (spec.wertung) wettkampf.wertung = spec.wertung;
   if (spec.quelle) wettkampf.quelle = spec.quelle;
   // Sportwinner-Rückschreib-Zuordnung (Mannschaft->DLL-Seite, Spieler->DLL-Slot) unverändert
