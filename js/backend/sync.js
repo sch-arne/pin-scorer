@@ -236,10 +236,17 @@ export async function linkGame(game, opts = {}) {
   const now = new Date().toISOString();
   const config = game.config || {};
 
+  // Ein bereits FERTIGES Spiel wird bewusst NICHT als 'beendet' eingefuegt: die
+  // Anonymisierung der Namen haengt an einem UPDATE auf 'beendet' (Trigger
+  // trg_spiel_anonymisieren) und wuerde einen INSERT nie sehen — die Klarnamen blieben
+  // dauerhaft in der DB stehen. Deshalb 'laufend' einfuegen und den Status ganz unten,
+  // wenn Aufstellung und Ergebnis-Snapshots stehen, per UPDATE nachziehen.
+  const fertig = (game.status || '') === 'beendet';
+
   const insertRow = {
     besitzer: konto,
     spielart: game.spiel || 'sportkegler-wk',
-    status: game.status || 'setup',
+    status: fertig ? 'laufend' : (game.status || 'setup'),
     config_json: config,
     anlage_id: config.anlageId || null,
   };
@@ -305,8 +312,12 @@ export async function linkGame(game, opts = {}) {
   // Ohne diese Zeilen liegen Wuerfe und Aufstellung in der DB, aber die Konto-Statistik findet
   // nichts — sie fragt genau spiel_ergebnis ab. Deshalb hier nachtragen, wo jeder Weg ins
   // Teilen vorbeikommt (Einzelspiel, Wettkampf, Sportwinner-Import, nachgereichter Durchgang).
-  if ((game.status || '') === 'beendet') {
+  // Reihenfolge wie bei finishRemote (spiel-laufend.js): erst die Snapshots (sie tragen die
+  // LizenzID je Spieler), DANN der Statuswechsel — der Trigger braucht die LizenzID, um das
+  // passende Profil und dessen oeffentlichen Anzeigenamen zu finden.
+  if (fertig) {
     await ergebnisSnapshot(game, { remoteId, posToId, konto, passByPos, ichIndex });
+    await pushStatus(remoteId, 'beendet');
   }
 
   return { remoteId, beitrittsCode: sp.beitritts_code, zuschauerCode: sp.zuschauer_code, posToId, geraet };
