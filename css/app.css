@@ -2691,3 +2691,142 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 .wk-ich.is-ich { color: var(--accent); border-color: var(--accent); }
 .wk-ich.is-ich .wk-ich-star { opacity: 1; }
 .wk-ich:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- Hausnummern ---------------------------------------------------
+   Eigener Spiel-Typ (js/views/hausnummern-spiel.js): vier (oder mehr) Wuerfe ergeben eine
+   Zahl. Die Oberflaeche erbt Rahmen, Ziffernblock und Toast von der Sportkegeln-Erfassung
+   (.erf-*) und ergaenzt nur den Kaestchen-Streifen und die Stand-Tabelle. */
+.hn-board { gap: 10px; }
+/* Kopf/Kaestchen bleiben oben, der Ziffernblock sitzt am unteren Rand — auf hohen Displays
+   sonst klaffte eine Luecke ueber dem Spielernamen. */
+.hn-board .erf-numpad { margin-top: auto; }
+/* „Neues Spiel" ist ein <a> — ohne Flex sitzt der Text nicht mittig im Knopf. */
+.hn-actions .erf-btn { display: inline-flex; align-items: center; justify-content: center; }
+.hn-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.hn-head-name { font-weight: 800; font-size: 1.05rem; color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hn-head-round { flex: 0 0 auto; font-size: 0.8rem; color: var(--text-dim); }
+
+/* Livestand ueber der Erfassung: alle Spieler, alle Durchgaenge, Summe. Er ersetzt die
+   Spieler-Tabs UND die Durchgangs-Wahl — jede Zelle ist ein Sprung dorthin. Er darf schrumpfen
+   (viele Spieler) und rollen, damit Kaestchen und Ziffernblock ihren Platz behalten. */
+.hn-live {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 34vh;
+  overflow: auto;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.hn-live-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+.hn-live-table th, .hn-live-table td { padding: 0; text-align: right; white-space: nowrap; }
+.hn-live-table thead th {
+  padding: 2px 6px 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+.hn-live-table thead th.is-aktiv { color: var(--accent); }
+.hn-live-name { text-align: left; padding: 4px 8px 4px 2px; font-weight: 700; color: var(--text); }
+.hn-live-rang { margin-right: 4px; }
+.hn-live-summe { padding-right: 2px; font-weight: 800; color: var(--accent); }
+.hn-live-table tbody th.hn-live-name,
+.hn-live-table tbody td { border-top: 1px solid var(--border); }
+/* Zeile des Spielers, der gerade wirft */
+.hn-live-table tr.is-aktiv th, .hn-live-table tr.is-aktiv td { background: var(--surface-2); }
+/* Anklickbare Zelle je Durchgang */
+.hn-live-cell {
+  width: 100%;
+  padding: 5px 6px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  text-align: right;
+  cursor: pointer;
+}
+.hn-live-table td.is-offen .hn-live-cell { color: var(--text-dim); }
+.hn-live-table td.is-aktiv .hn-live-cell { color: var(--accent); font-weight: 800; }
+
+/* Die entstehende Hausnummer: je Stelle ein Kaestchen (--hn-stellen setzt die Spaltenzahl) */
+.hn-cells { display: grid; grid-template-columns: repeat(var(--hn-stellen, 4), 1fr); gap: 6px; }
+.hn-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: clamp(58px, 11vh, 92px);
+  padding: 6px 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.hn-digit { font-size: clamp(1.5rem, 5.6vh, 2.6rem); font-weight: 800; line-height: 1; color: var(--text); }
+.hn-pos { font-size: 0.66rem; font-weight: 700; color: var(--text-dim); }
+.hn-cell.is-leer .hn-digit { color: var(--text-dim); opacity: 0.6; }
+/* Hier landet der naechste Wurf */
+.hn-cell.is-ziel { border-color: var(--accent); }
+.hn-cell.is-ziel .hn-pos { color: var(--accent); }
+/* Freie Stelle, waehrend eine geworfene Zahl auf ihren Platz wartet ('wahl-nach') */
+.hn-cell.is-wahl { border-color: var(--accent); border-style: dashed; }
+/* Diese Stelle wird gerade korrigiert */
+.hn-cell.is-edit { background: var(--accent); border-color: var(--accent); }
+.hn-cell.is-edit .hn-digit, .hn-cell.is-edit .hn-pos { color: #1a1205; }
+/* Fehlwurf: die Ziffer steht, war aber kein gueltiger Wurf */
+.hn-cell.is-fehl { border-color: #e0603a; }
+.hn-cell.is-fehl .hn-pos { color: #e0603a; }
+
+.hn-hint { margin: 0; text-align: center; font-size: 0.85rem; color: var(--text-dim); }
+.hn-hint strong { color: var(--accent); }
+.hn-sum { margin: 0; text-align: center; font-size: 0.8rem; color: var(--text-dim); }
+.hn-sum strong { color: var(--text); font-size: 1.05rem; }
+.hn-fehl { color: #e0603a; }
+/* Taste mit Zusatz darunter („zählt 9"): beim Niedrig-Spiel tragen die 0 (durchgelaufene
+   Kugel) und der Fehlwurf die Ziffer, die sie WIRKLICH zählen — sonst tippt man 0 und im
+   Kästchen steht plötzlich eine 9. */
+.hn-num-2 {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  line-height: 1.05;
+}
+.hn-num-note { font-size: 0.6rem; font-weight: 700; color: var(--text-dim); }
+.erf-num:active .hn-num-note { color: inherit; }
+.hn-stand-btn { margin-left: auto; }
+/* Seitentitel der Erfassung: er trägt die Variante („Hohe/Niedrige Hausnummer"), damit beim
+   Werfen nie die Frage aufkommt, in welche Richtung gespielt wird. Auf schmalen Geräten darf
+   er schrumpfen statt den 📊-Knopf aus der Zeile zu drängen. */
+.hn-title {
+  min-width: 0;
+  font-size: clamp(1rem, 4.4vw, 1.4rem);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hn-titel-pfeil { margin-right: 6px; color: var(--accent); font-weight: 800; }
+
+/* Stand / Ergebnis */
+.hn-stand-body { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+.hn-regel { margin: 0; text-align: center; font-size: 0.82rem; color: var(--text-dim); }
+.hn-sieger { margin: 0; text-align: center; font-size: 1.2rem; font-weight: 800; color: var(--text); }
+.hn-sieger span { margin-left: 8px; color: var(--accent); }
+.hn-table-wrap { overflow-x: auto; }
+.hn-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.hn-table th, .hn-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.hn-table thead th { font-size: 0.72rem; font-weight: 700; color: var(--text-dim); }
+.hn-table .hn-th-name { text-align: left; }
+.hn-table tbody th { font-weight: 700; color: var(--text); }
+.hn-table td.is-offen { color: var(--text-dim); }
+.hn-table .hn-summe { font-weight: 800; color: var(--accent); }
+.hn-table tr.is-aktiv th, .hn-table tr.is-aktiv td { background: var(--surface-2); }
+.hn-actions { flex-wrap: wrap; margin-top: 4px; }

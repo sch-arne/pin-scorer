@@ -885,7 +885,7 @@ revoke all on function konto_loeschen() from public;
 grant execute on function konto_loeschen() to authenticated;
 
 -- =============================================================================
--- Anonymisierung bei Spielende (DSGVO / Datenminimierung)
+-- Anonymisierung bei Spiel- UND Wettkampfende (DSGVO / Datenminimierung)
 -- -----------------------------------------------------------------------------
 -- Leitidee: Klarnamen sind nur so lange nötig, wie sie gebraucht werden — nämlich
 -- WÄHREND des Spiels (Mitspieler-Geräte, Zuschauer, Livestream-Overlay). Sobald ein
@@ -904,6 +904,14 @@ grant execute on function konto_loeschen() to authenticated;
 -- Geräte, die WÄHREND des Spiels verbunden waren, behalten die Klarnamen in ihrer lokalen
 -- Kopie (Client-seitiger Merge in sync.js mergeSpielerNamen) — nur die DB und alle, die erst
 -- danach beitreten/pullen, sehen die anonymisierte Fassung.
+--
+-- ZWEI Auslöser, weil einer nachweislich nicht reicht:
+--   * trg_spiel_anonymisieren   — ein Durchgang/Einzelspiel geht auf 'beendet'.
+--   * trg_wettkampf_anonymisieren — der WETTKAMPF geht auf 'beendet': dann werden ALLE
+--     seine Durchgänge nachgezogen, auch die, die nie einen Statuswechsel gesehen haben
+--     (z.B. schon fertig geteilt) oder deren Status-Push scheiterte. Vorher blieb in genau
+--     diesen Durchgängen der Klarname stehen, während der zuletzt gespielte anonym war.
+-- Beide teilen sich die eigentliche Regel in pins_anonymisierte_liste().
 -- =============================================================================
 
 -- Neutraler Platzhalter für eine Spieler-Position: "<Mannschaftsname> <teamPos>", sonst
@@ -931,16 +939,24 @@ begin
 end;
 $$;
 
-create or replace function pins_spiel_anonymisieren()
-returns trigger
+-- Anonymisiert die Aufstellung EINES Spiels und liefert das angepasste config_json zurück.
+-- Herzstück beider Trigger (Spielende UND Wettkampfende), damit es genau EINE Fassung der
+-- Regel gibt.
+--   p_frisch = true  -> Namen NEU bestimmen (Anzeigename über LizenzID, sonst Platzhalter)
+--                       und in spiel_spieler schreiben.
+--   p_frisch = false -> nichts neu bestimmen, nur die (bereits anonymisierten) Namen aus
+--                       spiel_spieler ins config_json spiegeln. Das fängt ein nachträglich
+--                       gepushtes config_json wieder ein, das die lokalen Klarnamen trägt.
+create or replace function pins_anonymisierte_liste(
+  p_spiel uuid, p_config jsonb, p_wettkampf uuid, p_frisch boolean)
+returns jsonb
 language plpgsql security definer
 set search_path = public as $$
 declare
   r        record;
   v_name   text;
-  v_liste  jsonb := new.config_json -> 'spielerListe';
   v_teams  jsonb;
-  v_frisch boolean := (new.anonymisiert_am is null);
+  v_liste  jsonb := p_config -> 'spielerListe';
 begin
   if jsonb_typeof(v_liste) is distinct from 'array' then
     -- Kein Aufstellungs-Array im config_json -> nur die Aufstellungstabelle behandeln.
@@ -949,30 +965,29 @@ begin
 
   -- Mannschaftsnamen des Wettkampfs für den neutralen Platzhalter (null bei Einzelspielen).
   select w.config_json -> 'mannschaften' into v_teams
-    from wettkampf w where w.id = new.wettkampf_id;
+    from wettkampf w where w.id = p_wettkampf;
 
-  -- passnummer bevorzugt aus der Aufstellung; ersatzweise aus dem soeben geschriebenen
-  -- Ergebnis-Snapshot. Der Fallback deckt Spiele ab, die geteilt wurden, BEVOR es
-  -- spiel_spieler.passnummer gab (dort trägt nur spiel_ergebnis die LizenzID).
+  -- passnummer bevorzugt aus der Aufstellung; ersatzweise aus dem Ergebnis-Snapshot. Der
+  -- Fallback deckt Spiele ab, die geteilt wurden, BEVOR es spiel_spieler.passnummer gab
+  -- (dort trägt nur spiel_ergebnis die LizenzID).
   for r in
     select sp.id, sp.position, sp.name,
            coalesce(sp.passnummer,
                     (select e.passnummer from spiel_ergebnis e
                       where e.spieler_id = sp.id and e.passnummer is not null limit 1)) as passnummer
-      from spiel_spieler sp where sp.spiel_id = new.id
+      from spiel_spieler sp where sp.spiel_id = p_spiel
   loop
-    if v_frisch then
+    if p_frisch then
       v_name := null;
       if r.passnummer is not null then
         select nullif(btrim(p.anzeigename), '') into v_name
           from profil p where p.passnummer = r.passnummer limit 1;
       end if;
       if v_name is null then
-        v_name := pins_platzhalter_name(v_teams, new.config_json -> 'spielerListe', r.position);
+        v_name := pins_platzhalter_name(v_teams, p_config -> 'spielerListe', r.position);
       end if;
       update spiel_spieler set name = v_name where id = r.id;
     else
-      -- Bereits anonymisiert: nur ein nachträglich gepushtes config_json wieder einfangen.
       v_name := r.name;
     end if;
     if v_liste is not null and v_liste -> r.position is not null then
@@ -980,9 +995,19 @@ begin
     end if;
   end loop;
 
-  if v_liste is not null then
-    new.config_json := jsonb_set(new.config_json, '{spielerListe}', v_liste);
-  end if;
+  if v_liste is null then return p_config; end if;
+  return jsonb_set(p_config, '{spielerListe}', v_liste);
+end;
+$$;
+
+create or replace function pins_spiel_anonymisieren()
+returns trigger
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_frisch boolean := (new.anonymisiert_am is null);
+begin
+  new.config_json := pins_anonymisierte_liste(new.id, new.config_json, new.wettkampf_id, v_frisch);
   if v_frisch then
     new.anonymisiert_am := now();
   end if;
@@ -990,16 +1015,57 @@ begin
 end;
 $$;
 
--- Feuert beim Übergang auf `beendet` (die eigentliche Anonymisierung) und danach bei jedem
--- weiteren config_json-Schreibvorgang auf einem beendeten Spiel (fängt ein nachträgliches
--- pushConfig ab, das die lokal noch vorhandenen Klarnamen zurückschreiben würde).
+-- Feuert
+--   * beim Übergang auf `beendet` (die eigentliche Anonymisierung),
+--   * bei jedem weiteren config_json-Schreibvorgang auf einem beendeten Spiel,
+--   * und bei jedem config_json-Schreibvorgang auf einem BEREITS anonymisierten Spiel,
+--     unabhängig vom Status. Der letzte Fall ist nötig, seit auch ein noch nicht beendeter
+--     Durchgang am Wettkampfende anonymisiert wird (trg_wettkampf_anonymisieren): ohne ihn
+--     würde das nächste pushConfig des erfassenden Geräts die Klarnamen zurückschreiben.
 drop trigger if exists trg_spiel_anonymisieren on spiel;
 create trigger trg_spiel_anonymisieren before update on spiel
   for each row
-  when (new.status = 'beendet'
-        and (old.status is distinct from 'beendet'
-             or new.config_json is distinct from old.config_json))
+  when ((new.status = 'beendet'
+         and (old.status is distinct from 'beendet'
+              or new.config_json is distinct from old.config_json))
+        or (new.anonymisiert_am is not null
+            and new.config_json is distinct from old.config_json))
   execute function pins_spiel_anonymisieren();
+
+-- --- Wettkampfende: ALLE Durchgänge auf einmal -------------------------------
+-- Der Spiel-Trigger hängt am Statuswechsel EINES Durchgangs. Das reicht nicht:
+--   * Durchgänge, die schon ALS `beendet` eingefügt wurden (Wettkampf erst nach dem ersten
+--     Durchgang geteilt, nachgereichter Durchgang), haben nie einen Statuswechsel gesehen;
+--   * ein Statuswechsel, dessen Push scheiterte (offline, fremdes Gerät), fehlt ganz.
+-- In beiden Fällen blieben die Klarnamen einzelner Durchgänge stehen, während andere längst
+-- anonymisiert waren. Deshalb zieht das Wettkampfende jeden noch offenen Durchgang nach.
+create or replace function pins_wettkampf_anonymisieren()
+returns trigger
+language plpgsql security definer
+set search_path = public as $$
+declare
+  r record;
+begin
+  for r in
+    select s.id, s.config_json from spiel s
+     where s.wettkampf_id = new.id and s.anonymisiert_am is null
+  loop
+    -- anonymisiert_am wird MIT gesetzt: der Spiel-Trigger, den dieses UPDATE weckt, sieht
+    -- dadurch p_frisch = false und spiegelt nur noch (idempotent) dieselben Namen.
+    update spiel
+       set config_json     = pins_anonymisierte_liste(r.id, r.config_json, new.id, true),
+           anonymisiert_am = now()
+     where id = r.id;
+  end loop;
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_wettkampf_anonymisieren on wettkampf;
+create trigger trg_wettkampf_anonymisieren after update on wettkampf
+  for each row
+  when (new.status = 'beendet' and old.status is distinct from 'beendet')
+  execute function pins_wettkampf_anonymisieren();
 
 -- =============================================================================
 -- Ergebnis nachträglich dem eigenen Account zuordnen

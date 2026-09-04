@@ -9,6 +9,8 @@ import { setupWkView } from './views/setup-wk.js';
 import { setupWettkampfView } from './views/setup-wettkampf.js';
 import { wettkampfHubView } from './views/wettkampf-hub.js';
 import { spielLaufendView } from './views/spiel-laufend.js';
+import { setupHausnummernView } from './views/setup-hausnummern.js';
+import { hausnummernSpielView } from './views/hausnummern-spiel.js';
 import { beitretenView } from './views/beitreten.js';
 import { spielerView } from './views/login.js';
 import { anlagenView } from './views/anlagen.js';
@@ -24,6 +26,9 @@ register('/wettkampf', wettkampfHubView);
 // Setup eines Wettkampf-Durchgangs = dieselbe Maske wie Training, nur im Wettkampf-Modus.
 register('/setup/wettkampf-durchgang', () => setupWkView({ wettkampf: true }));
 register('/spiel-laufend', spielLaufendView);
+// Hausnummern: eigener Spiel-Typ mit eigener Erfassung (Ziffernfolge statt Holzsumme).
+register('/setup/hausnummern', setupHausnummernView);
+register('/hausnummern', hausnummernSpielView);
 register('/beitreten', beitretenView);
 register('/spieler', spielerView);
 register('/anlagen', anlagenView);

@@ -42,6 +42,8 @@ import { esc } from '../util.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
 import { computeGameStats } from '../logic/statistik.js';
 import { computeWettkampfStats } from '../logic/wettkampf.js';
+import { spielRoute } from '../logic/spielarten.js';
+import { rangliste as hnRangliste, formatZahl as hnFormat, stellenOf as hnStellen } from '../logic/hausnummern.js';
 import {
   OHNE_ANLAGE, metaOfGame, metaOfWettkampf, filterOptionen, passtZuFilter, filterSinnvoll,
   ergebnisQuelle, QUELLE_LABEL, quellenZaehlen,
@@ -111,6 +113,10 @@ function karte({ kopf, status, titel = '', rows, hint = '', open = null, extra =
 // Zusatz in der Kopfzeile (z.B. „☁ anderes Gerät" oder „👤 fremd erfasst").
 function gameCard(g, { ichPos = null, hinweis = '', zuordnung = '', konto = null } = {}) {
   const c = g.config;
+  // Hausnummern wird nicht in Holz gerechnet, sondern in Ziffernfolgen — eigene Karte.
+  if (g.spiel === 'hausnummern') {
+    return hausnummernCard(g, { ichPos, hinweis, zuordnung, konto });
+  }
   let players = [];
   try { players = computeGameStats(c, g.erfassung.bloecke, teilsatzRanges(c)).players; } catch (e) { return ''; }
   const multi = players.length > 1;
@@ -122,6 +128,38 @@ function gameCard(g, { ichPos = null, hinweis = '', zuordnung = '', konto = null
     kopf: kopfzeile(zeitOf(g), meta, hinweis),
     status: g.status,
     rows,
+    extra: zuordnung,
+    meta,
+    ts: zeitOf(g),
+    open: openable ? { attr: 'open', id: g.id } : null,
+    del: delKnopf(g, konto, 'del-spiel'),
+    hint: openable ? 'Antippen, um wieder aufzurufen' : '',
+  });
+}
+
+// Eine Hausnummern-Karte. Gewertet wird die Summe der Hausnummern, nicht das Holz — deshalb
+// rechnet sie mit logic/hausnummern.js statt mit computeGameStats. Beim Niedrig-Spiel gewinnt
+// die KLEINSTE Summe; das steht als Untertitel an der Karte, sonst wirkt die Reihenfolge falsch.
+function hausnummernCard(g, { ichPos = null, hinweis = '', zuordnung = '', konto = null } = {}) {
+  const c = g.config;
+  let rows = [];
+  try { rows = hnRangliste(c, g.erfassung.bloecke); } catch (e) { return ''; }
+  const niedrig = c.variante === 'niedrig';
+  const runden = c.saetze || 1;
+  const zeilen = rows.map((r) => prow(`${medal(r.rang)} ${esc(r.name)}`, hnFormat(r.summe, c), {
+    ich: r.pos === ichPos,
+    zusatz: r.gespielt < runden ? `${r.gespielt}/${runden} Durchg.` : '',
+  })).join('');
+  const meta = metaOfGame(g);
+  const openable = g.status === 'beendet';
+  const titel = `<div class="stat-titel">🏠 Hausnummern`
+    + ` <small class="rank-team">${niedrig ? 'niedrig' : 'hoch'} · ${hnStellen(c)} Stellen`
+    + ` · ${runden} ${runden === 1 ? 'Durchgang' : 'Durchgänge'}</small></div>`;
+  return karte({
+    kopf: kopfzeile(zeitOf(g), meta, hinweis),
+    status: g.status,
+    titel,
+    rows: zeilen || '<p class="field-hint">Noch keine Ergebnisse erfasst.</p>',
     extra: zuordnung,
     meta,
     ts: zeitOf(g),
@@ -372,7 +410,7 @@ async function openGame(id, remoteById) {
   if (!getGame(id)) saveGame(g); // remote geladenes Spiel lokal übernehmen
   if (g.wettkampfId) setActiveWettkampf(g.wettkampfId); // damit „Zurück" in den Hub führt
   setActiveGame(id);
-  navigate('/spiel-laufend');
+  navigate(spielRoute(g)); // jede Spielart hat ihre eigene Erfassung
 }
 
 // Einen lokal vorhandenen Wettkampf öffnen (Hub: Rangliste, Durchgänge, Auswertung, Export).
