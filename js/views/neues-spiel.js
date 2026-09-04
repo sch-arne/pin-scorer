@@ -3,10 +3,10 @@
 
 import { navigate } from '../router.js';
 import {
-  getResumableGames, setActiveGame,
+  getGame, getResumableGames, setActiveGame,
   getResumableWettkaempfe, setActiveWettkampf,
 } from '../store.js';
-import { SPIELARTEN, labelOf, iconOf } from '../logic/spielarten.js';
+import { SPIELARTEN, labelOf, iconOf, spielRoute } from '../logic/spielarten.js';
 import { spielLoeschen, wettkampfLoeschen } from './loeschen.js';
 import { esc } from '../util.js';
 
@@ -115,8 +115,9 @@ export function neuesSpielView() {
   function wire() {
     root.querySelectorAll('[data-resume]').forEach((b) =>
       b.addEventListener('click', () => {
+        const g = getGame(b.dataset.resume);
         setActiveGame(b.dataset.resume);
-        navigate('/spiel-laufend');
+        navigate(spielRoute(g)); // jede Spielart hat ihre eigene Erfassung
       }));
     root.querySelectorAll('[data-resume-wk]').forEach((b) =>
       b.addEventListener('click', () => {

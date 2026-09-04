@@ -12,6 +12,7 @@ import './specs/50-wettkampf.js';
 import './specs/60-backend-views.js';
 import './specs/70-offline.js';
 import './specs/80-loeschen.js';
+import './specs/90-hausnummern.js';
 
 const resultsEl = document.getElementById('results');
 const summaryEl = document.getElementById('summary');

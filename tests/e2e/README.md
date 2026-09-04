@@ -64,6 +64,7 @@ Testzustand stehen — dann einfach die App einmal aufräumen.
 | `specs/60-backend-views.js` | Statistiken sowie Account/Anlagen/Beitreten/Import/Overlay ohne Anmeldung |
 | `specs/70-offline.js` | die local-first-Zusage: ohne Verbindung geht alles Lokale weiter, nichts geht verloren |
 | `specs/80-loeschen.js` | Löschen: rein lokal = endgültig weg, in der Datenbank = verbergen, über die LizenzID = gar nicht |
+| `specs/90-hausnummern.js` | Hausnummern: Regeln im Setup, die vier Platzierungs-Varianten, Fehlwurf, Ergebnis |
 | `../../tools/e2e-headless.mjs` | headless-Runner (Chrome per CDP, ohne npm-Abhängigkeiten) |
 
 ## Was der Treiber abfängt
