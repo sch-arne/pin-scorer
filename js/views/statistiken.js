@@ -643,7 +643,17 @@ async function loadAccount(root, listWrap, ctx) {
 
   if (meine.length && meineEl) {
     try {
-      const spiele = await sync.pullSpieleZuErgebnissen(meine);
+      // Aus dem Ergebnisdienst importierte Spiele liegen in der Datenbank bewusst nur als die
+      // EIGENE Position mit Platzhalter-Namen (sync.linkEigenesErgebnis) — die vollständige
+      // Aufstellung mit echten Namen steht lokal. Auf dem importierenden Gerät würden sonst
+      // beide Fassungen nebeneinander stehen: einmal der lokale Wettkampf, einmal die
+      // eingedampfte Karte. Hier gewinnt die lokale; auf jedem anderen Gerät bleibt die
+      // Karte aus der Datenbank die einzige und wird ganz normal gezeigt.
+      const webImportiert = new Set(
+        getGames().filter((g) => g.swWeb && g.remoteId).map((g) => g.remoteId),
+      );
+      const spiele = (await sync.pullSpieleZuErgebnissen(meine))
+        .filter((g) => !webImportiert.has(g.remoteId));
       // Ergebniszeile je Spiel -> Position der eigenen Zeile für die Hervorhebung.
       const meineBySpiel = {};
       meine.forEach((r) => { meineBySpiel[r.spiel_id] = r; });

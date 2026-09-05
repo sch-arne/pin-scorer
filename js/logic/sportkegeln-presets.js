@@ -8,6 +8,15 @@ export const MODI = [
   { key: 'kranz-abraeumen', label: 'Kranz-Abräumen' },
 ];
 
+// Ein ganzer Satz als EIN Teilsatz, dessen Aufteilung unbekannt ist.
+//
+// Nur für den Web-Import (logic/sw-web-import.js): der Ergebnisdienst nennt bei Schere und
+// Classic ausschließlich das Satz-Holz, nie die Trennung in Volle und Abräumen. Statt sie zu
+// schätzen, bekommt so ein Satz genau einen Teilsatz über alle Würfe — das Satzergebnis stimmt
+// exakt, und eine Auswertung nach Volle/Abräumen gibt es für dieses Spiel schlicht nicht.
+// Bewusst NICHT in MODI: von Hand soll niemand ein solches Programm anlegen können.
+export const MODUS_GESAMT = 'gesamt';
+
 // Vorgeschlagene Bahnzahlen (Schnellauswahl-Chips).
 export const BAHNEN_OPTS = [1, 2, 4, 6, 8, 10, 12];
 

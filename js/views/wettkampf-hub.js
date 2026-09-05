@@ -11,6 +11,7 @@ import { computeWettkampfStats, durchgangStatusList, wettkampfBaseStatus } from 
 import { computeWertung, assignEwp } from '../logic/wettkampf-wertung.js';
 import { buildSportwinnerPush } from '../logic/sportwinner-ergebnis.js';
 import { adoptAufstellung } from '../logic/sportwinner-konflikte.js';
+import { istWebImport } from '../logic/sw-web-import.js';
 import { createKonfliktPanel } from './sportwinner-konflikt-panel.js';
 import {
   getBruecke, pushErgebnis, holeStatus, holeSportwinnerLive, brueckeStatusInfo, brueckePushText,
@@ -469,6 +470,12 @@ export function wettkampfHubView() {
   async function shareWettkampf() {
     const w = getWettkampf(getActiveWettkampf());
     if (!w || w.linked) return;
+    // Aus dem Ergebnisdienst importierte Wettkaempfe tragen die Klarnamen fremder Spieler; die
+    // duerfen nicht ueber Codes und Overlay an Dritte gehen (siehe istWebImport).
+    if (istWebImport(w)) {
+      setSyncMsg('Importierte Wettkaempfe lassen sich nicht teilen — sie enthalten Namen Dritter.');
+      return;
+    }
     // Ohne Anlage gibt es keinen gemeinsamen Bezugspunkt für die Bahnen — andere Geräte und
     // das Overlay könnten die Bahnnummern keiner realen Halle zuordnen. Deshalb erst zuweisen.
     if (!w.anlageId) {
@@ -844,7 +851,10 @@ function overlaySection(wettkampf) {
     </div>`).join('');
 
   const linked = !!(wettkampf.linked && wettkampf.zuschauerCode);
-  const urlBox = linked
+  const urlBox = istWebImport(wettkampf)
+    ? `<p class="field-hint">🔒 Aus dem Ergebnisdienst importierte Wettkaempfe bekommen kein
+       Overlay: es wuerde die Namen fremder Spieler oeffentlich in den Stream schreiben.</p>`
+    : linked
     ? `<div class="ov-url-row">
          <input class="ov-url-input" type="text" readonly value="${esc(overlayUrl(wettkampf))}" data-overlay-url aria-label="Overlay-URL">
          <button type="button" class="btn-mini" data-action="copy-overlay">Kopieren</button>
@@ -899,6 +909,7 @@ function anlageNachtragSection(wettkampf, ui) {
 function mehrgeraeteSection(wettkampf, syncMsg, anlageUi, konto) {
   const linked = !!(wettkampf.linked && wettkampf.remoteId);
   const ohneAnlage = !wettkampf.anlageId;
+  const webImport = istWebImport(wettkampf);
   const code = wettkampf.beitrittsCode || '';
   const zcode = wettkampf.zuschauerCode || '';
   const body = linked
@@ -911,6 +922,10 @@ function mehrgeraeteSection(wettkampf, syncMsg, anlageUi, konto) {
          <span class="erf-share-code">${esc(zcode)}</span>
        </div>` : ''}
        <p class="field-hint">Der <b>Eingabe-Code</b> ist zum Mit-Erfassen (Durchgänge parallel, Rangliste läuft live zusammen) — aus Schutz standardmäßig verdeckt, zum Ablesen antippen. Der <b>Zuschauer-Code</b> zeigt alles live, aber nur zum Ansehen. Beide unter „Spiel beitreten" eingeben.</p>`
+    : webImport
+      ? `<p class="field-hint">🔒 Aus dem Ergebnisdienst importiert — nicht teilbar. Die Namen der
+         Mit- und Gegenspieler stammen aus einer oeffentlichen Quelle, bleiben aber bewusst auf
+         diesem Geraet. In der Datenbank liegt allein dein eigenes Ergebnis, ohne Namen.</p>`
     : `<button type="button" class="erf-btn done" data-action="share"${ohneAnlage ? ' disabled' : ''}>🔗 Wettkampf teilen</button>
        <p class="field-hint">${ohneAnlage
          ? 'Erst eine Anlage zuweisen (siehe unten) — ohne sie lassen sich die Bahnen auf anderen Geräten und im Overlay keiner Halle zuordnen.'

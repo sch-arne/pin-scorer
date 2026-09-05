@@ -14,3 +14,6 @@ _ov_bg.jpg
 
 # Test-Exporte des CSV-Downloads (landen im Projektordner, wenn der Browser hier speichert)
 Wurfdaten_*.csv
+
+# Scratch der Supabase-CLI (Versionscache) - gehoert nicht ins Repo
+supabase/.temp/

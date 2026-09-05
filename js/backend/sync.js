@@ -340,6 +340,119 @@ async function ergebnisSnapshot(game, { remoteId, posToId, konto, passByPos, ich
   }
 }
 
+// --- Import von aussen: NUR die eigene Ergebniszeile ------------------------
+//
+// Fuer Spiele, die aus einer fremden Quelle stammen und Klarnamen Dritter enthalten
+// (views/import-sw-web.js: der oeffentliche Sportwinner-Ergebnisdienst). Diese Namen duerfen
+// die Datenbank NIE erreichen — auch nicht kurz.
+//
+// Warum dafuer nicht linkGame() taugt: das schreibt bewusst die vollstaendige Aufstellung mit
+// Klarnamen und verlaesst sich darauf, dass der Trigger trg_spiel_anonymisieren sie beim
+// Wechsel auf 'beendet' ersetzt (siehe Kommentar bei linkGame). Fuer eigene, mitgespielte
+// Spiele ist das richtig — die Mitspieler sehen das Spiel ja live. Ein importiertes Spiel
+// hat diese Grundlage nicht: dort waeren es Namen von Leuten, die von der App nichts wissen.
+//
+// Deshalb wandert hier nur EINE Position in die DB — die eigene — und auch die ohne Namen:
+//   • spiel.config_json wird auf einen Spieler eingedampft (Platzhalter statt Name),
+//   • genau eine spiel_spieler-Zeile (Platzhalter, eigene profil_id, eigene LizenzID),
+//   • die eigenen satz_block-Zeilen,
+//   • eine spiel_ergebnis-Zeile — die einzige Quelle der Konto-Statistik.
+// Die vollstaendige Aufstellung mit echten Namen bleibt lokal im localStorage.
+//
+// Der Status wird direkt als 'beendet' eingefuegt: der Anonymisierungs-Trigger haette nichts
+// zu tun, weil hier nie ein Klarname geschrieben wird.
+//
+// opts.position:       Index in game.config.spielerListe, den ICH gespielt habe (Pflicht).
+// opts.mannschaftName: Name meiner Mannschaft — nur fuer den Platzhalter. Mannschaftsnamen
+//                      sind keine personenbezogenen Daten; der Spielername ist es.
+// Rueckgabe: { remoteId, spielerId }.
+export async function linkEigenesErgebnis(game, { position, mannschaftName = '' } = {}) {
+  const config = (game && game.config) || {};
+  const liste = config.spielerListe || [];
+  if (!Number.isInteger(position) || position < 0 || position >= liste.length) {
+    throw new Error('Keine eigene Position angegeben.');
+  }
+  await ensureGeraet();
+  const geraet = geraetId();
+  const konto = await kontoId();
+  if (!konto) throw new Error('nicht angemeldet');
+
+  const ich = liste[position];
+  const bahnplan = (config.bahnplan && config.bahnplan[position]) || [];
+  // Auf einen Spieler eingedampfte Konfiguration. Der Platzhalter ist bewusst derselbe, den
+  // buildDurchgangGame ohne Namen erzeugt und den pins_platzhalter_name serverseitig setzt —
+  // so sieht ein importiertes Spiel aus wie ein anonymisiertes.
+  const platzhalter = (`${mannschaftName || 'Spieler'} `
+    + `${ich.teamPos != null ? ich.teamPos : position + 1}`).trim();
+  const dbConfig = {
+    ...config,
+    spieler: 1,
+    spielerListe: [{ name: platzhalter, startBahn: ich.startBahn }],
+    bahnplan: [bahnplan],
+    // Die Partie-Metadaten sind Mannschafts-, nicht Personendaten — sie beschriften die Karte.
+    ...(game.swWeb ? { swWeb: game.swWeb } : {}),
+  };
+
+  const { data: sp, error: e1 } = await supabase
+    .from('spiel')
+    .insert({
+      besitzer: konto,
+      spielart: game.spiel || 'sportkegler-wk',
+      status: 'beendet',
+      config_json: dbConfig,
+      anlage_id: config.anlageId || null,
+    })
+    .select('id, beitritts_code, zuschauer_code')
+    .single();
+  if (e1) throw e1;
+  const remoteId = sp.id;
+
+  const { error: e2 } = await supabase.from('spiel_geraet').insert({ spiel_id: remoteId, geraet });
+  if (e2) throw e2;
+
+  const meinPass = await meinePassnummer();
+  const spielerRow = {
+    spiel_id: remoteId, position: 0, name: platzhalter,
+    start_bahn: ich.startBahn, profil_id: konto,
+  };
+  if (meinPass) spielerRow.passnummer = meinPass;
+  const { data: spieler, error: e3 } = await schreibeVertraeglich(
+    'spiel_spieler', [spielerRow], ['passnummer'],
+    (rs) => supabase.from('spiel_spieler').insert(rs).select('id, position'),
+  );
+  if (e3) throw e3;
+  const spielerId = spieler[0].id;
+
+  const now = new Date().toISOString();
+  const { error: e3b } = await supabase.from('spiel_spieler')
+    .update({ besitzer_geraet: geraet, besitzer_seit: now, heartbeat_am: now })
+    .eq('id', spielerId);
+  if (e3b) throw e3b;
+
+  const bloecke = ((game.erfassung && game.erfassung.bloecke) || [])[position] || [];
+  const blocks = bloecke.map((blk, satz) => ({
+    spiel_id: remoteId, spieler_id: spielerId, satz, geraet, block_json: blk,
+  }));
+  if (blocks.length) {
+    const { error: e4 } = await supabase.from('satz_block')
+      .upsert(blocks, { onConflict: 'spieler_id,satz' });
+    if (e4) throw e4;
+  }
+
+  // Der Ergebnis-Snapshot aus der EINGEDAMPFTEN Konfiguration — sie enthaelt genau einen
+  // Spieler, also ist ichIndex 0. Ohne diese Zeile bliebe die Konto-Statistik leer.
+  const { players } = computeGameStats(dbConfig, [bloecke], teilsatzRanges(dbConfig));
+  await pushResults(ergebnisZeilen(players, {
+    spielId: remoteId,
+    spielerIdFuer: () => spielerId,
+    konto,
+    passByPos: meinPass ? { 0: meinPass } : null,
+    ichIndex: 0,
+  }));
+
+  return { remoteId, spielerId };
+}
+
 // Vollstaendiges Remote-Spiel laden und als lokales Spiel-Objekt zusammenbauen.
 export async function pullGame(remoteId) {
   const [{ data: sp, error: e1 }, { data: spieler, error: e2 }, { data: blocks, error: e3 }] =

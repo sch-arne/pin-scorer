@@ -3,6 +3,9 @@
 
 import { suite, test, ok, eq, deepEq, includes, notIncludes } from '../harness.js';
 import { buildWettkampf } from '../../../js/logic/wettkampf-build.js';
+import {
+  parseSpielerInfo, buildImportSpec, buildImportWettkampf,
+} from '../../../js/logic/sw-web-import.js';
 import { makeErfassung } from '../fixtures.js';
 
 const MOBIL = { width: 420, height: 900 };
@@ -57,6 +60,25 @@ function baueWettkampfOhneAnlage() {
     ],
     spielerJeMannschaft: 4,
   });
+}
+
+// Ein Wettkampf aus dem WEB-IMPORT, gebaut mit der produktiven Kette (logic/sw-web-import.js).
+// Der Ergebnisdienst nennt bei Schere nur das Satz-Holz, also bekommt jeder Satz genau EINEN
+// Teilsatz — hier wird geprüft, dass der Hub damit umgeht, statt eine Volle/Abräum-Trennung zu
+// zeigen, die es nicht gibt. Zeilenformat wie in tests/fixtures/sw-web-spielerinfo-schere.json.
+function baueWebImport() {
+  const summe = (s) => s.reduce((a, b) => a + b, 0);
+  const zeile = (nGG, sGG, nG, sG) => ['', nGG, ...sGG, 0, summe(sGG),
+    summe(sG), 0, ...sG.slice().reverse(), nG, '', 0, 0];
+  const bericht = parseSpielerInfo([
+    zeile('Heim 1', [150, 160, 155, 145], 'Gast 1', [140, 150, 160, 150]),
+    zeile('Heim 2', [160, 150, 150, 150], 'Gast 2', [150, 150, 150, 150]),
+  ], { saetze: 4 });
+  const spec = buildImportSpec(
+    { heim: 'Heim', gast: 'Gast', datum: '2026-09-02', idSpiel: '328202' }, bericht,
+  );
+  spec.preset = 'schere';
+  return buildImportWettkampf(spec, { playedLanes: [1, 2, 3, 4] });
 }
 
 async function starteHub(app, { wettkampf, games }, layout = MOBIL) {
@@ -268,6 +290,21 @@ suite('Wettkampf · Hub', () => {
     ok(app.$('[data-mb-bild]'), 'Wurf-Bild-Filter fehlt');
     await app.click('[data-hubansicht="durchgaenge"]');
     ok(app.$('.wk-dg'), 'Rückweg zu den Durchgängen fehlt');
+    app.assertClean();
+  });
+
+  test('Web-Import: Holz stimmt, Teilsatz-Filter entfällt (nichts geschätzt)', async (app) => {
+    const wk = baueWebImport();
+    await starteHub(app, wk);
+    await app.click('[data-hubansicht="statistik"]');
+    deepEq(
+      app.$$('.kz-team-auswertung .wk-team-sp').map((e) => e.textContent.replace('Holz', '').trim()),
+      ['1220', '1200'],
+      'Mannschaftsholz aus dem Ergebnisdienst',
+    );
+    // Der Bericht trennt Volle und Abräumen nicht — also gibt es hier auch nichts zu filtern.
+    eq(app.$$('[data-mb-teil]').length, 0, 'Teilsatz-Filter trotz fehlender Trennung');
+    ok(app.$('[data-mb-satz="1"]'), 'nach Sätzen muss sich weiter filtern lassen');
     app.assertClean();
   });
 

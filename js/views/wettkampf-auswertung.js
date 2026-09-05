@@ -17,7 +17,7 @@ import {
 } from '../logic/mannschaft-statistik.js';
 import { esc } from '../util.js';
 
-const MODUS_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen' };
+const MODUS_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen', gesamt: 'Satz gesamt' };
 
 // Standard-Filter der Ansicht (Hub-State). Der aktive Tab (Statistik/Wurf-Bild) kommt vom
 // Umschalter im Hub und wird als `ui.tab` hereingereicht.

@@ -15,6 +15,7 @@ import { beitretenView } from './views/beitreten.js';
 import { spielerView } from './views/login.js';
 import { anlagenView } from './views/anlagen.js';
 import { importSportwinnerView } from './views/import-sportwinner.js';
+import { importSwWebView } from './views/import-sw-web.js';
 import { overlayView } from './views/overlay.js';
 
 register('/menu', menuView);
@@ -33,6 +34,9 @@ register('/beitreten', beitretenView);
 register('/spieler', spielerView);
 register('/anlagen', anlagenView);
 register('/import/sportwinner', importSportwinnerView);
+// Zweiter Import-Weg: ein GESPIELTES Spiel aus dem oeffentlichen Ergebnisdienst holen
+// (ohne Bruecke, rein per Webabfrage ueber das Relay).
+register('/import/sportwinner-web', importSwWebView);
 // OBS-Livestream-Overlay (transparent, per Beitritts-Code): #/overlay?code=XXXX
 register('/overlay', overlayView);
 

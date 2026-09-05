@@ -28,7 +28,8 @@ const sortNum = (arr) => arr.slice().sort((a, b) => a - b);
 const norm = (s) => (s || '').toLowerCase().replace(/["'"'„".]/g, '').replace(/\s+/g, ' ').trim();
 
 // Beste vorhandene Anlage zum Sportwinner-Spielort finden (Name+PLZ > Name > PLZ+Ort).
-function bestAnlageMatch(anlagen, ziel) {
+// Exportiert, weil der Web-Import (views/import-sw-web.js) denselben Abgleich braucht.
+export function bestAnlageMatch(anlagen, ziel) {
   const nName = norm(ziel.name);
   const nPlz = (ziel.plz || '').trim();
   const nOrt = norm(ziel.ort);
