@@ -7,6 +7,7 @@ const TILES = [
   { label: 'Statistiken', desc: 'Ergebnisse und Auswertungen', icon: '📊', route: '/statistiken' },
   { label: 'Spieler', desc: 'Account & Profil (geräteübergreifend)', icon: '👤', route: '/spieler' },
   { label: 'Anlagen', desc: 'Kegelanlagen anlegen & verwalten', icon: '📍', route: '/anlagen' },
+  { label: 'Spiel importieren', desc: 'Gespieltes Spiel aus dem Ergebnisdienst holen', icon: '⬇️', route: '/import/sportwinner-web' },
 ];
 
 export function menuView() {

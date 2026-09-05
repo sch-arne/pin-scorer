@@ -1,0 +1,13 @@
+# Minimale Supabase-Projektdatei — sie existiert nur, damit die CLI dieses Verzeichnis als
+# Projekt erkennt und `functions deploy` findet, was es deployen soll.
+#
+# Bewusst KEIN vollständiges `supabase init`: der lokale Docker-Stack (api/db/studio) wird in
+# diesem Projekt nicht benutzt. Entwickelt wird gegen die Test-DB in der Cloud
+# (js/backend/config.local.js), Migrationen laufen als SQL im Dashboard.
+
+project_id = "pins-scorer"
+
+# verify_jwt an: das Relay ist kein offener Proxy, es beantwortet nur Anfragen angemeldeter
+# Konten (die Begründung steht im Kopf von functions/sportwinner-proxy/index.ts).
+[functions.sportwinner-proxy]
+verify_jwt = true

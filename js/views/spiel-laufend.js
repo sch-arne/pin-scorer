@@ -35,9 +35,9 @@ import {
 import { teilsatzStats, satzHolz, satzStatus } from '../logic/holz.js';
 import { computeBahnState as computeBahnStatePure } from '../logic/bahnwechsel.js';
 
-const MODUS_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen' };
+const MODUS_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen', gesamt: 'Satz gesamt' };
 // Kurzform der Teilsatz-Beschreibung für die Wurfzeile (gleich lang -> gleiche Breite).
-const MODUS_ABK = { volle: 'Vo', abraeumen: 'Ab', 'kranz-abraeumen': 'Kr' };
+const MODUS_ABK = { volle: 'Vo', abraeumen: 'Ab', 'kranz-abraeumen': 'Kr', gesamt: 'Satz' };
 const BW_LABEL = { plus1: 'Reihum (+1)', minus1: 'Reihum (−1)', classic: 'Classic-Duo', bohle: 'Bohle-Duo', fest: 'Feste Bahn' };
 
 // Kegel-Anordnung als Raute (Nummerierung wie auf der Bahn), Position im 5x5-Raster.
@@ -1569,7 +1569,7 @@ export function spielLaufendView() {
     const metric = (val, lbl) => `<div class="stats-metric"><span class="stats-metric-val">${val}</span><span class="stats-metric-lbl">${lbl}</span></div>`;
     // Gefallene Kegel je Einzelwurf (sofern einzeln erfasst), nach Teilsatz gruppiert; 9 = Alle Neune,
     // 0 = Fehlwurf werden hervorgehoben. Teilsätze, die nur als Summe eingetragen wurden, bleiben leer.
-    const MODUS_LBL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz' };
+    const MODUS_LBL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz', gesamt: 'Satz gesamt' };
     const wuerfeRow = (s) => {
       const groups = s.teilsaetze.filter((t) => t.wuerfe.length);
       if (!groups.length) return '';

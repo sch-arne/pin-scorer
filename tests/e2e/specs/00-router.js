@@ -15,15 +15,18 @@ const ROUTES = [
   { path: '/spieler', marker: 'Spieler' },
   { path: '/anlagen', marker: 'Anlage' },
   { path: '/import/sportwinner', marker: 'Sportwinner' },
+  // Der Web-Import ruft beim Mount das Relay; ohne Verbindung faengt die View das ab und
+  // zeigt den Fehlerzustand — beide Zustaende tragen die Ueberschrift.
+  { path: '/import/sportwinner-web', marker: 'Ergebnisdienst' },
 ];
 
 suite('Router & Einstieg', () => {
-  test('Hauptmenü zeigt alle fünf Kacheln', async (app) => {
+  test('Hauptmenü zeigt alle sechs Kacheln', async (app) => {
     await app.boot({ hash: '/menu' });
     const tiles = app.$$('.tile');
-    eq(tiles.length, 5, 'Anzahl Kacheln');
+    eq(tiles.length, 6, 'Anzahl Kacheln');
     const labels = tiles.map((t) => t.querySelector('.tile-label').textContent);
-    ['Neues Spiel', 'Spiel beitreten', 'Statistiken', 'Spieler', 'Anlagen']
+    ['Neues Spiel', 'Spiel beitreten', 'Statistiken', 'Spieler', 'Anlagen', 'Spiel importieren']
       .forEach((l) => ok(labels.includes(l), `Kachel "${l}" fehlt`));
     app.assertClean();
   });
