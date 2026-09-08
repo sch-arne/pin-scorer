@@ -63,9 +63,10 @@ function baueWettkampfOhneAnlage() {
 }
 
 // Ein Wettkampf aus dem WEB-IMPORT, gebaut mit der produktiven Kette (logic/sw-web-import.js).
-// Der Ergebnisdienst nennt bei Schere nur das Satz-Holz, also bekommt jeder Satz genau EINEN
-// Teilsatz — hier wird geprüft, dass der Hub damit umgeht, statt eine Volle/Abräum-Trennung zu
-// zeigen, die es nicht gibt. Zeilenformat wie in tests/fixtures/sw-web-spielerinfo-schere.json.
+// Der Ergebnisdienst nennt bei Schere nur das Satz-Holz. Der Wettkampf bekommt trotzdem die
+// Teilsätze der Bahnart (Volle + Kranz-Abräumen), sie bleiben aber leer — das Holz sitzt am Satz.
+// Hier wird geprüft, dass der Hub damit umgeht, statt eine Volle/Abräum-Trennung zu zeigen, die
+// es nicht gibt. Zeilenformat wie in tests/fixtures/sw-web-spielerinfo-schere.json.
 function baueWebImport() {
   const summe = (s) => s.reduce((a, b) => a + b, 0);
   const zeile = (nGG, sGG, nG, sG) => ['', nGG, ...sGG, 0, summe(sGG),
@@ -217,6 +218,39 @@ suite('Wettkampf · Hub', () => {
     const g0 = app.games().find((g) => g.durchgangNr === 1);
     const p = g0.config.spielerListe.find((x) => x.mannschaftId === 'm1' && x.teamPos === 1);
     eq(p.startBahn, 2, 'Startbahn nicht übernommen');
+    app.assertClean();
+  });
+
+  test('Web-Import: Startbahn ist trotz Ergebnissen wählbar und die Ergebnisse folgen ihr', async (app) => {
+    // Der Kern: Sportwinner nennt die Startbahnen nicht, seine Ergebnisspalten sind aber BAHNEN.
+    // Die Zuordnung wird deshalb hier nachgetragen — und dabei müssen die importierten Sätze
+    // ihrer Bahn folgen, sonst behauptet ein Ergebnis plötzlich eine falsche Bahn.
+    const wk = baueWebImport();
+    await starteHub(app, wk);
+    const teamId = wk.wettkampf.mannschaften[0].id;
+    const sel = app.$(`.roster-lane[data-team="${teamId}"][data-pos="1"]`);
+    ok(sel, 'Startbahn-Auswahl fehlt trotz Web-Import');
+
+    // Vorher: Holz je Bahn dieses Spielers merken.
+    const spielerVon = (g) => g.config.spielerListe
+      .findIndex((p) => p.mannschaftId === teamId && p.teamPos === 1);
+    const dg1 = () => app.games().find((g) => g.durchgangNr === 1);
+    const holzJeBahn = () => {
+      const g = dg1();
+      const i = spielerVon(g);
+      const map = {};
+      g.config.bahnplan[i].forEach((bahn, satz) => {
+        map[bahn] = g.erfassung.bloecke[i][satz].satzOverride;
+      });
+      return map;
+    };
+    const vorher = holzJeBahn();
+    const alteBahn = dg1().config.spielerListe[spielerVon(dg1())].startBahn;
+    const andere = Array.from(sel.options).map((o) => Number(o.value)).find((n) => n !== alteBahn);
+
+    await app.setSelect(`.roster-lane[data-team="${teamId}"][data-pos="1"]`, String(andere));
+    eq(dg1().config.spielerListe[spielerVon(dg1())].startBahn, andere, 'Startbahn nicht übernommen');
+    deepEq(holzJeBahn(), vorher, 'die Ergebnisse sind nicht mit ihrer Bahn gewandert');
     app.assertClean();
   });
 

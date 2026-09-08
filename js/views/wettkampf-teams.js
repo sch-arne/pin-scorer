@@ -7,6 +7,7 @@
 // stehen dieselben Werte als reiner Text — gleiche Tafel, aber ohne Bearbeitung.
 
 import { fmtPunkte } from '../logic/wettkampf-wertung.js';
+import { istWebImport } from '../logic/sw-web-import.js';
 import { esc } from '../util.js';
 
 // Führende Mannschaft ermitteln: bei aktiver Duell-Wertung die mit den höheren Spielpunkten,
@@ -47,9 +48,15 @@ export function teamUebersichtSection(wettkampf, games, stats, wertung, kz, opts
   // In Sportwinner-Wettkaempfen bleiben BEIDE aus — dort steht die Zuordnung ueber die amtliche
   // LizenzID fest und wird in der Aufstellung gar nicht angezeigt (siehe istLizenzWettkampf).
   const ichEditable = editable && opts.ichEditable !== false;
+  // Startbahn AUCH bei schon vorhandenen Ergebnissen wählbar — aber nur beim Web-Import.
+  // Dort nennt der Ergebnisdienst die Startbahnen nicht: sie werden hier nachgetragen, und die
+  // importierten Ergebnisse (die an der BAHN hängen, nicht am Satz) wandern mit (editLane im
+  // Hub). Bei selbst erfassten Spielen bleibt es dabei, dass ein begonnener Spieler seine
+  // Startbahn nicht mehr wechselt — dort sind die Würfe an ihren Sätzen festgemacht.
+  const laneTrotzErgebnis = editable && istWebImport(wettkampf);
   const cards = teams.map((m, ti) =>
     teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults,
-      facing && ti === 1, editable, opts.ichSlot || null, ichEditable)).join('');
+      facing && ti === 1, editable, opts.ichSlot || null, ichEditable, laneTrotzErgebnis)).join('');
   const hinweis = opts.ichHinweis
     ? `<p class="field-hint">${esc(opts.ichHinweis)}</p>` : '';
   return `
@@ -67,9 +74,9 @@ function holzAufBahn(p, bahn) {
   return sum;
 }
 
-// Startbahn-Steuerung eines (noch ergebnislosen) Spielers: Auswahl innerhalb der Team-Bahnen,
-// bei nur einer Bahn (oder schreibgeschützt) die feste Anzeige. Änderungen laufen über die
-// roster-lane-Verdrahtung (nur im Hub).
+// Startbahn-Steuerung: Auswahl innerhalb der Team-Bahnen, bei nur einer Bahn (oder
+// schreibgeschützt) die feste Anzeige. Änderungen laufen über die roster-lane-Verdrahtung
+// (nur im Hub).
 function startbahnCtrl(m, pos, teamLanes, laneOf, editable) {
   const cur = laneOf[`${m.id}|${pos}`];
   return (editable && teamLanes.length > 1)
@@ -79,7 +86,7 @@ function startbahnCtrl(m, pos, teamLanes, laneOf, editable) {
     : `<span class="wk-lane-fix">Bahn ${cur ?? (teamLanes[0] ?? '–')}</span>`;
 }
 
-function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults, mirror, editable, ichSlot, ichEditable) {
+function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults, mirror, editable, ichSlot, ichEditable, laneTrotzErgebnis) {
   const P = wettkampf.spielerJeMannschaft || 0;
   const teamLanes = (m.lanes || []).slice().sort((a, b) => a - b);
   const st = (stats.mannschaften || []).find((t) => t.mannschaftId === m.id)
@@ -110,7 +117,8 @@ function teamCard(wettkampf, m, stats, wertung, lead, nameOf, laneOf, anyResults
   // stehen im Kopf (Spielpunkte) und in der Summenzeile der Tabelle (Ges./EWP). Die Tabelle wird
   // immer gerendert (auch ohne Ergebnisse), damit die Übersicht von Beginn an vollständig aufgebaut
   // ist und beim ersten Ergebnis nicht umspringt.
-  const body = ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable, ichSlot, ichEditable);
+  const body = ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable,
+    ichSlot, ichEditable, laneTrotzErgebnis);
 
   return `
     <div class="wk-team-card${isLead ? ' is-lead' : ''}${mirror ? ' is-mirror' : ''}">
@@ -151,7 +159,8 @@ function posCell(m, pos, ichEditable, ichSlot) {
 // Mannschaft als Fußzeile: je Bahn der Mannschafts-Durchschnitt, rechts die Summen.
 // Bei `mirror` (gegenüberstehendes Team) werden die Spalten-Blöcke gespiegelt (Zahlen zur Mitte) —
 // der Bahn-Block bleibt dabei ein zusammenhängendes Segment und damit auf beiden Seiten aufsteigend.
-function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable, ichSlot, ichEditable) {
+function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror, editable,
+  ichSlot, ichEditable, laneTrotzErgebnis) {
   // Bahn-Spalten = sortierte Vereinigung der Team-Bahnen und aller im Team gespielten Bahnen. Die
   // Team-Bahnen sind von Anfang an dabei, damit die Tabelle schon vor dem ersten Ergebnis alle
   // Bahn-Spalten zeigt (leer) und sich das Spaltengerüst später nicht mehr ändert.
@@ -185,8 +194,15 @@ function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror,
     `<th class="wk-c-num wk-c-ewp" style="width:${wNum}%">EWP</th>`,
   ];
 
-  const volleSum = rows.reduce((s, r) => s + (r.p ? (r.p.gesamt || 0) - (r.p.abraeum || 0) : 0), 0);
-  const abrSum = rows.reduce((s, r) => s + (r.p ? (r.p.abraeum || 0) : 0), 0);
+  // Kennt ein Ergebnis keine Teilsatz-Aufteilung (Web-Import: der Ergebnisdienst nennt nur das
+  // Satz-Holz, logic/holz.js), dann sind Volle UND Abräumen unbekannt. Beide Zellen bleiben
+  // deshalb leer — sonst stünde das ganze Holz unter „Volle", nur weil es nichts im Abräumen
+  // gibt, und die Tabelle behauptete eine Zahl, die niemand erhoben hat.
+  const ohneTeilsatz = (p) => !!p && (p.saetze || []).length > 0 && p.saetze.every((x) => x.nurSatz);
+  const volleSum = rows.reduce((s, r) => s + (ohneTeilsatz(r.p) ? 0
+    : (r.p ? (r.p.gesamt || 0) - (r.p.abraeum || 0) : 0)), 0);
+  const abrSum = rows.reduce((s, r) => s + (ohneTeilsatz(r.p) ? 0 : (r.p ? (r.p.abraeum || 0) : 0)), 0);
+  const teamOhneTeilsatz = rows.some((r) => ohneTeilsatz(r.p)) && !volleSum && !abrSum;
 
   const bodyRows = rows.map((r) => {
     const p = r.p;
@@ -195,19 +211,22 @@ function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror,
     const nameVal = (p && p.name) || nameOf[`${m.id}|${r.pos}`] || '';
     const nameCell = `<td class="wk-c-name">${nameField(m, r.pos, nameVal, editable)}</td>`;
     // W-Spalte: hat der Spieler begonnen → seine bisherige Wurfanzahl; sonst die (noch änderbare)
-    // Startbahn zur Auswahl.
-    const wurfCell = played
+    // Startbahn zur Auswahl. Beim Web-Import steht dort immer die Startbahn: die Wurfzahl ist
+    // dort für jeden dieselbe Programmzahl (der Bericht kennt keine Einzelwürfe) und sagt
+    // nichts, die nachzutragende Startbahn dagegen alles.
+    const wurfCell = (played && !laneTrotzErgebnis)
       ? `<td class="wk-c-wurf">${nz(p.wurfCount)}</td>`
       : `<td class="wk-c-wurf">${startbahnCtrl(m, r.pos, teamLanes, laneOf, editable)}</td>`;
     const bahnCells = bahnBlock((b) => `<td class="wk-c-bahn">${played ? nz(holzAufBahn(p, b)) : ''}</td>`);
-    const volle = played ? (p.gesamt || 0) - (p.abraeum || 0) : null;
+    const geteilt = played && !ohneTeilsatz(p);
+    const volle = geteilt ? (p.gesamt || 0) - (p.abraeum || 0) : null;
     const cells = [
       `<td class="wk-c-pos">${posCell(m, r.pos, ichEditable, ichSlot)}</td>`,
       nameCell,
       wurfCell,
       bahnCells,
       `<td class="wk-c-num">${nz(volle)}</td>`,
-      `<td class="wk-c-num">${played ? nz(p.abraeum) : ''}</td>`,
+      `<td class="wk-c-num">${geteilt ? nz(p.abraeum) : ''}</td>`,
       `<td class="wk-c-num wk-c-ges">${played ? nz(p.gesamt) : ''}</td>`,
       `<td class="wk-c-num wk-c-ewp">${played ? nz(p.ewp) : ''}</td>`,
     ];
@@ -225,8 +244,8 @@ function ergebnisTabelle(m, rows, st, ewpSum, teamLanes, nameOf, laneOf, mirror,
       rows.forEach((r) => { const h = holzAufBahn(r.p, b); if (h) { sum += h; cnt += 1; } });
       return `<td class="wk-c-bahn">${cnt ? nz(Math.round(sum / cnt)) : ''}</td>`;
     }),
-    `<td class="wk-c-num">${nz(volleSum)}</td>`,
-    `<td class="wk-c-num">${nz(abrSum)}</td>`,
+    `<td class="wk-c-num">${teamOhneTeilsatz ? '' : nz(volleSum)}</td>`,
+    `<td class="wk-c-num">${teamOhneTeilsatz ? '' : nz(abrSum)}</td>`,
     `<td class="wk-c-num wk-c-ges">${nz(st.gesamt)}</td>`,
     `<td class="wk-c-num wk-c-ewp">${nz(ewpSum)}</td>`,
   ];

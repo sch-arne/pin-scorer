@@ -8,6 +8,7 @@ import './specs/10-setup.js';
 import './specs/20-erfassung.js';
 import './specs/30-uebersicht-statistik.js';
 import './specs/40-export.js';
+import './specs/45-grafik.js';
 import './specs/50-wettkampf.js';
 import './specs/60-backend-views.js';
 import './specs/70-offline.js';

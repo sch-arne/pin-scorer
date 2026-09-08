@@ -13,10 +13,20 @@
 // der Statistik als echte 9er und Räumer gezählt.
 //
 // Und die Regel dahinter gilt eine Ebene höher genauso: GESCHÄTZT WIRD NICHTS. Nennt der Bericht
-// nur das Satz-Holz, dann wird auch nur das Satzergebnis gesetzt — der Wettkampf bekommt dafür
-// je Satz einen einzigen Teilsatz (MODUS_GESAMT), statt die Volle/Abräum-Trennung zu erfinden.
-// Eine Auswertung nach Teilsätzen gibt es für so ein Spiel dann nicht; das ist ehrlicher als
-// eine, die nach Zahlen aussieht und keine sind. Welche Form vorliegt, entscheidet teilsatzPlan().
+// nur das Satz-Holz, dann wird auch nur das Satzergebnis gesetzt (`satzOverride`, siehe
+// logic/holz.js) — die Teilsätze bleiben LEER. Der Wettkampf bekommt trotzdem die Teilsätze
+// seiner Bahnart, damit ein importiertes Spiel dieselbe Form hat wie ein selbst erfasstes und
+// sich die Aufteilung später von Hand nachtragen lässt. Erfunden wird sie nicht: eine
+// Auswertung nach Teilsätzen gibt es für so ein Spiel erst, wenn jemand sie nachträgt.
+//
+// BAHNEN
+// ------
+// Der Ergebnisdienst nummeriert die vier Ergebnisspalten je Spieler von 1 bis 4. Das sind nicht
+// die Sätze, sondern die BAHNEN der Partie in ihrer Reihenfolge — Spalte 1 ist die erste
+// bespielte Bahn der Anlage, auch wenn die die Nummer 5 trägt. Welchen Satz ein Spieler dort
+// gespielt hat, hängt an seiner Startbahn und am Bahnwechsel; bei verschiedenen Startbahnen ist
+// die Spalte also NICHT der Satz-Index. buildImportWettkampf dreht die Zuordnung deshalb über
+// denselben Bahnplan um, den buildSportwinnerPush zum Rückschreiben benutzt (bahnSlot()).
 //
 // ZEILENFORMATE
 // -------------
@@ -36,6 +46,17 @@
 //      [0]leer [1]Name GG [2]Volle [3]Abräumen [4]Fehler [5]Kegel GG
 //      [6]Kegel G [7]Fehler G [8]Abräumen G [9]Volle G [10]Name G [11]leer
 //
+// TEILSTAENDE
+// -----------
+// Importiert wird nicht nur die beendete Partie: auch eine, die gerade LAEUFT oder auf die
+// Abnahme wartet (parseSpielListe -> importierbar). Der Bericht nennt dann fuer noch nicht
+// bespielte Bahnen leere Zellen — und die bleiben POSITIONSTREU stehen (`null` an ihrer Stelle),
+// statt die Liste zusammenzuschieben: Spalte k ist die k-te bespielte Bahn, nicht der k-te
+// gespielte Satz. Wer auf Bahn 5 von 5-8 anfaengt, fuellt zuerst die letzte Spalte; eine
+// gestauchte Liste haette sein erstes Ergebnis auf Bahn 5 dem Satz zugeordnet, der auf Bahn 8
+// gespielt wird. Ein zweiter Import derselben Partie ergaenzt dann nur, was noch fehlt
+// (trageErgebnisseEin mit `nurLeere`).
+//
 // WICHTIG: `schere` und `classic` liefern nur das SATZ-HOLZ — keine Volle/Abräum-Trennung und
 // keine Fehlwürfe. Nur `holz` trennt Volle/Abräumen, dafür ohne Satz-Detail.
 //
@@ -45,10 +66,12 @@
 // Passt keines, bricht der Import ab, statt still falsche Zahlen in die Statistik zu schreiben.
 
 import { teilsatzRanges } from './teilsaetze.js';
-import { ABRAEUM_MODI } from './sportwinner-ergebnis.js';
+import { blockHatInhalt } from './holz.js';
+import { gameBaseStatus, wettkampfBaseStatus } from './wettkampf.js';
+import { ABRAEUM_MODI, bahnSlot, bahnplanOf } from './sportwinner-ergebnis.js';
 import { buildWettkampf } from './wettkampf-build.js';
 import { teamLanesByBahnart } from './roster-import.js';
-import { PRESETS, MODUS_GESAMT } from './sportkegeln-presets.js';
+import { PRESETS } from './sportkegeln-presets.js';
 
 const uid = (p) => p + Math.random().toString(36).slice(2, 8);
 const txt = (v) => (v == null ? '' : String(v)).trim();
@@ -71,7 +94,17 @@ const klarText = (v) => txt(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').tri
 // Der Status steht in [9] und ist die EINZIGE verlässliche Auskunft darüber, ob gespielt wurde:
 // [4]/[5] sind auch bei einer offenen Partie mit "0" belegt, eine Prüfung auf "ist eine Zahl"
 // würde also jede angesetzte Partie als gespielt ausgeben.
+//
+// Drei Lager, und der Unterschied zwischen den ersten beiden ist nur die VOLLSTAENDIGKEIT:
+//   fertig  — "beendet", "abnahmebereit": alle Sätze stehen im Bericht.
+//   laufend — "wird gespielt", "unterbrochen": der Bericht zeigt einen Zwischenstand.
+//   sonst   — "offen"/angesetzt/abgesagt: es gibt nichts zu holen.
+// Importierbar sind die ersten beiden. Ein Zwischenstand ist kein halbes Spiel, sondern ein
+// vollstaendiger Wettkampf mit noch leeren Saetzen — nachgeholt wird er durch einen zweiten
+// Import derselben Partie, der nur die Luecken fuellt.
 const DATUM_RE = /(\d{1,2})\.(\d{1,2})\.(\d{4})/;
+const STATUS_FERTIG = /beendet|abnahme|gewertet|bestätigt|bestaetigt/i;
+const STATUS_LAUFEND = /wird gespielt|läuft|laeuft|laufend|unterbrochen|begonnen/i;
 
 export function parseSpielListe(rows) {
   return (Array.isArray(rows) ? rows : [])
@@ -96,7 +129,9 @@ export function parseSpielListe(rows) {
         datum: m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : '',
         bemerkung: klarText(r[10]),
         liga: klarText(r[12]),
-        gespielt: /beendet/i.test(status),
+        gespielt: STATUS_FERTIG.test(status),
+        laufend: !STATUS_FERTIG.test(status) && STATUS_LAUFEND.test(status),
+        importierbar: STATUS_FERTIG.test(status) || STATUS_LAUFEND.test(status),
       };
     });
 }
@@ -132,8 +167,17 @@ function leseSeite(zeile, map, typ) {
   const name = klarText(zeile[map.name]);
   const kegel = num(zeile[map.kegel]);
   if (typ === 'satz') {
-    const saetze = map.saetze.map((i) => num(zeile[i])).filter((n) => n != null);
-    return { name, kegel, saetze: saetze.map((holz) => ({ holz })) };
+    // POSITIONSTREU, siehe Kopf (TEILSTAENDE): die nicht gespielte Bahn bleibt als `null` an
+    // ihrer Stelle. Leer ist dabei auch die 0 — einen ganzen Satz mit null Holz gibt es nicht,
+    // wohl aber eine 0 als Platzhalter fuer eine Bahn, die noch aussteht.
+    return {
+      name,
+      kegel,
+      saetze: map.saetze.map((i) => {
+        const holz = num(zeile[i]);
+        return holz ? { holz } : null;
+      }),
+    };
   }
   return {
     name,
@@ -150,7 +194,7 @@ function leseSeite(zeile, map, typ) {
 export function pruefeSeite(seite, typ) {
   if (seite.kegel == null) return true;            // keine Summenspalte -> nichts zu prüfen
   const summe = typ === 'satz'
-    ? seite.saetze.reduce((s, x) => s + (x.holz || 0), 0)
+    ? seite.saetze.reduce((s, x) => s + ((x && x.holz) || 0), 0)
     : (seite.volle || 0) + (seite.abr || 0);
   if (!summe && !seite.kegel) return true;
   return summe === seite.kegel;
@@ -197,11 +241,16 @@ export function parseSpielerInfo(rows, { saetze = 4 } = {}) {
   // Ergebniswerte. Deshalb hier NICHT nach dem Namen filtern, das würde die Satzzeilen
   // wegwerfen; die Summenzeile fällt stattdessen unten bei der Gruppierung heraus.
   const hatWerte = (p) => ['gg', 'g'].some((s) => (typ === 'satz'
-    ? p[s].saetze.length > 0
+    ? p[s].saetze.some((x) => x != null)
     : p[s].kegel != null || p[s].volle || p[s].abr));
+  // Eine Paarung, die noch gar nicht angetreten ist, traegt zwei NAMEN und keine Werte. Sie muss
+  // stehen bleiben: die Reihenfolge der Paarungen IST die Team-Position (buildImportSpec), eine
+  // uebersprungene Zeile wuerde alle folgenden Spieler um eine Position verschieben. Verlangt
+  // sind beide Namen — die Mannschaftssumme traegt keinen, eine Zwischenzeile hoechstens einen.
+  const paarung = (p) => istName(p.gg.name) && istName(p.g.name);
   const zeilen = alle
     .map((z) => ({ gg: leseSeite(z, def.gg, typ), g: leseSeite(z, def.g, typ) }))
-    .filter(hatWerte);
+    .filter((p) => hatWerte(p) || paarung(p));
   if (!zeilen.length) throw new Error('Spielbericht enthält keine Spielerzeilen.');
 
   // Gruppieren: eine neue Paarung beginnt mit einem neuen Namen, namenlose Zeilen hängen an
@@ -274,26 +323,18 @@ const satzHolzVon = (w) => (w && w.holz != null
   ? w.holz
   : ((w && w.volle) || 0) + ((w && w.abr) || 0));
 
-// Welche Teilsätze bekommt der importierte Wettkampf?
+// Welche Teilsätze bekommt der importierte Wettkampf? Die der BAHNART — immer.
 //
-// Die Antwort hängt daran, was der Bericht hergibt, und sie gilt für den ganzen Wettkampf (die
-// Teilsatz-Einteilung steht in der Config, nicht am einzelnen Satz):
-//
-//   • Der Bericht trennt Volle und Abräumen UND das Programm hat genau einen Teilsatz je Seite
-//     -> die Teilsätze des Programms, jeder mit seinem exakten Wert.
-//   • Sonst (nur Satz-Holz; oder ein Programm wie Bohle mit zwei Volle-Teilsätzen, auf die sich
-//     eine Summe nicht eindeutig aufteilen lässt) -> EIN Teilsatz über den ganzen Satz.
-//
-// Der zweite Fall ist die bewusste Entscheidung gegen jede Schätzung: lieber gar keine
-// Teilsatz-Auswertung als eine erfundene.
-export function teilsatzPlan(preset, spec) {
+// Früher bekam ein Spiel, dessen Bericht nur das Satz-Holz nennt, je Satz einen einzigen
+// Ersatz-Teilsatz über alle Würfe. Das machte aus einem importierten Schere-Spiel ein Programm,
+// das es so gar nicht gibt: nicht vergleichbar mit selbst erfassten Spielen und von Hand nicht
+// zu vervollständigen. Jetzt steht in der Config, was auf der Bahn wirklich gespielt wurde
+// (Schere: Volle + Kranz-Abräumen), und was der Bericht nicht hergibt, bleibt schlicht leer —
+// das Satz-Holz sitzt dann auf dem Satz statt auf einem erfundenen Teilsatz (ergebnisBlock).
+export function teilsatzPlan(preset) {
   const p = PRESETS[preset];
   if (!p) throw new Error(`Unbekannte Bahnart: ${preset}`);
-  const teile = p.teilsaetze || [];
-  const volle = teile.filter((m) => !ABRAEUM_MODI.has(m));
-  const abraeum = teile.filter((m) => ABRAEUM_MODI.has(m));
-  const exakt = spec && !spec.nurHolz && volle.length === 1 && abraeum.length === 1;
-  return exakt ? [...teile] : [MODUS_GESAMT];
+  return [...(p.teilsaetze || [])];
 }
 
 // Aus den Summen EINES Satzes einen Satz-Block bauen — über `overrides`, nicht über erfundene
@@ -303,31 +344,37 @@ export function teilsatzPlan(preset, spec) {
 // Wurfbild in die Statistik ein und würde 9er und Räumer erfinden.
 //
 // werte: { volle, abr } oder { holz }.
-// Verteilt wird NICHTS: entweder passt jeder Wert auf genau einen Teilsatz, oder der Satz hat
-// (per teilsatzPlan) nur einen einzigen Teilsatz und bekommt schlicht sein Satzergebnis. Passt
-// beides nicht, ist das ein Programmierfehler und kein Grund zu raten -> Abbruch.
+// Verteilt wird NICHTS. Drei Fälle, und der dritte ist der Regelfall bei Schere und Classic
+// mit Punktwertung:
+//   1. Ein einziger Teilsatz -> er bekommt das Satz-Holz.
+//   2. Der Bericht trennt Volle und Abräumen UND das Programm hat genau einen Teilsatz je Seite
+//      -> jeder bekommt seinen exakten Wert.
+//   3. Sonst (nur Satz-Holz; oder Bohle mit zwei Volle-Teilsätzen, auf die sich eine Summe nicht
+//      eindeutig aufteilen lässt) -> das Holz sitzt als `satzOverride` auf dem SATZ, die
+//      Teilsätze bleiben leer. Satz- und Gesamtholz stimmen exakt, die Aufteilung behauptet
+//      niemand — und wer sie kennt, kann sie in der Übersicht nachtragen.
 export function ergebnisBlock(config, werte) {
   const ranges = teilsatzRanges(config);
   const overrides = ranges.map(() => null);
+  let satzOverride = null;
+
+  const idx = (abraeum) => {
+    const treffer = ranges
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => ABRAEUM_MODI.has(r.modus) === abraeum);
+    return treffer.length === 1 ? treffer[0].i : -1;
+  };
+  const iV = idx(false);
+  const iA = idx(true);
+  const exakt = werte && werte.volle != null && werte.abr != null && iV >= 0 && iA >= 0;
 
   if (ranges.length === 1) {
     overrides[0] = satzHolzVon(werte);
-  } else if (werte && werte.volle != null && werte.abr != null) {
-    const idx = (abraeum) => {
-      const treffer = ranges
-        .map((r, i) => ({ r, i }))
-        .filter(({ r }) => ABRAEUM_MODI.has(r.modus) === abraeum);
-      return treffer.length === 1 ? treffer[0].i : -1;
-    };
-    const iV = idx(false);
-    const iA = idx(true);
-    if (iV < 0 || iA < 0) {
-      throw new Error('Teilsätze passen nicht zum Bericht — ein Satzergebnis wäre zu raten.');
-    }
+  } else if (exakt) {
     overrides[iV] = werte.volle || 0;
     overrides[iA] = werte.abr || 0;
   } else {
-    throw new Error('Nur Satz-Holz, aber mehrere Teilsätze — siehe teilsatzPlan().');
+    satzOverride = satzHolzVon(werte);
   }
 
   return {
@@ -335,6 +382,7 @@ export function ergebnisBlock(config, werte) {
     kegel: [],
     koenig: [],
     overrides,
+    satzOverride,          // != null: Satz-Holz ohne Teilsatz-Aufteilung (siehe logic/holz.js)
     done: true,
   };
 }
@@ -405,6 +453,131 @@ export function istWebImport(wettkampf) {
   return wettkampf.quelle === 'sportwinner-web' || !!wettkampf.swWeb;
 }
 
+// Laesst sich eine Ergebnisspalte ueberhaupt einer Bahn zuordnen?
+//
+// Nur wenn jeder Satz auf einer eigenen Bahn lief — also genau so viele bespielte Bahnen wie
+// Saetze. Dann ist Spalte k die Bahn bahnListe[k]. Sportwinner fuehrt je Spieler vier Bahn-Slots
+// (SW_BAHNEN); bei weniger Bahnen wuerden mehrere Saetze auf denselben Slot fallen, bei mehr
+// saehe der Bericht nicht, welche vier gemeint sind. In beiden Faellen sagt der Bericht ueber die
+// Bahn nichts — dann gilt seine Reihenfolge als Spielreihenfolge (Satz-Index), das Verhalten
+// vor dieser Zuordnung. Dieselbe Grenze zieht buildSportwinnerPush beim Rueckschreiben.
+function bahnZuordnungMoeglich(bahnListe, saetze, spalten) {
+  return bahnListe.length === saetze && spalten >= saetze;
+}
+
+// Satz-Bloecke EINES Spielers auf einen geaenderten Bahnplan umhaengen.
+//
+// Beim Web-Import haengen die Ergebnisse an der BAHN, nicht am Satz (siehe Kopf): der Bericht
+// nennt je Spieler vier Bahn-Spalten, welcher Satz das war, folgt erst aus seiner Startbahn.
+// Wird die spaeter korrigiert (Mannschafts-Uebersicht im Hub), muss deshalb jedes Ergebnis auf
+// den Satz wandern, in dem seine Bahn jetzt gespielt wird — sonst behauptete ein importiertes
+// Satzergebnis ploetzlich eine Bahn, auf der es nie erzielt wurde.
+//
+// altPlan/neuPlan = die Bahn je Satz (eine Zeile aus config.bahnplan). Ist die Zuordnung nicht
+// eindeutig — eine Bahn kommt mehrfach vor, oder es sind gar nicht dieselben Bahnen —, bleibt
+// die bisherige Reihenfolge stehen: dann sagt der Plan ueber die Bahn nichts Eindeutiges.
+export function bloeckeNachBahn(bloecke, altPlan, neuPlan) {
+  const arr = Array.isArray(bloecke) ? bloecke : [];
+  const alt = Array.isArray(altPlan) ? altPlan : [];
+  const neu = Array.isArray(neuPlan) ? neuPlan : [];
+  if (!alt.length || alt.length !== neu.length || arr.length !== alt.length) return arr;
+  if (new Set(alt).size !== alt.length || new Set(neu).size !== neu.length) return arr;
+  if (neu.some((b) => !alt.includes(b))) return arr;
+  return neu.map((bahn) => arr[alt.indexOf(bahn)]);
+}
+
+// --- Ergebnisse eintragen (erster Import UND Nachimport) ---------------------
+
+// Steht in diesem Satz schon etwas? Ein `done`-Haken zaehlt mit: wer einen Satz von Hand
+// abgeschlossen hat, hat ihn entschieden — auch wenn er leer blieb.
+export function blockLeer(block) {
+  return !(block && (block.done || blockHatInhalt(block)));
+}
+
+// Spec-Mannschaft -> Mannschaft des vorhandenen Wettkampfs.
+//
+// buildImportSpec vergibt bei JEDEM Abruf frische uid()s. Beim Nachimport muessen die
+// Ergebnisse aber die Spieler des ersten Imports treffen; zugeordnet wird deshalb ueber den
+// Mannschaftsnamen, den beide Male derselbe Ergebnisdienst liefert. Faellt der aus (umbenannte
+// Mannschaft), gilt die Reihenfolge — Heim zuerst, wie in buildImportSpec.
+function teamKarte(spec, ziele) {
+  const karte = {};
+  const norm = (x) => klarText(x).toLowerCase();
+  (spec.mannschaften || []).forEach((m, i) => {
+    if (!ziele || !ziele.length) { karte[m.id] = m.id; return; }
+    const treffer = ziele.find((z) => norm(z.name) === norm(m.name)) || ziele[i] || null;
+    karte[m.id] = treffer ? treffer.id : m.id;
+  });
+  return karte;
+}
+
+// spec.ergebnisse auf die IDs des Ziel-Wettkampfs umschluesseln (ohne `ziele` unveraendert).
+function uebersetzteErgebnisse(spec, ziele) {
+  const karte = teamKarte(spec, ziele);
+  const out = {};
+  Object.entries((spec && spec.ergebnisse) || {}).forEach(([key, erg]) => {
+    const i = key.indexOf('|');
+    const mid = i < 0 ? key : key.slice(0, i);
+    out[`${karte[mid] || mid}${i < 0 ? '' : key.slice(i)}`] = erg;
+  });
+  return out;
+}
+
+// Die Ergebnisse eines Import-Specs in die Durchgaenge eintragen.
+//
+// Herzstueck des ersten Imports UND des Nachimports: dieselbe Zuordnung (Mannschaft|Position ->
+// Spieler, Bahnspalte -> Satz), nur der Umgang mit dem, was schon dasteht, unterscheidet sich.
+//
+//   nurLeere     — nur Saetze fuellen, in denen noch nichts steht. Damit laesst sich eine
+//                  laufende Partie mehrfach importieren: jedes Mal kommen genau die Saetze dazu,
+//                  die seither gespielt wurden. Nichts wird ueberschrieben — weder ein frueher
+//                  importiertes Ergebnis noch eine von Hand nachgetragene Teilsatz-Aufteilung.
+//   probe        — nichts schreiben, nur zaehlen (fuer „X Ergebnisse kommen dazu").
+//   mannschaften — die Mannschaften des VORHANDENEN Wettkampfs ({id,name}). Pflicht beim
+//                  Nachimport: buildImportSpec vergibt bei jedem Abruf neue Mannschafts-IDs,
+//                  die Durchgaenge tragen aber die des ersten Imports (siehe teamKarte).
+//
+// Rueckgabe: { gefuellt, geaendert:[games], nurSatzHolz }.
+export function trageErgebnisseEin(games, spec, { nurLeere = false, probe = false, mannschaften = null } = {}) {
+  let nurSatzHolz = false;
+  let gefuellt = 0;
+  const geaendert = [];
+  const ergebnisse = uebersetzteErgebnisse(spec, mannschaften);
+  (games || []).forEach((g) => {
+    const c = g && g.config;
+    const bloecke = (g && g.erfassung && g.erfassung.bloecke) || null;
+    if (!c || !Array.isArray(bloecke) || !Array.isArray(c.spielerListe)) return;
+    // Bahnplan des Durchgangs: physische Bahn je Spieler und Satz. Er dreht die Spalten des
+    // Berichts auf die Saetze — siehe Kopf, Abschnitt BAHNEN.
+    const bahnplan = bahnplanOf(c);
+    const bahnListe = Array.isArray(c.bahnListe) ? c.bahnListe : [];
+    let dieses = 0;
+    // Adressiert ueber mannschaftId|teamPos, NICHT ueber die Reihenfolge: im Paarkreuz sitzt
+    // derselbe Spieler in jedem Durchgang auf einem anderen Index.
+    c.spielerListe.forEach((sp, i) => {
+      const erg = ergebnisse[`${sp.mannschaftId}|${sp.teamPos}`];
+      if (!erg || !erg.saetze || !Array.isArray(bloecke[i])) return;
+      const nachBahn = bahnZuordnungMoeglich(bahnListe, c.saetze, erg.saetze.length);
+      const plan = bahnplan && Array.isArray(bahnplan[i]) ? bahnplan[i] : null;
+      for (let satz = 0; satz < c.saetze; satz += 1) {
+        // Spalte des Berichts = Position der in diesem Satz bespielten Bahn in der Bahnliste.
+        // Ohne Bahnplan faellt bahnSlot() auf den Satz-Index zurueck (eine Bahn je Satz, der
+        // Reihe nach) — dieselbe Ruecknahme wie beim Rueckschreiben.
+        const w = erg.saetze[nachBahn ? bahnSlot(bahnListe, plan, satz) : satz];
+        if (!w) continue;                                   // Bahn noch nicht gespielt
+        if (nurLeere && !blockLeer(bloecke[i][satz])) continue;
+        const block = ergebnisBlock(c, w);
+        if (block.satzOverride != null) nurSatzHolz = true;
+        if (!probe) bloecke[i][satz] = block;
+        dieses += 1;
+      }
+    });
+    gefuellt += dieses;
+    if (dieses) geaendert.push(g);
+  });
+  return { gefuellt, geaendert, nurSatzHolz };
+}
+
 // --- Spec -> fertiger, gefuellter Wettkampf ----------------------------------
 
 // Aus dem Import-Spec den kompletten Wettkampf samt Durchgaengen bauen UND die Ergebnisse
@@ -413,15 +586,15 @@ export function istWebImport(wettkampf) {
 //
 // opt = { playedLanes[], anlageId, anlageName, anlageBahnen[] }
 // Rueckgabe: { wettkampf, games, nurSatzHolz }
-//   nurSatzHolz = true, wenn der Bericht keine Volle/Abraeum-Trennung hergab und deshalb je Satz
-//   nur EIN Teilsatz mit dem Satzergebnis entstanden ist (teilsatzPlan).
+//   nurSatzHolz = true, wenn der Bericht keine Volle/Abraeum-Trennung hergab und die Saetze
+//   deshalb nur ihr Satz-Holz tragen (ergebnisBlock -> satzOverride).
 export function buildImportWettkampf(spec, opt = {}) {
   const played = (opt.playedLanes || []).slice().sort((a, b) => a - b);
   const p = PRESETS[spec.preset];
   if (!p) throw new Error(`Unbekannte Bahnart: ${spec.preset}`);
   const split = teamLanesByBahnart(spec.preset, played, spec.mannschaften.length);
-  const teilsaetze = teilsatzPlan(spec.preset, spec);
-  const nurSatzHolz = teilsaetze.length === 1 && teilsaetze[0] === MODUS_GESAMT;
+  const teilsaetze = teilsatzPlan(spec.preset);
+  let nurSatzHolz = false;
 
   const { wettkampf, games } = buildWettkampf({
     name: spec.name,
@@ -453,19 +626,15 @@ export function buildImportWettkampf(spec, opt = {}) {
         wuerfe: [], kegel: [], koenig: [], overrides: c.teilsaetze.map(() => null), done: false,
       }))),
     };
-    // Adressiert ueber mannschaftId|teamPos, NICHT ueber die Reihenfolge: im Paarkreuz sitzt
-    // derselbe Spieler in jedem Durchgang auf einem anderen Index.
-    c.spielerListe.forEach((sp, i) => {
-      const erg = spec.ergebnisse[`${sp.mannschaftId}|${sp.teamPos}`];
-      if (!erg || !erg.saetze) return;
-      erg.saetze.slice(0, c.saetze).forEach((w, satz) => {
-        g.erfassung.bloecke[i][satz] = ergebnisBlock(c, w);
-      });
-    });
-    g.status = 'beendet';
   });
 
-  wettkampf.status = 'beendet';
+  nurSatzHolz = trageErgebnisseEin(games, spec).nurSatzHolz;
+
+  // Der Status wird ABGELEITET, nicht gesetzt: bei einer laufenden Partie sind noch nicht alle
+  // Saetze da, und dann ist der Wettkampf eben 'laufend' und kein fertiges Spiel. Genau dieselbe
+  // Ableitung benutzt der Rest der App (gameBaseStatus arbeitet auf den Bloecken).
+  games.forEach((g) => { g.status = gameBaseStatus(g); });
+  wettkampf.status = wettkampfBaseStatus(wettkampf, games);
   wettkampf.swWeb = { idSpiel: spec.idSpiel, nurSatzHolz };
   games.forEach((g) => { g.swWeb = wettkampf.swWeb; });
   return { wettkampf, games, nurSatzHolz };

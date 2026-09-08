@@ -8,12 +8,14 @@ export const MODI = [
   { key: 'kranz-abraeumen', label: 'Kranz-Abräumen' },
 ];
 
-// Ein ganzer Satz als EIN Teilsatz, dessen Aufteilung unbekannt ist.
+// Ein ganzer Satz als EIN Teilsatz, dessen Aufteilung unbekannt ist. NUR NOCH ALTBESTAND.
 //
-// Nur für den Web-Import (logic/sw-web-import.js): der Ergebnisdienst nennt bei Schere und
-// Classic ausschließlich das Satz-Holz, nie die Trennung in Volle und Abräumen. Statt sie zu
-// schätzen, bekommt so ein Satz genau einen Teilsatz über alle Würfe — das Satzergebnis stimmt
-// exakt, und eine Auswertung nach Volle/Abräumen gibt es für dieses Spiel schlicht nicht.
+// So bekam der Web-Import (logic/sw-web-import.js) bis Version 1 seine Sätze, wenn der
+// Ergebnisdienst nur das Satz-Holz nennt. Das machte aus einem Schere-Spiel aber ein Programm,
+// das es auf keiner Bahn gibt. Heute bekommt ein importierter Wettkampf die Teilsätze SEINER
+// Bahnart, und das Satz-Holz sitzt auf dem Satz (`satzOverride`, logic/holz.js) statt auf einem
+// erfundenen Teilsatz. Die Konstante bleibt, weil bereits importierte Wettkämpfe sie in ihrer
+// Config tragen und weiter richtig angezeigt werden sollen.
 // Bewusst NICHT in MODI: von Hand soll niemand ein solches Programm anlegen können.
 export const MODUS_GESAMT = 'gesamt';
 

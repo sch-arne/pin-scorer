@@ -26,6 +26,9 @@ export function filterOptionen(einzel) {
   (einzel || []).forEach((p) => (p.saetze || []).forEach((s) => {
     if (s.bahn != null) bahnen.add(s.bahn);
     if (s.satz != null) saetze.add(s.satz);
+    // Ein Satz ohne Teilsatz-Aufteilung (Web-Import) stiftet keinen Modus: nach Volle/Abräumen
+    // gibt es an ihm nichts zu filtern, und ein Chip, der nur Nullen liefert, ist eine Falle.
+    if (s.nurSatz) return;
     (s.teilsaetze || []).forEach((ts) => { if (ts.modus && !modi.includes(ts.modus)) modi.push(ts.modus); });
   }));
   return {
@@ -46,6 +49,24 @@ function passt(satz, ts, filter, ausser) {
   return true;
 }
 
+// Ein Satz OHNE Teilsatz-Aufteilung (Web-Import, logic/holz.js) als ein einziger Pseudo-Teilsatz:
+// er trägt Holz und Wurfzahl des ganzen Satzes, aber KEINEN Modus. Damit zählt er in jede
+// Auswertung mit, die nicht nach Volle/Abräumen filtert, und fällt aus jeder heraus, die es tut —
+// genau das, was über so einen Satz bekannt ist. Ohne ihn fehlte ein importiertes Spiel in der
+// Mannschafts-Auswertung komplett, obwohl sein Holz feststeht.
+function satzAlsTeilsatz(satz) {
+  return {
+    modus: null,
+    manual: true,
+    wuerfe: [],
+    wuerfeVoll: [],
+    soll: 0,
+    holz: satz.holz || 0,
+    wurfCount: satz.wurfCount || 0,
+    neuner: 0, fehl: 0, kranz: 0, raeumer: 0, raeumWuerfe: 0, raeumVert: [], vollChance: 0,
+  };
+}
+
 // Alle passenden Teilsätze einer Mannschaft einsammeln — mit ihrem Satz und dem Spieler-Eintrag.
 // Ein Spieler-Eintrag ist ein Start (Spieler in EINEM Durchgang); dieselbe Person kann in
 // mehreren Durchgängen stehen, das zählt als eigener Start.
@@ -53,9 +74,12 @@ function sammle(einzel, mannschaftId, filter, ausser) {
   const out = [];
   (einzel || []).forEach((p) => {
     if (mannschaftId != null && p.mannschaftId !== mannschaftId) return;
-    (p.saetze || []).forEach((satz) => (satz.teilsaetze || []).forEach((ts) => {
-      if (passt(satz, ts, filter, ausser)) out.push({ p, satz, ts });
-    }));
+    (p.saetze || []).forEach((satz) => {
+      const liste = satz.nurSatz ? [satzAlsTeilsatz(satz)] : (satz.teilsaetze || []);
+      liste.forEach((ts) => {
+        if (passt(satz, ts, filter, ausser)) out.push({ p, satz, ts });
+      });
+    });
   });
   return out;
 }

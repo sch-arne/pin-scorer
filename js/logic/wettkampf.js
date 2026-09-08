@@ -5,6 +5,7 @@
 
 import { computeGameStats } from './statistik.js';
 import { teilsatzRanges } from './teilsaetze.js';
+import { blockHatInhalt } from './holz.js';
 
 // Sitzordnung der Durchgänge planen (Paarkreuz auf festen Team-Startbahnen).
 //   mannschaften:       [{ id, name }]
@@ -73,9 +74,7 @@ export function gameBaseStatus(game) {
   const nSp = c && Array.isArray(c.spielerListe) ? c.spielerListe.length : (bloecke ? bloecke.length : 0);
   const nSaetze = (c && c.saetze) || 0;
   if (!bloecke || !nSp || !nSaetze) return (game && game.status) || 'setup';
-  const hatInhalt = (b) => !!b && (b.done
-    || (Array.isArray(b.wuerfe) && b.wuerfe.length > 0)
-    || (Array.isArray(b.overrides) && b.overrides.some((x) => x != null)));
+  const hatInhalt = (b) => !!b && (b.done || blockHatInhalt(b));
   let anyInhalt = false;
   let alleDone = true;
   for (let sp = 0; sp < nSp; sp += 1) {

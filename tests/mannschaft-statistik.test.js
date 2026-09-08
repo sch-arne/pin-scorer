@@ -181,3 +181,36 @@ test('Räumer-Verteilung und Wurf-Bild am vollen Bild je Mannschaft', () => {
   // Invariante: die Würfe am vollen Bild sind genau die Gelegenheiten der 9er-Quote.
   assert.equal(b.erfasstVoll, b.vollChance);
 });
+
+// --- Importierte Saetze ohne Teilsatz-Aufteilung ------------------------------
+// Ein aus dem Ergebnisdienst importiertes Spiel kennt nur das Satz-Holz (`satzOverride`,
+// logic/holz.js). Es darf in der Mannschafts-Auswertung nicht verschwinden — aber auch nicht
+// so tun, als waere bekannt, wie viel davon in der Volle fiel.
+function importFixture() {
+  const satz = (holz) => ({ wuerfe: [], kegel: [], koenig: [], overrides: [null, null], satzOverride: holz, done: true });
+  const g = durchgang('gi',
+    [{ name: 'Anna', mannschaftId: 'mA', teamPos: 1 }, { name: 'Ben', mannschaftId: 'mB', teamPos: 1 }],
+    [[satz(26), satz(18)], [satz(20), satz(10)]],
+    [[1, 2], [2, 1]]);
+  const wettkampf = { mannschaften: TEAMS, durchgaenge: [{ nr: 1, gameId: 'gi' }] };
+  return computeWettkampfStats(wettkampf, [g]);
+}
+
+test('importierter Satz zaehlt mit Holz und Wurfzahl, aber ohne Teilsatz-Modus', () => {
+  const { einzel } = importFixture();
+  const k = mannschaftAuswertung(einzel, 'mA', leererFilter());
+  assert.equal(k.holz, 44, 'das Satz-Holz zaehlt, obwohl kein Teilsatz es traegt');
+  assert.equal(k.wurfCount, 8, 'ein Satz ohne Aufteilung zaehlt seine Soll-Wuerfe');
+  assert.equal(k.schnittWurf, 44 / 8);
+  // Kein erfundener Modus in der Chip-Leiste — nach Volle/Abraeumen gibt es hier nichts zu filtern.
+  assert.deepEqual(filterOptionen(einzel).modi, []);
+});
+
+test('Filter auf Bahn/Satz greift auch bei importierten Saetzen', () => {
+  const { einzel } = importFixture();
+  const nurB1 = mannschaftAuswertung(einzel, 'mA', { ...leererFilter(), bahn: 1 });
+  assert.equal(nurB1.holz, 26, 'Anna spielt Satz 1 auf Bahn 1');
+  // Nach Volle gefiltert bleibt nichts: der Bericht sagt nicht, wie viel davon Volle war.
+  const nurVolle = mannschaftAuswertung(einzel, 'mA', { ...leererFilter(), teil: 'volle' });
+  assert.equal(nurVolle.holz, 0);
+});

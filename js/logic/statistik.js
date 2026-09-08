@@ -2,7 +2,7 @@
 // je Spieler und eine Platzierung berechnen. Browser + Node ladbar, unabhängig vom View
 // (per Unit-Test abgesichert, später auch von der Statistik-Seite nutzbar).
 
-import { satzHolz } from './holz.js';
+import { satzHolz, satzWurfCount, satzOverrideAktiv } from './holz.js';
 import { isAbraeumMode, abraeumScan, volleKranz } from './abraeumen.js';
 
 // Räumer-Verteilung: Index = Zahl der Würfe, die EIN Lauf bis zum Abräumen gebraucht hat
@@ -103,6 +103,12 @@ export function computeGameStats(config, bloecke, ranges) {
         satz: st + 1,
         bahn: config.bahnplan?.[i]?.[st] ?? (config.ersteBahn + st),
         holz: satzHolz(blk, ranges),
+        // Satz-Ergebnis ohne Teilsatz-Aufteilung (Web-Import): das Holz stimmt exakt, die
+        // Teilsätze bleiben leer. `nurSatz` sagt Ansichten, dass eine Teilsatz-Auswertung
+        // dieses Satzes nicht existiert — nicht, dass sie null ergibt.
+        nurSatz: satzOverrideAktiv(blk, ranges),
+        // Wurfzahl auf Satz-Ebene, weil sie ohne Teilsätze nicht aus ihnen ableitbar ist.
+        wurfCount: satzWurfCount(blk, ranges),
         teilsaetze,
       };
     });
@@ -113,7 +119,10 @@ export function computeGameStats(config, bloecke, ranges) {
     // über alle Sätze. Dient u. a. als Feinwertung (z. B. EWP-Gleichstand innerhalb einer
     // Mannschaft) — bei reinen Volle-Programmen (Bohle) bleibt es 0.
     const abraeum = sumTs(alleTs, 'holz', (ts) => isAbraeumMode(ts.modus));
-    const wurfCount = sumTs(alleTs, 'wurfCount');
+    // Über die SÄTZE summiert, nicht über die Teilsätze: ein Satz-Ergebnis ohne
+    // Teilsatz-Aufteilung zählt seine Soll-Würfe, sonst bliebe der Schnitt/Wurf eines
+    // importierten Spiels 0, obwohl sein Holz exakt ist.
+    const wurfCount = saetze.reduce((s, x) => s + x.wurfCount, 0);
     const neuner = sumTs(alleTs, 'neuner');
     const vollChance = sumTs(alleTs, 'vollChance');
     const raeumer = sumTs(alleTs, 'raeumer');
