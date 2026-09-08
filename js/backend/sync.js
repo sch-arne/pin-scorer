@@ -21,7 +21,7 @@ import { supabase } from './supabase.js';
 import { ensureGeraet, geraetId, kontoId } from './geraet.js';
 import { getGame, getWettkampf } from '../store.js';
 import {
-  mergeSpielerNamen, passByPosition, resolveIchIndex, istLizenzWettkampf,
+  mergeSpielerNamen, passByPosition, resolveIchIndex, istLizenzWettkampf, anonymeSpielerListe,
 } from '../logic/spieler-identitaet.js';
 
 export { istLizenzWettkampf };
@@ -143,9 +143,13 @@ export async function meinePassnummer() {
 // Nach dem erstmaligen Setzen der LizenzID im Profil den Cache verwerfen.
 export function resetPassCache() { passCache = null; }
 
-// Wer ist wer in DIESEM Spiel? -> { passByPos, ichIndex } fuer linkGame/pushResults.
-//   passByPos: Positionen mit LizenzID
-//   ichIndex:  die Position, die der angemeldete Account selbst spielt (oder null)
+// Wer ist wer in DIESEM Spiel? -> { passByPos, ichIndex, mannschaften } fuer linkGame/pushResults.
+//   passByPos:    Positionen mit LizenzID
+//   ichIndex:     die Position, die der angemeldete Account selbst spielt (oder null)
+//   mannschaften: die Mannschaften des Wettkampfs — NICHT fuer die Identitaet, sondern fuer die
+//                 neutralen Platzhalter, mit denen linkGame ein bereits beendetes Spiel
+//                 einfuegt (anonymeSpielerListe). Reist hier mit, weil jeder Aufrufer von
+//                 linkGame das Ergebnis dieser Funktion ohnehin durchreicht.
 // `wettkampf` ist optional (Einzelspiele haben keinen) und liefert die Sportwinner-Zuordnung
 // sowie die manuelle Wettkampf-Markierung (ichSlot).
 //
@@ -183,7 +187,7 @@ export async function spielerIdentitaet(game, wettkampf = null) {
     passByPos,
     meinePass: await meinePassnummer(),
   });
-  return { passByPos, ichIndex };
+  return { passByPos, ichIndex, mannschaften: (wettkampf && wettkampf.mannschaften) || null };
 }
 
 // Ist ein Spieler von einem FREMDEN, aktiven Geraet gehalten? (fuer UI/Politeness)
@@ -225,7 +229,9 @@ function schreibeVertraeglich(table, rows, optionale, run) {
 //   Nur diese Zeile bekommt profil_id — mit erfasste Mitspieler/Gegner bleiben NULL und
 //   tauchen dadurch nicht in der Account-Statistik des Erfassers auf.
 export async function linkGame(game, opts = {}) {
-  const { wettkampfRemoteId = null, passByPos = null, ichIndex = null } = opts;
+  const {
+    wettkampfRemoteId = null, passByPos = null, ichIndex = null, mannschaften = null,
+  } = opts;
   const geraet = await ensureGeraet();
   // Besitzer des Spiels ist der ACCOUNT (auth.uid()), NICHT das Geraet: die RLS
   // (spiel_insert/update/delete/select) prueft `besitzer = auth.uid()`. Die Geraete-ID
@@ -238,16 +244,28 @@ export async function linkGame(game, opts = {}) {
 
   // Ein bereits FERTIGES Spiel wird bewusst NICHT als 'beendet' eingefuegt: die
   // Anonymisierung der Namen haengt an einem UPDATE auf 'beendet' (Trigger
-  // trg_spiel_anonymisieren) und wuerde einen INSERT nie sehen — die Klarnamen blieben
-  // dauerhaft in der DB stehen. Deshalb 'laufend' einfuegen und den Status ganz unten,
-  // wenn Aufstellung und Ergebnis-Snapshots stehen, per UPDATE nachziehen.
+  // trg_spiel_anonymisieren) und wuerde einen INSERT nie sehen. Deshalb 'laufend' einfuegen
+  // und den Status ganz unten, wenn Aufstellung und Ergebnis-Snapshots stehen, per UPDATE
+  // nachziehen.
   const fertig = (game.status || '') === 'beendet';
+
+  // ... UND die Klarnamen gehen dabei gar nicht erst mit. Bei einem laufenden Spiel muessen
+  // sie in die DB — Mitspieler-Geraete, Zuschauer und das Overlay zeigen sie waehrend des
+  // Spiels an. Ein fertiges Spiel braucht sie nie: der Trigger wuerde sie eine Anweisung
+  // spaeter ohnehin durch Anzeigename bzw. Platzhalter ersetzen. Also schicken wir gleich die
+  // Platzhalter (dieselbe Regel wie pins_platzhalter_name) — die Aufstellung mit den echten
+  // Namen bleibt lokal, und was der Server besser weiss (der oeffentliche Anzeigename zur
+  // LizenzID), traegt er beim Statuswechsel selbst ein; dafuer reicht ihm die passnummer.
+  const dbListe = fertig
+    ? anonymeSpielerListe(config.spielerListe, mannschaften)
+    : (config.spielerListe || []);
+  const dbConfig = fertig ? { ...config, spielerListe: dbListe } : config;
 
   const insertRow = {
     besitzer: konto,
     spielart: game.spiel || 'sportkegler-wk',
     status: fertig ? 'laufend' : (game.status || 'setup'),
-    config_json: config,
+    config_json: dbConfig,
     anlage_id: config.anlageId || null,
   };
   if (wettkampfRemoteId) {
@@ -270,7 +288,7 @@ export async function linkGame(game, opts = {}) {
   // passnummer/profil_id werden nur gesetzt, wenn vorhanden. Kennt die DB die (neue) Spalte
   // passnummer noch gar nicht, schreibt schreibeVertraeglich die Aufstellung ohne sie —
   // sonst wuerde ein fehlendes SQL-Update das Teilen komplett verhindern.
-  const rows = (config.spielerListe || []).map((p, i) => {
+  const rows = dbListe.map((p, i) => {
     const row = { spiel_id: remoteId, position: i, name: p.name, start_bahn: p.startBahn };
     if (passByPos && passByPos[i]) row.passnummer = passByPos[i];
     if (ichIndex != null && i === ichIndex) row.profil_id = konto;
@@ -346,11 +364,12 @@ async function ergebnisSnapshot(game, { remoteId, posToId, konto, passByPos, ich
 // (views/import-sw-web.js: der oeffentliche Sportwinner-Ergebnisdienst). Diese Namen duerfen
 // die Datenbank NIE erreichen — auch nicht kurz.
 //
-// Warum dafuer nicht linkGame() taugt: das schreibt bewusst die vollstaendige Aufstellung mit
-// Klarnamen und verlaesst sich darauf, dass der Trigger trg_spiel_anonymisieren sie beim
-// Wechsel auf 'beendet' ersetzt (siehe Kommentar bei linkGame). Fuer eigene, mitgespielte
-// Spiele ist das richtig — die Mitspieler sehen das Spiel ja live. Ein importiertes Spiel
-// hat diese Grundlage nicht: dort waeren es Namen von Leuten, die von der App nichts wissen.
+// Warum dafuer nicht linkGame() taugt: das spiegelt den GANZEN Durchgang — jede Position mit
+// ihrer LizenzID, ihren Wuerfen und ihrem Ergebnis. Namen schreibt es bei einem fertigen Spiel
+// zwar keine mehr (es fuegt die neutralen Platzhalter ein, siehe dort), aber auch der Rest
+// gehoert hier nicht in die Datenbank: es sind die Daten von Leuten, die von der App nichts
+// wissen und die diesen Wettkampf nicht geteilt haben. Fuer eigene, mitgespielte Spiele ist
+// der volle Weg richtig — dort sehen die Mitspieler das Spiel ja live auf ihren Geraeten.
 //
 // Deshalb wandert hier nur EINE Position in die DB — die eigene — und auch die ohne Namen:
 //   • spiel.config_json wird auf einen Spieler eingedampft (Platzhalter statt Name),
@@ -978,8 +997,30 @@ export async function pushStatus(remoteId, status) {
 // Setup/Config eines Spiels aktualisieren (z.B. Spielernamen + Startbahnen der Aufstellung
 // im Wettkampf-Hub). Laut RLS darf das NUR der Ersteller (spiel.besitzer) — bei anderen
 // Geraeten schlaegt es fehl; der Aufrufer faengt das ab (lokale Anzeige, kein harter Fehler).
-export async function pushConfig(remoteId, config) {
-  const { error } = await supabase.from('spiel').update({ config_json: config }).eq('id', remoteId);
+//
+// opts.namenBehalten: die Namen der Aufstellung NICHT mitschicken, sondern die in der DB
+// stehenden uebernehmen. Fuer bereits anonymisierte (beendete) Spiele: dort haelt das Geraet
+// lokal weiter die Klarnamen (mergeSpielerNamen), und die haben in der DB nichts mehr zu
+// suchen. Der Trigger wuerde sie zwar auch abfangen (er spiegelt bei jedem config-Schreiben
+// auf ein anonymisiertes Spiel die DB-Namen zurueck) — aber gesendet werden sollen sie
+// erst gar nicht.
+export async function pushConfig(remoteId, config, { namenBehalten = false } = {}) {
+  let next = config;
+  if (namenBehalten) {
+    const { data, error: e0 } = await supabase
+      .from('spiel').select('config_json').eq('id', remoteId).single();
+    if (e0) throw e0;
+    // Struktur aus der lokalen Config, Namen aus der DB. Fehlt dort einer (sehr alter Stand
+    // ohne spielerListe), wird es der neutrale Platzhalter — der lokale Klarname NIE.
+    const dbListe = ((data && data.config_json) || {}).spielerListe || [];
+    next = {
+      ...config,
+      spielerListe: (config.spielerListe || []).map((sp, i) => ({
+        ...sp, name: (dbListe[i] && dbListe[i].name) || `Spieler ${i + 1}`,
+      })),
+    };
+  }
+  const { error } = await supabase.from('spiel').update({ config_json: next }).eq('id', remoteId);
   if (error) throw error;
 }
 
