@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseSpielListe, parseSpielerInfo, erkenneLayout, pruefeSeite, ergebnisBlock, buildImportSpec,
   istWebImport, buildImportWettkampf, teilsatzPlan, bloeckeNachBahn, trageErgebnisseEin, blockLeer,
+  spielerName,
 } from '../js/logic/sw-web-import.js';
 import { MODUS_GESAMT } from '../js/logic/sportkegeln-presets.js';
 import { istLizenzWettkampf } from '../js/logic/spieler-identitaet.js';
@@ -169,11 +170,11 @@ test('echte Antwort (328202): Layout, Namen und Holz stimmen', () => {
   assert.equal(b.paare.length, 6, 'die Mannschaftssumme am Ende ist keine Paarung');
 
   const arne = b.paare[1];
-  assert.equal(arne.gg.name, 'Schierbaum, Arne');
+  assert.equal(arne.gg.name, 'Arne Schierbaum');
   assert.deepEqual(arne.gg.saetze.map((x) => x.holz), [195, 230, 202, 194]);
   assert.equal(arne.gg.kegel, 821);
   // Der Gast steht im Bericht rueckwaerts (Spalten 13,12,11,10) — hier wieder in Satzfolge.
-  assert.equal(arne.g.name, 'Hartnack, Nils');
+  assert.equal(arne.g.name, 'Nils Hartnack');
   assert.deepEqual(arne.g.saetze.map((x) => x.holz), [189, 207, 197, 217]);
   assert.equal(arne.g.kegel, 810);
 
@@ -182,6 +183,19 @@ test('echte Antwort (328202): Layout, Namen und Holz stimmen', () => {
   const summeG = b.paare.reduce((n, p) => n + p.g.kegel, 0);
   assert.equal(summeGG, 4860);
   assert.equal(summeG, 4903);
+});
+
+test('spielerName dreht „Nachname, Vorname" — und nur das', () => {
+  assert.equal(spielerName('Schierbaum, Arne'), 'Arne Schierbaum');
+  assert.equal(spielerName('  Hösel ,  Christoph '), 'Christoph Hösel');
+  assert.equal(spielerName('Meyer-Schmidt, Hans Peter'), 'Hans Peter Meyer-Schmidt');
+  assert.equal(spielerName('<b>Kopp, Eckhard</b>'), 'Eckhard Kopp', 'HTML aus dem Formatter faellt weg');
+  // Ohne eindeutige Trennung bleibt der rohe Name stehen: falsch zusammengesetzt waere schlimmer.
+  assert.equal(spielerName('Mannschaftssumme'), 'Mannschaftssumme');
+  assert.equal(spielerName('Meyer, Hans, jun.'), 'Meyer, Hans, jun.');
+  assert.equal(spielerName('Meyer,'), 'Meyer,');
+  assert.equal(spielerName(''), '');
+  assert.equal(spielerName(null), '');
 });
 
 test('echte Antwort (328202): kompletter Import bis zur Statistik', () => {
@@ -206,9 +220,9 @@ test('echte Antwort (328202): kompletter Import bis zur Statistik', () => {
     const { players } = computeGameStats(g.config, g.erfassung.bloecke, teilsatzRanges(g.config));
     players.forEach((p) => { if (p.gesamt > 0) holzVon[p.name] = p.gesamt; });
   });
-  assert.equal(holzVon['Schierbaum, Arne'], 821);
-  assert.equal(holzVon['Hartnack, Nils'], 810);
-  assert.equal(holzVon['Hösel, Christoph'], 842);
+  assert.equal(holzVon['Arne Schierbaum'], 821);
+  assert.equal(holzVon['Nils Hartnack'], 810);
+  assert.equal(holzVon['Christoph Hösel'], 842);
   assert.equal(Object.keys(holzVon).length, 12);
   assert.equal(Object.values(holzVon).reduce((a, b) => a + b, 0), 4860 + 4903);
 });
@@ -222,7 +236,7 @@ test('echte Antwort (328202): Satzergebnisse exakt, Volle/Abraeumen bleibt leer'
   let gefunden = null;
   games.forEach((g) => {
     const { players } = computeGameStats(g.config, g.erfassung.bloecke, teilsatzRanges(g.config));
-    const p = players.find((x) => x.name === 'Schierbaum, Arne');
+    const p = players.find((x) => x.name === 'Arne Schierbaum');
     if (p) gefunden = p;
   });
   assert.ok(gefunden, 'der eigene Spieler muss in einem Durchgang stehen');
@@ -461,7 +475,7 @@ test('mehr bespielte Bahnen als Saetze: Berichtsreihenfolge gilt als Spielreihen
   let arne = null;
   games.forEach((g) => {
     const { players } = computeGameStats(g.config, g.erfassung.bloecke, teilsatzRanges(g.config));
-    const p = players.find((x) => x.name === 'Schierbaum, Arne');
+    const p = players.find((x) => x.name === 'Arne Schierbaum');
     if (p) arne = p;
   });
   assert.ok(arne);
@@ -577,13 +591,13 @@ test('Zwischenstand: eine noch nicht angetretene Paarung verschiebt die Position
   });
   const b = parseSpielerInfo(rows, { saetze: 4 });
   assert.equal(b.paare.length, 6);
-  assert.equal(b.paare[1].gg.name, 'Schierbaum, Arne');
+  assert.equal(b.paare[1].gg.name, 'Arne Schierbaum');
   assert.ok(b.paare[1].gg.saetze.every((x) => x === null));
-  assert.equal(b.paare[2].gg.name, 'Hösel, Christoph', 'Paarung 3 bleibt Position 3');
+  assert.equal(b.paare[2].gg.name, 'Christoph Hösel', 'Paarung 3 bleibt Position 3');
 
   const spec = buildImportSpec(PARTIE, b);
   const m = spec.mannschaften[0];
-  assert.equal(spec.namesByTeamPos[`${m.id}|3`], 'Hösel, Christoph');
+  assert.equal(spec.namesByTeamPos[`${m.id}|3`], 'Christoph Hösel');
 });
 
 test('Zwischenstand: das Ergebnis landet auf dem Satz, der auf DIESER Bahn gespielt wird', () => {
@@ -591,7 +605,7 @@ test('Zwischenstand: das Ergebnis landet auf dem Satz, der auf DIESER Bahn gespi
   spec.preset = 'schere';
   const { wettkampf, games } = buildImportWettkampf(spec, { playedLanes: [2, 3, 4, 5] });
 
-  const arne = ort(games, 'Schierbaum, Arne');
+  const arne = ort(games, 'Arne Schierbaum');
   const { players } = computeGameStats(
     arne.g.config, arne.g.erfassung.bloecke, teilsatzRanges(arne.g.config),
   );
@@ -625,7 +639,7 @@ test('Nachimport: der zweite Import fuellt nur die Luecken', () => {
 
   // Von Hand nachgetragen: die Volle/Abraeum-Aufteilung eines schon importierten Satzes. Genau
   // sie darf ein zweiter Import nicht wieder plattmachen.
-  const malte = ort(games, 'Schierbaum, Malte');
+  const malte = ort(games, 'Malte Schierbaum');
   const satz = malte.g.erfassung.bloecke[malte.i].findIndex((b) => b.satzOverride != null);
   malte.g.erfassung.bloecke[malte.i][satz] = {
     wuerfe: [], kegel: [], koenig: [], overrides: [100, 83], satzOverride: null, done: true,
@@ -654,7 +668,7 @@ test('Nachimport: der zweite Import fuellt nur die Luecken', () => {
   assert.equal(malte.g.erfassung.bloecke[malte.i][satz].satzOverride, null);
 
   // Und die ergaenzten Saetze sitzen richtig: Arne kommt auf sein volles Holz.
-  const arne = ort(games, 'Schierbaum, Arne');
+  const arne = ort(games, 'Arne Schierbaum');
   const { players } = computeGameStats(
     arne.g.config, arne.g.erfassung.bloecke, teilsatzRanges(arne.g.config),
   );

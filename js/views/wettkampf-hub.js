@@ -27,7 +27,7 @@ import {
 } from '../logic/mannschaft-export.js';
 import { printProtokollHTML } from '../logic/wurfprotokoll.js';
 import { downloadCSV } from '../logic/wurf-csv.js';
-import { istLizenzWettkampf } from '../logic/spieler-identitaet.js';
+import { istLizenzWettkampf, mergeSpielerNamen } from '../logic/spieler-identitaet.js';
 import { esc, fehlerText } from '../util.js';
 import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
 
@@ -346,7 +346,7 @@ export function wettkampfHubView() {
   // obwohl schon Ergebnisse dranstehen — Sportwinner verrät sie nicht, sie wird nachgetragen.
   // Bei selbst erfassten Spielen bleibt jedes Ergebnis an seinem Satz: dort wurden die Würfe in
   // dieser Reihenfolge geworfen, die Bahn ist nur ihr Etikett.
-  function editLane(games, teamId, teamPos, newLane) {
+  function editLane(wettkampf, games, teamId, teamPos, newLane) {
     for (const g of games) {
       const list = g.config?.spielerListe || [];
       const idx = list.findIndex((p) => p.mannschaftId === teamId && p.teamPos === teamPos);
@@ -363,8 +363,10 @@ export function wettkampfHubView() {
         bahnListe: game.config.bahnListe, saetze: game.config.saetze,
         bahnwechsel: game.config.bahnwechsel, spielerData: spl,
       });
+      // Die Herkunft steht am WETTKAMPF, nicht am Durchgang: ein geteilter Wettkampf wird nach
+      // dem Teilen aus der DB zurückgeholt, und `swWeb` reist nur an seiner Config mit.
       const bloecke = game.erfassung && game.erfassung.bloecke;
-      if (istWebImport(game) && Array.isArray(bloecke)) {
+      if (istWebImport(wettkampf) && Array.isArray(bloecke)) {
         [idx, other].forEach((i) => {
           if (i < 0 || !Array.isArray(bloecke[i])) return;
           bloecke[i] = bloeckeNachBahn(bloecke[i], altPlan[i], game.config.bahnplan[i]);
@@ -377,25 +379,35 @@ export function wettkampfHubView() {
     }
   }
 
+  // Liegt in der Datenbank NUR die eigene Ergebniszeile?
+  //
+  // Genau dann, wenn der Wettkampf aus dem Ergebnisdienst stammt und (noch) nicht geteilt ist:
+  // der Import hat dann je Durchgang ein eingedampftes Ein-Spieler-Spiel angelegt
+  // (sync.linkEigenesErgebnis, Platzhalter statt Name), die volle Aufstellung liegt lokal.
+  // Wird der Wettkampf geteilt, gilt wieder der normale Weg über die Wettkampf-Durchgänge.
+  function nurEigenesErgebnis(game) {
+    const w = getWettkampf(game && game.wettkampfId);
+    return istWebImport(w) && !(w && w.linked);
+  }
+
   // Config eines (verknüpften) Durchgang-Spiels zum Server spiegeln. Nur der Ersteller
   // darf das laut RLS — bei anderen Geräten schlägt es still fehl (lokale Anzeige bleibt).
   //
-  // NIE bei einem Web-Import: dessen lokale Config trägt die KLARNAMEN aller Mit- und
-  // Gegenspieler, und die bleiben ausschließlich auf diesem Gerät (sync.linkEigenesErgebnis
-  // schreibt allein die eigene Zeile, mit Platzhalter statt Name). Ein Push hier würde genau
-  // diese Namen in die Datenbank tragen — und obendrein die eingedampfte Ein-Spieler-Config
-  // der Ergebniszeile mit einer 12-Spieler-Aufstellung überschreiben.
+  // NIE bei einem ungeteilten Web-Import: dessen Remote-Zeile ist auf EINEN Spieler eingedampft
+  // (siehe nurEigenesErgebnis). Ein Push würde sie mit der vollen Aufstellung überschreiben und
+  // damit die Klarnamen aller Mit- und Gegenspieler in die Datenbank tragen, obwohl der Nutzer
+  // den Wettkampf gar nicht geteilt hat.
   function pushConfig(game) {
-    if (!game || !game.remoteId || !syncMod || istWebImport(game)) return;
+    if (!game || !game.remoteId || !syncMod || nurEigenesErgebnis(game)) return;
     syncMod.pushConfig(game.remoteId, game.config).catch(() => {});
   }
 
-  // Web-Import: die EIGENE Ergebniszeile in der Datenbank nachziehen, wenn sich lokal etwas an
-  // ihr geändert hat (Startbahn -> Bahnplan und Reihenfolge der Sätze). Ohne das stünde auf
-  // einem zweiten Gerät weiter die alte Zuordnung. Übertragen wird nur die eigene Zeile und nur
-  // das, was sie ohnehin schon enthält — keine Namen (siehe pushConfig).
+  // Ungeteilter Web-Import: die EIGENE Ergebniszeile in der Datenbank nachziehen, wenn sich
+  // lokal etwas an ihr geändert hat (Startbahn -> Bahnplan und Reihenfolge der Sätze). Ohne das
+  // stünde auf einem zweiten Gerät weiter die alte Zuordnung. Übertragen wird nur die eigene
+  // Zeile und nur das, was sie ohnehin schon enthält — keine Namen (siehe pushConfig).
   function pushEigenesErgebnis(game) {
-    if (!game || !game.remoteId || !syncMod || !istWebImport(game)) return;
+    if (!game || !game.remoteId || !syncMod || !nurEigenesErgebnis(game)) return;
     // Den Wettkampf hier aus dem Speicher holen: editLane kennt nur die Spiele.
     const slot = (getWettkampf(game.wettkampfId) || {}).ichSlot;
     if (!slot) return;
@@ -513,15 +525,22 @@ export function wettkampfHubView() {
 
   // Wettkampf teilen: in Supabase spiegeln, lokale (unverknüpfte) Kopie durch die
   // remote-gespiegelte ersetzen, ab jetzt verknüpft + Realtime.
+  //
+  // WEB-IMPORT: dort liegt die eigene Ergebniszeile schon als eingedampftes Ein-Spieler-Spiel
+  // in der DB (sync.linkEigenesErgebnis). Beim Teilen entsteht daneben der vollständige
+  // Durchgang — also muss die alte Zeile weichen, sonst zählte dasselbe Spiel zweimal in der
+  // Konto-Statistik (sie liest genau spiel_ergebnis). Zwei Schritte, in dieser Reihenfolge:
+  //
+  //   1) VOR dem Teilen die Verknüpfung an den lokalen Durchgängen kappen. linkWettkampf legt
+  //      ohnehin neue Zeilen an; stehen bliebe nur die falsche Auskunft von spielerIdentitaet,
+  //      die über game.remoteId die EINE Zeile des alten Spiels liest und deren LizenzID dann
+  //      der Position 0 der vollen Aufstellung zuschriebe — also einem fremden Spieler.
+  //   2) NACH erfolgreichem Teilen die alten Spiele bei mir verbergen (dieselbe Mechanik wie
+  //      beim Löschen, logic/loeschen.js): sie verschwinden aus Historie und Statistik, die
+  //      Zuordnung „das war ich" wird gelöst. Scheitert das Teilen, bleibt alles wie es war.
   async function shareWettkampf() {
     const w = getWettkampf(getActiveWettkampf());
     if (!w || w.linked) return;
-    // Aus dem Ergebnisdienst importierte Wettkaempfe tragen die Klarnamen fremder Spieler; die
-    // duerfen nicht ueber Codes und Overlay an Dritte gehen (siehe istWebImport).
-    if (istWebImport(w)) {
-      setSyncMsg('Importierte Wettkaempfe lassen sich nicht teilen — sie enthalten Namen Dritter.');
-      return;
-    }
     // Ohne Anlage gibt es keinen gemeinsamen Bezugspunkt für die Bahnen — andere Geräte und
     // das Overlay könnten die Bahnnummern keiner realen Halle zuordnen. Deshalb erst zuweisen.
     if (!w.anlageId) {
@@ -532,14 +551,42 @@ export function wettkampfHubView() {
     try {
       if (!syncMod) syncMod = await import('../backend/sync.js');
       const games = getWettkampfGames(w.id);
+      // Schritt 1 (siehe oben) — nur beim Web-Import gibt es solche Einzel-Ergebniszeilen.
+      const alteErgebnisse = istWebImport(w) ? games.map((g) => g.remoteId).filter(Boolean) : [];
+      if (alteErgebnisse.length) games.forEach((g) => { g.remoteId = null; g.linked = false; });
       const { remoteId } = await syncMod.linkWettkampf(w, games);
       const { wettkampf: fresh, games: freshGames } = await syncMod.pullWettkampf(remoteId);
+      // Die „Das bin ich"-Markierung reist bewusst nicht über die DB (wettkampfConfigFuerDb)
+      // und ginge sonst beim Austausch der lokalen Kopie verloren — samt der eigenen Zeile in
+      // Rangliste und Statistik. Wie beim Sportwinner-Import: nach dem Pull wieder ansetzen.
+      if (w.ichSlot) fresh.ichSlot = w.ichSlot;
+      // War der Wettkampf beim Teilen schon FERTIG, anonymisiert der Server die Aufstellung
+      // sofort (Trigger beim Statuswechsel auf 'beendet') — der Pull brächte also Platzhalter
+      // zurück. Für die eigene Kopie gilt dieselbe Regel wie für jedes Gerät, das während des
+      // Spiels dabei war: die Klarnamen bleiben HIER stehen, sie kommen ja von hier. In der
+      // Datenbank und bei allen, die später beitreten, stehen weiterhin die Platzhalter.
+      const namenJeDurchgang = {};
+      games.forEach((g) => { namenJeDurchgang[g.durchgangNr] = (g.config || {}).spielerListe; });
       deleteWettkampf(w.id);            // alten (lokalen) WK + alte 'g'-Durchgänge entfernen
-      freshGames.forEach((g) => saveGame(g));
+      freshGames.forEach((g) => {
+        const lokal = namenJeDurchgang[g.durchgangNr];
+        if (g.anonymisiertAm && lokal) {
+          g.config = { ...g.config, spielerListe: mergeSpielerNamen(g.config.spielerListe, lokal) };
+        }
+        saveGame(g);
+      });
       saveWettkampf(fresh);
       setActiveWettkampf(fresh.id);
       render();
       subscribeNow();
+      // Schritt 2 — best effort: der Wettkampf ist geteilt, daran darf ein Fehler hier nichts
+      // mehr ändern. Die Doppelzählung wäre dann sichtbar und lässt sich über „entfernen" an
+      // der Spielkarte selbst beheben.
+      for (const id of alteErgebnisse) {
+        try { await syncMod.verbergeSpiel(id); } catch (e) {
+          console.error('[teilen] alte Ergebniszeile nicht verborgen', e);
+        }
+      }
       setSyncMsg('Geteilt · Code ' + (fresh.beitrittsCode || ''));
     } catch (e) {
       // Die echte Ursache zeigen statt pauschal "online sein": RLS-Ablehnung und eine noch
@@ -692,7 +739,7 @@ export function wettkampfHubView() {
     // Startbahn eines Spielers (nur Team-Bahnen).
     root.querySelectorAll('.roster-lane').forEach((sel) =>
       sel.addEventListener('change', () => {
-        editLane(games, sel.dataset.team, parseInt(sel.dataset.pos, 10), parseInt(sel.value, 10));
+        editLane(wettkampf, games, sel.dataset.team, parseInt(sel.dataset.pos, 10), parseInt(sel.value, 10));
         render();
       }));
 
@@ -900,10 +947,7 @@ function overlaySection(wettkampf) {
     </div>`).join('');
 
   const linked = !!(wettkampf.linked && wettkampf.zuschauerCode);
-  const urlBox = istWebImport(wettkampf)
-    ? `<p class="field-hint">🔒 Aus dem Ergebnisdienst importierte Wettkaempfe bekommen kein
-       Overlay: es wuerde die Namen fremder Spieler oeffentlich in den Stream schreiben.</p>`
-    : linked
+  const urlBox = linked
     ? `<div class="ov-url-row">
          <input class="ov-url-input" type="text" readonly value="${esc(overlayUrl(wettkampf))}" data-overlay-url aria-label="Overlay-URL">
          <button type="button" class="btn-mini" data-action="copy-overlay">Kopieren</button>
@@ -958,6 +1002,9 @@ function anlageNachtragSection(wettkampf, ui) {
 function mehrgeraeteSection(wettkampf, syncMsg, anlageUi, konto) {
   const linked = !!(wettkampf.linked && wettkampf.remoteId);
   const ohneAnlage = !wettkampf.anlageId;
+  // Aus dem Ergebnisdienst importiert: teilbar wie jeder andere Wettkampf, aber der Hinweis
+  // sagt vorher, was dabei in die Datenbank geht — die Namen stammen aus einer öffentlichen
+  // Quelle, die Betroffenen kennen diese App aber nicht.
   const webImport = istWebImport(wettkampf);
   const code = wettkampf.beitrittsCode || '';
   const zcode = wettkampf.zuschauerCode || '';
@@ -971,14 +1018,15 @@ function mehrgeraeteSection(wettkampf, syncMsg, anlageUi, konto) {
          <span class="erf-share-code">${esc(zcode)}</span>
        </div>` : ''}
        <p class="field-hint">Der <b>Eingabe-Code</b> ist zum Mit-Erfassen (Durchgänge parallel, Rangliste läuft live zusammen) — aus Schutz standardmäßig verdeckt, zum Ablesen antippen. Der <b>Zuschauer-Code</b> zeigt alles live, aber nur zum Ansehen. Beide unter „Spiel beitreten" eingeben.</p>`
-    : webImport
-      ? `<p class="field-hint">🔒 Aus dem Ergebnisdienst importiert — nicht teilbar. Die Namen der
-         Mit- und Gegenspieler stammen aus einer oeffentlichen Quelle, bleiben aber bewusst auf
-         diesem Geraet. In der Datenbank liegt allein dein eigenes Ergebnis, ohne Namen.</p>`
     : `<button type="button" class="erf-btn done" data-action="share"${ohneAnlage ? ' disabled' : ''}>🔗 Wettkampf teilen</button>
        <p class="field-hint">${ohneAnlage
          ? 'Erst eine Anlage zuweisen (siehe unten) — ohne sie lassen sich die Bahnen auf anderen Geräten und im Overlay keiner Halle zuordnen.'
-         : 'Teilt den Wettkampf geräteübergreifend — andere erfassen Durchgänge parallel mit. Konto nötig.'}</p>`;
+         : 'Teilt den Wettkampf geräteübergreifend — andere erfassen Durchgänge parallel mit. Konto nötig.'}</p>
+       ${webImport ? `<p class="field-hint">ℹ️ Aus dem Ergebnisdienst importiert: mit dem Teilen
+         gehen auch die Namen der Mit- und Gegenspieler in die Datenbank und über Codes und
+         Overlay an alle, die den Wettkampf sehen. Am Wettkampfende ersetzt der Server sie
+         wieder durch Anzeigenamen bzw. Platzhalter. Dein bereits übertragenes Einzelergebnis
+         wird dabei durch den vollständigen Durchgang ersetzt.</p>` : ''}`;
   return `
     <section class="field">
       <label class="field-label">Mehrgeräte</label>

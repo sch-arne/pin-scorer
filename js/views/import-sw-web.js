@@ -12,10 +12,12 @@
 //     stimmen und 9er, Räumer und Wurfbild ehrlich leer bleiben statt erfunden zu werden.
 //
 //  2. DATENSCHUTZ. Die Namen der Mit- und Gegenspieler stammen aus einer öffentlichen Quelle,
-//     aber diese Leute wissen von dieser App nichts. Deshalb bleiben sie ausschließlich LOKAL:
-//     in die Datenbank wandert allein die eigene Ergebniszeile, und auch die ohne Namen
-//     (sync.linkEigenesErgebnis). Aus demselben Grund lässt sich ein so importierter Wettkampf
-//     nicht teilen — der Hub sperrt Beitritts-/Zuschauercode und Overlay.
+//     aber diese Leute wissen von dieser App nichts. Deshalb bleiben sie beim Import
+//     ausschließlich LOKAL: in die Datenbank wandert allein die eigene Ergebniszeile, und auch
+//     die ohne Namen (sync.linkEigenesErgebnis). Wer den Wettkampf später im Hub ausdrücklich
+//     TEILT, hebt das für sich auf — dann geht die volle Aufstellung mit, wie bei jedem selbst
+//     erfassten Wettkampf, und der Anonymisierungs-Trigger räumt sie am Wettkampfende wieder
+//     ab. Der Hub sagt vor dem Teilen, was das bedeutet.
 //
 //  3. IDENTITÄT. Der Ergebnisdienst nennt keine LizenzIDen; die amtliche Zuordnung des
 //     Brücken-Imports gibt es hier also nicht. An ihre Stelle tritt das Profil
@@ -84,7 +86,7 @@ export function importSwWebView() {
     ichKey: '',            // "<mannschaftId>|<teamPos>" — meine Zeile in der Aufstellung
     meineKeys: [],         // die Slots, die laut Profil ueberhaupt meine sein koennen
     inDb: false,           // eigenes Ergebnis ins Konto uebernehmen? (sonst rein lokal)
-    nachimport: null,      // { id, name, offen, ichSlot, remote } — Partie ist schon importiert
+    nachimport: null,      // { id, name, offen, ichSlot, remote, geteilt } — schon importiert
     warnungen: [],
   };
 
@@ -222,6 +224,7 @@ export function importSwWebView() {
       offen: gefuellt,
       ichSlot: !!w.ichSlot,
       remote: games.some((g) => g.remoteId),
+      geteilt: !!w.linked,
     };
   }
 
@@ -298,7 +301,7 @@ export function importSwWebView() {
         anlageName: anlage ? anlage.name : '',
         anlageBahnen: state.anlageBahnen,
       });
-      // Herkunft vervollständigen: Duplikat-Erkennung und Teilen-Sperre hängen daran.
+      // Herkunft vervollständigen: Duplikat-Erkennung und Bahn-Zuordnung hängen daran.
       Object.assign(wettkampf.swWeb, {
         saison: state.saison, sektion: state.sektion, liga: state.liga,
       });
@@ -377,15 +380,27 @@ export function importSwWebView() {
       saveWettkampf(w);
       setActiveWettkampf(w.id);
 
-      // Die eigene Zeile in der Datenbank nachziehen — samt Ergebnis-Snapshot: mit neuen Saetzen
+      // Das Ergänzte in der Datenbank nachziehen — samt Ergebnis-Snapshot: mit neuen Saetzen
       // aendern sich Gesamtholz und Schnitt, und der Snapshot ist die einzige Quelle der
       // Konto-Statistik. Lag der Wettkampf rein lokal, bleibt er es auch jetzt.
+      //
+      // Zwei Wege, je nachdem WAS in der Datenbank liegt (siehe logic/sw-web-import.js,
+      // istWebImport):
+      //   geteilt   — der vollstaendige Durchgang. Dann gehen die Saetze ALLER Spieler hoch,
+      //               damit Mitspieler, Zuschauer und Overlay denselben Stand sehen.
+      //   ungeteilt — nur die eigene, eingedampfte Ergebniszeile. Dann auch nur die.
       let uebertragen = 0;
-      const remote = w.ichSlot ? geaendert.filter((g) => g.remoteId) : [];
+      const geteilt = !!w.linked;
+      const remote = (geteilt || w.ichSlot) ? geaendert.filter((g) => g.remoteId) : [];
       if (remote.length) {
-        state.msg = 'Übertrage dein Ergebnis …'; render();
+        state.msg = geteilt ? 'Übertrage die Ergebnisse …' : 'Übertrage dein Ergebnis …'; render();
         const sync = await import('../backend/sync.js');
         for (const g of remote) {
+          if (geteilt) {
+            await sync.pushDurchgang(g, w);
+            uebertragen += 1;
+            continue;
+          }
           const pos = ((g.config && g.config.spielerListe) || [])
             .findIndex((sp) => `${sp.mannschaftId}|${sp.teamPos}` === w.ichSlot);
           if (pos < 0) continue;
@@ -395,7 +410,8 @@ export function importSwWebView() {
       }
       state.msg = `${gefuellt} Satzergebnis${gefuellt === 1 ? '' : 'se'} ergänzt`
         + (uebertragen
-          ? ` — dein Ergebnis ist in ${uebertragen} Durchgang${uebertragen > 1 ? 'en' : ''} auch `
+          ? ` — ${geteilt ? 'der Stand ist' : 'dein Ergebnis ist'} in ${uebertragen} `
+            + `Durchgang${uebertragen > 1 ? 'en' : ''} auch `
             + 'in der Datenbank nachgezogen.'
           : ' — nur auf diesem Gerät.');
       state.phase = 'fertig';
@@ -588,8 +604,8 @@ export function importSwWebView() {
             ? 'In die Datenbank geht ausschließlich deine eigene Ergebniszeile, und auch die '
               + 'ohne Namen.'
             : 'In die Datenbank geht bei diesem Import gar nichts.'}
-          Ein so importierter Wettkampf lässt sich deshalb nicht teilen und nicht im
-          Overlay zeigen.</p>
+          Erst wenn du den Wettkampf im Hub ausdrücklich <b>teilst</b>, gehen die Namen mit —
+          dann auch an alle, die ihn per Code oder Overlay sehen.</p>
       </section>
       ${warnungenSection()}`;
   }
@@ -617,9 +633,13 @@ export function importSwWebView() {
           ? `<p class="field-hint">🔒 Der Wettkampf liegt nur auf diesem Gerät; das bleibt auch
              so. Wer ihn doch in der Konto-Statistik haben will, muss ihn löschen und neu
              importieren.</p>` : ''}
-        ${n.offen && n.ichSlot && n.remote
-          ? '<p class="field-hint">Deine Ergebniszeile wird dabei auch in der Datenbank '
-            + 'nachgezogen — weiterhin ohne Namen.</p>' : ''}
+        ${n.offen && n.geteilt
+          ? '<p class="field-hint">Der Wettkampf ist geteilt — der neue Stand geht für alle '
+            + 'Spieler mit in die Datenbank und damit auch ins Overlay und auf die Geräte, '
+            + 'die per Code zusehen.</p>'
+          : (n.offen && n.ichSlot && n.remote
+            ? '<p class="field-hint">Deine Ergebniszeile wird dabei auch in der Datenbank '
+              + 'nachgezogen — weiterhin ohne Namen.</p>' : '')}
       </section>
       ${warnungenSection()}`;
   }

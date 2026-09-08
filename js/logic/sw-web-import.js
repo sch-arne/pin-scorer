@@ -162,9 +162,28 @@ export const LAYOUTS = {
 // die Layout-Erkennung, weil sich die Layouts vor allem in der Namensspalte unterscheiden.
 const istName = (v) => /\p{L}/u.test(klarText(v));
 
+// „Nachname, Vorname" -> „Vorname Nachname".
+//
+// Der Ergebnisdienst meldet jeden Spieler in Listenform, die App schreibt Namen aber überall
+// so, wie man sie sagt — der Brücken-Import setzt sie aus vorname+nachname genauso zusammen
+// (roster-import.js). Ohne diese Drehung stünde in der Aufstellung, in der Rangliste und im
+// Overlay eines importierten Spiels eine andere Namensform als in jedem selbst erfassten.
+//
+// Gedreht wird nur bei GENAU EINEM Komma mit Text auf beiden Seiten. Alles andere („Meyer",
+// „Meyer, Hans, jun.") bleibt unverändert stehen: dort ist nicht sicher, welcher Teil der
+// Vorname wäre, und ein falsch zusammengesetzter Name ist schlechter als der rohe.
+export function spielerName(roh) {
+  const s = klarText(roh);
+  const teile = s.split(',');
+  if (teile.length !== 2) return s;
+  const nach = teile[0].trim();
+  const vor = teile[1].trim();
+  return nach && vor ? `${vor} ${nach}` : s;
+}
+
 // Die Werte EINER Seite aus einer Zeile lesen.
 function leseSeite(zeile, map, typ) {
-  const name = klarText(zeile[map.name]);
+  const name = spielerName(zeile[map.name]);
   const kegel = num(zeile[map.kegel]);
   if (typ === 'satz') {
     // POSITIONSTREU, siehe Kopf (TEILSTAENDE): die nicht gespielte Bahn bleibt als `null` an
@@ -443,11 +462,18 @@ export function buildImportSpec(partie, bericht) {
 
 // Stammt dieser Wettkampf aus dem Web-Import?
 //
-// Wichtig fuer die Teilen-Sperre: ein so importierter Wettkampf traegt die KLARNAMEN der Mit-
-// und Gegenspieler, und die liegen bewusst nur lokal (siehe sync.linkEigenesErgebnis). Ihn zu
-// teilen wuerde genau diese Namen ueber Beitritts-/Zuschauercode und das OBS-Overlay an Dritte
-// ausliefern — an Leute, die von dieser App nichts wissen. Deshalb sperren wettkampf-hub.js
-// und die Overlay-Sektion das Teilen fuer diese Wettkaempfe.
+// Zwei Dinge haengen daran:
+//
+//  1. Die STARTBAHN bleibt aenderbar, obwohl schon Ergebnisse dranstehen, und die Ergebnisse
+//     wandern dabei mit (bloeckeNachBahn): beim Web-Import haengen sie an der Bahn, nicht am
+//     Satz (siehe Kopf). Bei selbst erfassten Spielen waere genau das falsch.
+//
+//  2. Solange der Wettkampf NICHT geteilt ist, liegt in der Datenbank allein die eigene
+//     Ergebniszeile — ohne Namen (sync.linkEigenesErgebnis). Aenderungen gehen dann ueber
+//     pushEigenesErgebnis statt ueber pushConfig, das die volle Aufstellung schriebe.
+//     Wird er geteilt, gilt der normale Weg: die Aufstellung geht mit in die DB und der
+//     Anonymisierungs-Trigger ersetzt die Namen beim Wettkampfende, genau wie bei jedem
+//     selbst erfassten Wettkampf.
 export function istWebImport(wettkampf) {
   if (!wettkampf) return false;
   return wettkampf.quelle === 'sportwinner-web' || !!wettkampf.swWeb;
