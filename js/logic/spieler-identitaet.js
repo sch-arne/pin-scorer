@@ -120,3 +120,24 @@ export function mergeSpielerNamen(remoteListe, lokalListe) {
     return name ? { ...sp, name } : sp;
   });
 }
+
+// Eine Aufstellung ohne Klarnamen — die client-seitige Fassung von pins_platzhalter_name()
+// (supabase/policies.sql), Zeichen für Zeichen dieselbe Regel:
+//   „<Mannschaftsname> <teamPos>"  bzw.  „Spieler N"  (Einzelspiel/ohne Team-Zuordnung).
+//
+// Gebraucht beim Teilen eines BEREITS BEENDETEN Spiels: dort werden die Namen ohnehin
+// serverseitig ersetzt (Trigger trg_spiel_anonymisieren), also sollen die echten Namen gar
+// nicht erst mitreisen. Was der Trigger danach besser weiß — den öffentlichen Anzeigenamen
+// eines Profils zur LizenzID — setzt er selbst; dafür braucht er nur die passnummer, keinen
+// Namen. Alles andere am Eintrag (startBahn, mannschaftId, teamPos) bleibt unverändert.
+//
+// `mannschaften` = wettkampf.mannschaften ([{ id, name }]), null bei Einzelspielen.
+// Rückgabe: eine NEUE Liste (die Eingabe wird nicht verändert).
+export function anonymeSpielerListe(liste, mannschaften = null) {
+  const namen = {};
+  (mannschaften || []).forEach((m) => { if (m && m.id != null) namen[m.id] = m.name; });
+  return (Array.isArray(liste) ? liste : []).map((sp, i) => {
+    const team = sp && sp.teamPos != null ? namen[sp.mannschaftId] : null;
+    return { ...sp, name: team ? `${team} ${sp.teamPos}` : `Spieler ${i + 1}` };
+  });
+}

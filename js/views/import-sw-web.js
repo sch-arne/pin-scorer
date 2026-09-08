@@ -15,9 +15,11 @@
 //     aber diese Leute wissen von dieser App nichts. Deshalb bleiben sie beim Import
 //     ausschließlich LOKAL: in die Datenbank wandert allein die eigene Ergebniszeile, und auch
 //     die ohne Namen (sync.linkEigenesErgebnis). Wer den Wettkampf später im Hub ausdrücklich
-//     TEILT, hebt das für sich auf — dann geht die volle Aufstellung mit, wie bei jedem selbst
-//     erfassten Wettkampf, und der Anonymisierungs-Trigger räumt sie am Wettkampfende wieder
-//     ab. Der Hub sagt vor dem Teilen, was das bedeutet.
+//     TEILT, gibt die Ergebnisse aller Spieler frei — die Namen bleiben trotzdem hier: ein
+//     beendeter Durchgang geht mit Platzhaltern in die DB (sync.linkGame), und den
+//     öffentlichen Anzeigenamen zur LizenzID setzt der Server selbst. Klarnamen sieht die
+//     Datenbank nur bei einer noch LAUFENDEN Partie, deren Live-Anzeige sie braucht; am
+//     Wettkampfende ersetzt der Anonymisierungs-Trigger auch sie. Der Hub sagt das vorher.
 //
 //  3. IDENTITÄT. Der Ergebnisdienst nennt keine LizenzIDen; die amtliche Zuordnung des
 //     Brücken-Imports gibt es hier also nicht. An ihre Stelle tritt das Profil
@@ -604,8 +606,10 @@ export function importSwWebView() {
             ? 'In die Datenbank geht ausschließlich deine eigene Ergebniszeile, und auch die '
               + 'ohne Namen.'
             : 'In die Datenbank geht bei diesem Import gar nichts.'}
-          Erst wenn du den Wettkampf im Hub ausdrücklich <b>teilst</b>, gehen die Namen mit —
-          dann auch an alle, die ihn per Code oder Overlay sehen.</p>
+          Erst wenn du den Wettkampf im Hub ausdrücklich <b>teilst</b>, gehen die Ergebnisse
+          aller Spieler mit — bei einer beendeten Partie ohne Namen (dort stehen Anzeigename
+          bzw. Platzhalter), bei einer noch laufenden mit, weil die Live-Anzeige sie
+          braucht.</p>
       </section>
       ${warnungenSection()}`;
   }

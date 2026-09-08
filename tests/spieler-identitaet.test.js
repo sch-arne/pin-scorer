@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   slotKey, passByPosition, resolveIchIndex, ichSlotAusRoster, mergeSpielerNamen,
-  istLizenzWettkampf,
+  istLizenzWettkampf, anonymeSpielerListe,
 } from '../js/logic/spieler-identitaet.js';
 
 // Ein Durchgang mit 4 Positionen aus 2 Mannschaften (wie buildDurchgangGame ihn baut).
@@ -164,4 +164,39 @@ test('nurLizenz: ohne LizenzID-Treffer keine Zuordnung (auch nicht ueber Markier
   assert.equal(
     resolveIchIndex(CONFIG, { nurLizenz: true, ichSlot: 'mA|2', passByPos, meinePass: '' }), null,
   );
+});
+
+// --- anonymeSpielerListe: die Aufstellung ohne Klarnamen ----------------------
+// Muss Zeichen für Zeichen dasselbe liefern wie pins_platzhalter_name() in
+// supabase/policies.sql — sonst stünde nach dem Teilen eines fertigen Spiels lokal ein
+// anderer Platzhalter als in der Datenbank.
+
+const TEAMS = [{ id: 'mA', name: 'Grün-Weiß Osnabrück' }, { id: 'mB', name: 'SG Hasetal' }];
+
+test('anonymeSpielerListe: „<Mannschaft> <teamPos>" statt Klarname, Rest bleibt', () => {
+  const out = anonymeSpielerListe(CONFIG.spielerListe, TEAMS);
+  assert.deepEqual(out.map((sp) => sp.name), [
+    'Grün-Weiß Osnabrück 1', 'SG Hasetal 1', 'Grün-Weiß Osnabrück 2', 'SG Hasetal 2',
+  ]);
+  assert.deepEqual(out.map((sp) => sp.startBahn), [1, 2, 3, 4]);
+  assert.equal(out[0].mannschaftId, 'mA');
+  assert.equal(out[0].teamPos, 1);
+  // Die Eingabe bleibt unangetastet — lokal stehen weiter die echten Namen.
+  assert.equal(CONFIG.spielerListe[0].name, 'Anna Adam');
+});
+
+test('anonymeSpielerListe: ohne Team-Zuordnung „Spieler N"', () => {
+  const liste = [{ name: 'Anna Adam', startBahn: 1 }, { name: 'Bernd Berg', startBahn: 2 }];
+  assert.deepEqual(anonymeSpielerListe(liste).map((sp) => sp.name), ['Spieler 1', 'Spieler 2']);
+  // Unbekannte Mannschaft -> ebenfalls der neutrale Fallback, nie der Klarname.
+  assert.deepEqual(
+    anonymeSpielerListe([{ name: 'Cem Celik', mannschaftId: 'mX', teamPos: 3 }], TEAMS)
+      .map((sp) => sp.name),
+    ['Spieler 1'],
+  );
+});
+
+test('anonymeSpielerListe: leere/fehlende Liste', () => {
+  assert.deepEqual(anonymeSpielerListe(null, TEAMS), []);
+  assert.deepEqual(anonymeSpielerListe([], TEAMS), []);
 });

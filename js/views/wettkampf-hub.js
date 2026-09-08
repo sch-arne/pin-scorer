@@ -124,7 +124,10 @@ export function wettkampfHubView() {
       // Pass/extId in der Sportwinner-Zuordnung des Wettkampfs (wettkampf.config.sportwinner).
       // Beide müssen zum Server — sonst überschreibt der Realtime-Reload (pullWettkampf) die
       // Übernahme mit den alten Pässen aus config_json und die Abweichung taucht wieder auf.
-      if (g2.remoteId && syncMod) syncMod.pushConfig(g2.remoteId, g2.config).catch(() => {});
+      if (g2.remoteId && syncMod) {
+        syncMod.pushConfig(g2.remoteId, g2.config, { namenBehalten: namenStehenFest(g2) })
+          .catch(() => {});
+      }
       pushWettkampfConfigNow(w2);
       render();
     },
@@ -390,6 +393,17 @@ export function wettkampfHubView() {
     return istWebImport(w) && !(w && w.linked);
   }
 
+  // Stehen die Namen dieses Durchgangs serverseitig schon fest?
+  //
+  // Sobald ein Durchgang auf `beendet` steht, hat der Server die Aufstellung anonymisiert
+  // (Anzeigename des Profils bzw. neutraler Platzhalter). Lokal stehen hier weiter die
+  // Klarnamen — die Geräte, die dabei waren, behalten sie (mergeSpielerNamen). In die
+  // Datenbank gehören sie dann aber nicht mehr, auch nicht für einen Augenblick: ein
+  // Config-Push (Startbahn!) schickt deshalb nur noch die Namen mit, die dort ohnehin stehen.
+  function namenStehenFest(game) {
+    return !!(game && (game.anonymisiertAm || (game.status || '') === 'beendet'));
+  }
+
   // Config eines (verknüpften) Durchgang-Spiels zum Server spiegeln. Nur der Ersteller
   // darf das laut RLS — bei anderen Geräten schlägt es still fehl (lokale Anzeige bleibt).
   //
@@ -399,7 +413,8 @@ export function wettkampfHubView() {
   // den Wettkampf gar nicht geteilt hat.
   function pushConfig(game) {
     if (!game || !game.remoteId || !syncMod || nurEigenesErgebnis(game)) return;
-    syncMod.pushConfig(game.remoteId, game.config).catch(() => {});
+    syncMod.pushConfig(game.remoteId, game.config, { namenBehalten: namenStehenFest(game) })
+      .catch(() => {});
   }
 
   // Ungeteilter Web-Import: die EIGENE Ergebniszeile in der Datenbank nachziehen, wenn sich
@@ -560,17 +575,19 @@ export function wettkampfHubView() {
       // und ginge sonst beim Austausch der lokalen Kopie verloren — samt der eigenen Zeile in
       // Rangliste und Statistik. Wie beim Sportwinner-Import: nach dem Pull wieder ansetzen.
       if (w.ichSlot) fresh.ichSlot = w.ichSlot;
-      // War der Wettkampf beim Teilen schon FERTIG, anonymisiert der Server die Aufstellung
-      // sofort (Trigger beim Statuswechsel auf 'beendet') — der Pull brächte also Platzhalter
-      // zurück. Für die eigene Kopie gilt dieselbe Regel wie für jedes Gerät, das während des
-      // Spiels dabei war: die Klarnamen bleiben HIER stehen, sie kommen ja von hier. In der
-      // Datenbank und bei allen, die später beitreten, stehen weiterhin die Platzhalter.
+      // Ein beim Teilen schon FERTIGER Durchgang geht ohne Klarnamen in die DB (linkGame fügt
+      // ihn mit Platzhaltern ein, der Trigger setzt danach die Anzeigenamen) — der Pull bringt
+      // also nicht die Namen zurück, die hier stehen. Für die eigene Kopie gilt dieselbe Regel
+      // wie für jedes Gerät, das während des Spiels dabei war: die Klarnamen bleiben HIER
+      // stehen, sie kommen ja von hier. In der Datenbank und bei allen, die später beitreten,
+      // steht die anonyme Fassung. Bei einem noch laufenden Durchgang ist der Merge folgenlos:
+      // dort hat der Server genau die Namen, die wir eben hochgeschrieben haben.
       const namenJeDurchgang = {};
       games.forEach((g) => { namenJeDurchgang[g.durchgangNr] = (g.config || {}).spielerListe; });
       deleteWettkampf(w.id);            // alten (lokalen) WK + alte 'g'-Durchgänge entfernen
       freshGames.forEach((g) => {
         const lokal = namenJeDurchgang[g.durchgangNr];
-        if (g.anonymisiertAm && lokal) {
+        if (lokal) {
           g.config = { ...g.config, spielerListe: mergeSpielerNamen(g.config.spielerListe, lokal) };
         }
         saveGame(g);
@@ -1003,8 +1020,8 @@ function mehrgeraeteSection(wettkampf, syncMsg, anlageUi, konto) {
   const linked = !!(wettkampf.linked && wettkampf.remoteId);
   const ohneAnlage = !wettkampf.anlageId;
   // Aus dem Ergebnisdienst importiert: teilbar wie jeder andere Wettkampf, aber der Hinweis
-  // sagt vorher, was dabei in die Datenbank geht — die Namen stammen aus einer öffentlichen
-  // Quelle, die Betroffenen kennen diese App aber nicht.
+  // sagt vorher, was dabei in die Datenbank geht — die Ergebnisse aller Spieler, die Namen
+  // dagegen nur aus einem noch laufenden Durchgang (die Betroffenen kennen diese App nicht).
   const webImport = istWebImport(wettkampf);
   const code = wettkampf.beitrittsCode || '';
   const zcode = wettkampf.zuschauerCode || '';
@@ -1023,10 +1040,12 @@ function mehrgeraeteSection(wettkampf, syncMsg, anlageUi, konto) {
          ? 'Erst eine Anlage zuweisen (siehe unten) — ohne sie lassen sich die Bahnen auf anderen Geräten und im Overlay keiner Halle zuordnen.'
          : 'Teilt den Wettkampf geräteübergreifend — andere erfassen Durchgänge parallel mit. Konto nötig.'}</p>
        ${webImport ? `<p class="field-hint">ℹ️ Aus dem Ergebnisdienst importiert: mit dem Teilen
-         gehen auch die Namen der Mit- und Gegenspieler in die Datenbank und über Codes und
-         Overlay an alle, die den Wettkampf sehen. Am Wettkampfende ersetzt der Server sie
-         wieder durch Anzeigenamen bzw. Platzhalter. Dein bereits übertragenes Einzelergebnis
-         wird dabei durch den vollständigen Durchgang ersetzt.</p>` : ''}`;
+         gehen die Ergebnisse aller Mit- und Gegenspieler in die Datenbank und über Codes und
+         Overlay an alle, die den Wettkampf sehen. Die <b>Namen</b> bleiben auf diesem Gerät —
+         beendete Durchgänge werden mit Anzeigename bzw. Platzhalter abgelegt. Nur ein noch
+         laufender Durchgang nimmt sie mit, weil die Live-Anzeige sie braucht; am
+         Wettkampfende ersetzt der Server auch sie. Dein bereits übertragenes Einzelergebnis
+         wird durch den vollständigen Durchgang ersetzt.</p>` : ''}`;
   return `
     <section class="field">
       <label class="field-label">Mehrgeräte</label>
