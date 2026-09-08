@@ -23,6 +23,7 @@ import { buildWurfCSV, csvDateiname, downloadCSV } from '../logic/wurf-csv.js';
 import { computeWettkampfStats, wettkampfBaseStatus } from '../logic/wettkampf.js';
 import { computeWertung, assignEwp } from '../logic/wettkampf-wertung.js';
 import { teamUebersichtSection } from './wettkampf-teams.js';
+import { oeffneGrafikMenue } from './grafik-panel.js';
 import { buildSportwinnerPush } from '../logic/sportwinner-ergebnis.js';
 import { buildKonflikte } from '../logic/sportwinner-konflikte.js';
 import {
@@ -32,7 +33,7 @@ import {
   fullPins, isAbraeumMode, rangeOfThrow, defaultKegel,
   abraeumScan, abraeumStateBefore, volleKranz,
 } from '../logic/abraeumen.js';
-import { teilsatzStats, satzHolz, satzStatus } from '../logic/holz.js';
+import { teilsatzStats, satzHolz, satzStatus, satzWurfCount, satzOverrideAktiv } from '../logic/holz.js';
 import { computeBahnState as computeBahnStatePure } from '../logic/bahnwechsel.js';
 
 const MODUS_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen', gesamt: 'Satz gesamt' };
@@ -164,6 +165,9 @@ function normalizeErfassung(e, c) {
       }),
       koenig: wuerfe.map((_, k) => !!oldKoenig[k]),
       overrides: c.teilsaetze.map((_, i) => (old.overrides && old.overrides[i] != null ? old.overrides[i] : null)),
+      // Satz-Ergebnis ohne Teilsatz-Aufteilung (Web-Import) mitnehmen — sonst waere das Holz
+      // eines importierten Spiels beim ersten Oeffnen weg.
+      satzOverride: old.satzOverride != null ? old.satzOverride : null,
       done: !!old.done,
     };
   }));
@@ -653,16 +657,11 @@ export function spielLaufendView() {
   function playerTotal(sp) { return state.bloecke[sp].reduce((s, blk) => s + satzHolz(blk, ranges), 0); }
 
   // Effektive Wurfzahl eines Satz-Blocks fürs Anzeigen: ein manuell gesetzter Teilsatz zählt als
-  // vollständig (Soll-Würfe), sonst die tatsächlich erfassten Würfe im Teilsatz-Bereich. Deckungs-
-  // gleich mit der Statistik (computeGameStats.wurfCount) und dem Teilsatz-Zähler (teilsatzStats.count),
-  // damit die Wurfzahl nach einer manuellen Eingabe überall gleich hochzählt (Bahn-Tabs, Kegelbrett).
-  function wuerfeCount(blk) {
-    return ranges.reduce((s, r, i) => {
-      const manual = Array.isArray(blk.overrides) && blk.overrides[i] != null;
-      const actual = blk.wuerfe.slice(r.start, r.end).length;
-      return s + (manual ? r.soll : actual);
-    }, 0);
-  }
+  // vollständig (Soll-Würfe), ein reines Satz-Ergebnis (Web-Import) als ganzer Satz, sonst die
+  // tatsächlich erfassten Würfe im Teilsatz-Bereich. Deckungsgleich mit der Statistik
+  // (computeGameStats.wurfCount) und dem Teilsatz-Zähler (teilsatzStats.count), damit die
+  // Wurfzahl nach einer manuellen Eingabe überall gleich hochzählt (Bahn-Tabs, Kegelbrett).
+  function wuerfeCount(blk) { return satzWurfCount(blk, ranges); }
 
   // Teilsatz-Spaltenlabels (Vo, Ab, Kr …); kommt derselbe Modus mehrfach vor, durchnummerieren.
   function teilsatzLabels() {
@@ -702,6 +701,27 @@ export function spielLaufendView() {
   function autoCloseIfComplete(blk) {
     if (!blk.done && openTeilsaetze(blk).length === 0) { blk.done = true; return true; }
     return false;
+  }
+
+  // Ein importierter Satz trägt sein Holz auf dem SATZ (`satzOverride`, logic/holz.js), weil der
+  // Ergebnisdienst die Aufteilung auf Volle/Abräumen nicht kennt. Trägt jemand einen Teilsatz von
+  // Hand nach, ist der Rest kein Raten mehr, sondern eine Subtraktion: ist danach genau ein
+  // Teilsatz offen, bekommt er die Differenz. So geht das exakte Satzergebnis beim Vervollständigen
+  // nicht verloren, und der Satz steht danach auf seinen echten Teilsätzen.
+  // Rückgabe: Index des ergänzten Teilsatzes, sonst -1.
+  function ergaenzeAusSatzergebnis(blk) {
+    if (blk.satzOverride == null) return -1;
+    const open = openTeilsaetze(blk);
+    if (open.length === 0) { blk.satzOverride = null; return -1; }
+    if (open.length > 1) return -1;
+    const i = open[0];
+    const rest = blk.satzOverride - knownTeilsatzSum(blk, i);
+    // Passt der Rest nicht in den offenen Teilsatz, wird NICHTS eingetragen: das Satzergebnis
+    // bleibt stehen, der Teilsatz offen — die Zahlen widersprechen sich, das soll man sehen.
+    if (rest < 0 || rest > ranges[i].soll * 9) return -1;
+    blk.overrides[i] = rest;
+    blk.satzOverride = null;
+    return i;
   }
 
   // Kontext eines (geplanten oder bestehenden) Wurfs an absolutem Index `idx`:
@@ -1427,6 +1447,22 @@ export function spielLaufendView() {
     return teamUebersichtSection(w, wkGames, stats, wertung, true, { editable: false });
   }
 
+  // 🖼 im Kopf: die Ergebnis-Grafik (PNG mit transparentem Hintergrund) konfigurieren und
+  // teilen/speichern. Die Daten holt das Panel bei jedem ↻ neu — deshalb eine Funktion und
+  // kein Schnappschuss. Der laufende Durchgang steckt in `state` und noch nicht im Speicher,
+  // also wird er hineingemischt (wie in wettkampfTeamSection oben); sonst zeigte die Grafik
+  // den Stand des letzten persist().
+  function oeffneGrafik() {
+    const datenFn = game.wettkampfId
+      ? () => ({
+        wettkampf: getWettkampf(game.wettkampfId),
+        games: getWettkampfGames(game.wettkampfId)
+          .map((g) => (g.id === gameId ? { ...g, erfassung: state } : g)),
+      })
+      : () => ({ game: { ...game, erfassung: state } });
+    oeffneGrafikMenue({ datenFn });
+  }
+
   function template() {
     const blk = current();
     const status = satzStatus(blk);
@@ -1437,8 +1473,11 @@ export function spielLaufendView() {
         <a class="back-btn" href="${backHref}" aria-label="Zurück">←</a>
         <h1 class="page-title brand">Pin-Scorer</h1>
         ${swActive() ? `<span class="sw-dot is-${swBadge.state}" data-bruecke-status data-act="sw-info" role="img" aria-label="Sportwinner-Status" title="${esc(swMsg)}"></span>` : ''}
-        ${allGamesDone() ? `<button type="button" class="icon-btn settings-btn" data-act="show-stats" aria-label="Statistik anzeigen">🏁</button>` : ''}
-        <button type="button" class="icon-btn${allGamesDone() ? '' : ' settings-btn'}" data-act="settings" aria-label="Einstellungen">⚙</button>
+        <div class="page-header-actions">
+          ${allGamesDone() ? `<button type="button" class="icon-btn" data-act="show-stats" aria-label="Statistik anzeigen">🏁</button>` : ''}
+          <button type="button" class="icon-btn" data-act="grafik" aria-label="Ergebnis-Grafik">🖼</button>
+          <button type="button" class="icon-btn" data-act="settings" aria-label="Einstellungen">⚙</button>
+        </div>
       </header>
 
       <div data-sw-konflikt-banner></div>
@@ -2569,6 +2608,7 @@ export function spielLaufendView() {
     // 🏁 im Kopf: Statistik von Hand öffnen. Hängt das Spielende nur noch am offenen
     // Kegelbild, ist dieser Griff die bewusste Ansage „fertig“ — dann wird es festgeschrieben.
     act('show-stats', () => { if (allGamesDone() && !finishSeen) markFinished(); else statsOpen = true; render(); });
+    act('grafik', oeffneGrafik);
     // Wurfprotokoll: im Statistik-Screen die angehakten Spieler, im ⚙-Menü der aktive Spieler.
     act('print-protokoll', () => {
       const sel = [];
@@ -2721,10 +2761,12 @@ export function spielLaufendView() {
   function openSatzOverride(st) {
     const blk = state.bloecke[state.aktiverSpieler][st];
     overrideSt = st; overrideTs = null;
-    // Ein-Teilsatz-Satz = direktes Ergebnis: aktuellen Wert vorbelegen (nur anpassen). Bei mehreren
-    // Teilsätzen wird verteilt → leer starten, damit die Gesamtsumme bewusst getippt wird und nicht
-    // versehentlich der vorbelegte Teil-Stand einen offenen Teilsatz auf 0 setzt.
-    overrideDraft = (ranges.length === 1 && satzStatus(blk) !== 'pending') ? String(satzHolz(blk, ranges)) : '';
+    // Direktes Ergebnis (nur anpassen): bei einem einzigen Teilsatz und bei einem Satz, der sein
+    // Holz selbst trägt (importierter Satz ohne Teilsatz-Aufteilung). Sonst wird verteilt → leer
+    // starten, damit die Gesamtsumme bewusst getippt wird und nicht versehentlich der vorbelegte
+    // Teil-Stand einen offenen Teilsatz auf 0 setzt.
+    const direkt = satzOverrideAktiv(blk, ranges) || (ranges.length === 1 && satzStatus(blk) !== 'pending');
+    overrideDraft = direkt ? String(satzHolz(blk, ranges)) : '';
     render();
   }
 
@@ -2823,9 +2865,12 @@ export function spielLaufendView() {
       const maxV = ranges[i].soll * 9; // physikalisches Maximum: Soll-Würfe × 9 Kegel
       if (v > maxV) { toast(`${labels[i]}: höchstens ${maxV} möglich (${ranges[i].soll}×9)`); return; }
       blk.overrides[i] = v;
+      const rest = ergaenzeAusSatzergebnis(blk);   // importierter Satz -> Rest ergibt sich
       const closed = autoCloseIfComplete(blk);
       overrideSt = null; overrideTs = null; persist(); render();
-      toast(`${labels[i]} auf ${v} Holz gesetzt${closed ? ` · Satz ${st + 1} abgeschlossen` : ''}`); return;
+      toast(`${labels[i]} auf ${v} Holz gesetzt`
+        + (rest >= 0 ? ` · ${labels[rest]} ergänzt (${blk.overrides[rest]})` : '')
+        + (closed ? ` · Satz ${st + 1} abgeschlossen` : '')); return;
     }
 
     // Modus B: ganzes Satz-Ergebnis -> auf den EINEN offenen Teilsatz verteilen.
@@ -2845,6 +2890,15 @@ export function spielLaufendView() {
 
     const open = openTeilsaetze(blk);
     if (open.length === 0) { toast('Alle Teilsätze gesetzt — bitte einzeln bearbeiten'); return; }
+    // Importierter Satz ohne jede Teilsatz-Angabe: dann IST die Satzsumme das Ergebnis dieses
+    // Satzes (satzOverride) und lässt sich hier korrigieren, ohne eine Aufteilung zu erfinden.
+    if (open.length === ranges.length && blk.satzOverride != null) {
+      const maxSatz = ranges.reduce((n, r) => n + r.soll * 9, 0);
+      if (T > maxSatz) { toast(`Höchstens ${maxSatz} möglich`); return; }
+      blk.satzOverride = T;
+      overrideSt = null; overrideTs = null; persist(); render();
+      toast(`Satz ${st + 1} auf ${T} Holz gesetzt · Teilsätze weiter offen`); return;
+    }
     if (open.length > 1) { toast(`${open.length} Teilsätze offen — bitte einzeln eingeben`); return; }
     const i = open[0];
     const known = knownTeilsatzSum(blk, i);
@@ -2854,6 +2908,7 @@ export function spielLaufendView() {
     const maxOpen = ranges[i].soll * 9;
     if (diff > maxOpen) { toast(`${labels[i]} fasst höchstens ${maxOpen} — Rest wäre ${diff}`); return; }
     blk.overrides[i] = diff;
+    blk.satzOverride = null;   // der Satz steht jetzt vollstaendig auf seinen Teilsaetzen
     const closed = autoCloseIfComplete(blk);
     overrideSt = null; overrideTs = null; persist(); render();
     toast(`${labels[i]} auf ${diff} Holz ergänzt${closed ? ` · Satz ${st + 1} abgeschlossen` : ''}`);
@@ -2868,7 +2923,15 @@ export function spielLaufendView() {
     const st = overrideSt;
     const blk = state.bloecke[state.aktiverSpieler][st];
     const i = overrideTs !== null ? overrideTs : (ranges.length === 1 ? 0 : null);
-    if (i === null) { overrideSt = null; overrideTs = null; render(); return; }
+    if (i === null) {
+      // Satz-Modus bei mehreren Teilsätzen: zu löschen gibt es genau dann etwas, wenn der Satz
+      // sein Holz selbst trägt (importierter Satz) — sonst bleibt es beim blossen Schliessen.
+      const hatSatz = blk.satzOverride != null;
+      if (hatSatz) blk.satzOverride = null;
+      overrideSt = null; overrideTs = null;
+      if (hatSatz) { persist(); render(); toast(`Satz ${st + 1}: Ergebnis entfernt`); return; }
+      render(); return;
+    }
     const labels = teilsatzLabels();
     const hadThrows = blk.wuerfe.slice(ranges[i].start, ranges[i].end).length > 0;
     blk.overrides[i] = null;

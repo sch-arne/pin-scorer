@@ -21,6 +21,21 @@ function spielMitStand({ spieler = ['Anna', 'Bert'], wuerfe = null, teilsaetze =
   return g;
 }
 
+// Ein Spiel aus dem WEB-IMPORT: der Sportwinner-Ergebnisdienst nennt nur das Satz-Holz, also
+// sitzt es am SATZ (`satzOverride`, logic/holz.js) und die Teilsätze der Bahnart bleiben leer.
+// 2 Sätze à 4 Würfe, Teilsätze Volle/Abräumen à 2 Würfe -> je Teilsatz höchstens 18 Holz.
+function importiertesSpiel() {
+  const g = makeGame({
+    preset: 'schere', saetze: 2, wuerfeProSatz: 4, teilsaetze: ['volle', 'abraeumen'],
+    bahnen: 2, spieler: ['Anna', 'Bert'],
+  });
+  g.status = 'beendet';
+  g.erfassung = makeErfassung(g.config, [[[], []], [[], []]], { done: [[true, true], [true, true]] });
+  const holz = [[25, 20], [18, 22]];
+  g.erfassung.bloecke.forEach((arr, sp) => arr.forEach((blk, st) => { blk.satzOverride = holz[sp][st]; }));
+  return g;
+}
+
 async function starte(app, game, layout = MOBIL) {
   await app.boot({ hash: '/spiel-laufend', ...layout, storage: { games: [game], 'active-game': game.id } });
   return game;
@@ -37,6 +52,35 @@ suite('Übersicht & Statistik', () => {
     eq(app.$('.ub-grand').textContent.trim(), '50', 'Gesamtsumme');
     deepEq(app.$$('.ub-table tbody tr:first-child .ub-ts').map((t) => t.textContent.trim()),
       ['17', '13'], 'Teilsatz-Spalten');
+    app.assertClean();
+  });
+
+  test('Importierter Satz: Holz steht am Satz, die Teilsätze bleiben leer', async (app) => {
+    await starte(app, importiertesSpiel());
+    const rows = app.$$('.ub-table tbody tr');
+    eq(rows[0].querySelector('.ub-holz').textContent.trim(), '25', 'Satz-Holz aus dem Bericht');
+    eq(rows[1].querySelector('.ub-holz').textContent.trim(), '20');
+    eq(app.$('.ub-grand').textContent.trim(), '45', 'Gesamtholz stimmt exakt');
+    // Kein Teilsatz behauptet einen Anteil — die Zellen sind leer, nicht 0.
+    deepEq(app.$$('.ub-table tbody tr:first-child .ub-ts').map((t) => t.textContent.trim()),
+      ['·', '·'], 'Teilsatz-Spalten dürfen nichts erfinden');
+    app.assertClean();
+  });
+
+  test('Importierter Satz: nachgetragene Volle ergänzt das Abräumen aus dem Satz-Holz', async (app) => {
+    // Der Punkt: das exakte Satzergebnis (25) darf beim Vervollständigen nicht verloren gehen.
+    // Wer die Volle kennt (15), bekommt den Rest (10) ohne Raten — es ist eine Subtraktion.
+    const g = importiertesSpiel();
+    await starte(app, g);
+    await app.click('[data-edit-ts="0:0:0"]');
+    await app.click('[data-ovnum="1"]');
+    await app.click('[data-ovnum="5"]');
+    await app.click('[data-act="override-apply"]');
+    const blk = app.game(g.id).erfassung.bloecke[0][0];
+    deepEq(blk.overrides, [15, 10], 'Rest nicht aus dem Satz-Holz ergänzt');
+    eq(blk.satzOverride, null, 'der Satz steht jetzt auf seinen Teilsätzen');
+    eq(app.$$('.ub-table tbody tr')[0].querySelector('.ub-holz').textContent.trim(), '25',
+      'das Satzergebnis bleibt exakt');
     app.assertClean();
   });
 

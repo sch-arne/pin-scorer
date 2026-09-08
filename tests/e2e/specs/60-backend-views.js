@@ -229,6 +229,17 @@ suite('Backend-Views (ohne Anmeldung)', () => {
     app.assertClean();
   });
 
+  // Ohne Konto gibt es hier keine Auswahlkette mehr: das importierte Ergebnis wird dem
+  // eigenen Profil zugeordnet, und ohne Anmeldung gibt es kein Profil.
+  test('Web-Import ist ohne Konto gesperrt', async (app) => {
+    await app.boot({ hash: '/import/sportwinner-web', ...MOBIL });
+    includes(app.page(), 'Ergebnisdienst', 'Kopfzeile');
+    await app.waitFor(() => app.page().includes('Konto'), 'Hinweis auf das fehlende Konto fehlt');
+    ok(!app.$('#swb-saison'), 'Die Auswahlkette darf ohne Konto gar nicht erscheinen');
+    await app.settle(4);
+    app.assertClean();
+  });
+
   test('Overlay ohne Code sagt, dass der Code fehlt', async (app) => {
     await app.boot({ hash: '/overlay', ...MOBIL });
     ok(app.$('.ov-root'), 'Overlay-Wurzel fehlt');

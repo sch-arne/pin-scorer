@@ -11,7 +11,7 @@ import { computeWettkampfStats, durchgangStatusList, wettkampfBaseStatus } from 
 import { computeWertung, assignEwp } from '../logic/wettkampf-wertung.js';
 import { buildSportwinnerPush } from '../logic/sportwinner-ergebnis.js';
 import { adoptAufstellung } from '../logic/sportwinner-konflikte.js';
-import { istWebImport } from '../logic/sw-web-import.js';
+import { istWebImport, bloeckeNachBahn } from '../logic/sw-web-import.js';
 import { createKonfliktPanel } from './sportwinner-konflikt-panel.js';
 import {
   getBruecke, pushErgebnis, holeStatus, holeSportwinnerLive, brueckeStatusInfo, brueckePushText,
@@ -20,6 +20,7 @@ import { lanePlan } from '../logic/bahnwechsel.js';
 import { wettkampfLoeschen } from './loeschen.js';
 import { loeschart, VERBERGEN, NUR_HIER } from '../logic/loeschen.js';
 import { teamUebersichtSection } from './wettkampf-teams.js';
+import { oeffneGrafikMenue } from './grafik-panel.js';
 import { mannschaftAuswertungSection, leererAuswertungFilter } from './wettkampf-auswertung.js';
 import {
   buildMannschaftProtokollHTML, buildMannschaftCSV, mannschaftCsvDateiname, mannschaftExportInfo,
@@ -60,6 +61,9 @@ export function wettkampfHubView() {
   // jedes Gerät wählt für sich. Ein Klick setzt den Wert und rendert neu.
   let hubAnsicht = 'durchgaenge';           // 'durchgaenge' | 'statistik' | 'wurfbild'
   let auswertungFilter = leererAuswertungFilter(); // { bahn, satz, teil, bild }
+
+  // Wettkampf + Spiele des letzten Renders — Quelle für die Ergebnis-Grafik (🖼 im Kopf).
+  let aktuelleDaten = null;
 
   // ── Anlage nachtragen ────────────────────────────────────────────────────────
   // Ein Wettkampf ohne Anlage bleibt lokal. Zum Teilen (Mehrgeräte, OBS-Overlay) braucht er
@@ -206,6 +210,10 @@ export function wettkampfHubView() {
       return;
     }
     const games = getWettkampfGames(wettkampf.id);
+    // Stand des letzten Renders für die Ergebnis-Grafik festhalten. NICHT im Panel selbst
+    // neu aus dem Speicher lesen: im Zuschauer-Modus kommen Wettkampf und Spiele aus dem
+    // Poll-Schnappschuss, der lokale Speicher ist dort leer.
+    aktuelleDaten = { wettkampf, games };
     const stats = computeWettkampfStats(wettkampf, games);
     const wertung = computeWertung(wettkampf, stats, games); // Spielpunkte (Duell/EWP) oder null
     // Einzelwertungspunkte für die Aufstellung immer bereitstellen — computeWertung vergibt sie
@@ -331,6 +339,13 @@ export function wettkampfHubView() {
   // Startbahn eines Spielers ändern — nur innerhalb der Team-Bahnen. Belegt ein anderer Spieler
   // desselben Durchgangs die Zielbahn, tauschen die beiden (bleibt in den Team-Bahnen). Danach
   // den Bahnplan des Durchgangs neu berechnen.
+  //
+  // Beim WEB-IMPORT wandern die Ergebnisse mit: dort nennt der Ergebnisdienst je Spieler vier
+  // BAHN-Spalten, welcher Satz das war, folgt erst aus der Startbahn (logic/sw-web-import.js).
+  // Genau deshalb lässt sich die Startbahn eines importierten Spiels hier überhaupt noch ändern,
+  // obwohl schon Ergebnisse dranstehen — Sportwinner verrät sie nicht, sie wird nachgetragen.
+  // Bei selbst erfassten Spielen bleibt jedes Ergebnis an seinem Satz: dort wurden die Würfe in
+  // dieser Reihenfolge geworfen, die Bahn ist nur ihr Etikett.
   function editLane(games, teamId, teamPos, newLane) {
     for (const g of games) {
       const list = g.config?.spielerListe || [];
@@ -343,20 +358,51 @@ export function wettkampfHubView() {
       const other = spl.findIndex((p, j) => j !== idx && p.startBahn === newLane);
       if (other >= 0) spl[other].startBahn = old;
       spl[idx].startBahn = newLane;
+      const altPlan = (game.config.bahnplan || []).map((z) => (Array.isArray(z) ? z.slice() : z));
       game.config.bahnplan = lanePlan({
         bahnListe: game.config.bahnListe, saetze: game.config.saetze,
         bahnwechsel: game.config.bahnwechsel, spielerData: spl,
       });
+      const bloecke = game.erfassung && game.erfassung.bloecke;
+      if (istWebImport(game) && Array.isArray(bloecke)) {
+        [idx, other].forEach((i) => {
+          if (i < 0 || !Array.isArray(bloecke[i])) return;
+          bloecke[i] = bloeckeNachBahn(bloecke[i], altPlan[i], game.config.bahnplan[i]);
+        });
+      }
       saveGame(game);
       pushConfig(game);
+      pushEigenesErgebnis(game);
       return;
     }
   }
 
   // Config eines (verknüpften) Durchgang-Spiels zum Server spiegeln. Nur der Ersteller
   // darf das laut RLS — bei anderen Geräten schlägt es still fehl (lokale Anzeige bleibt).
+  //
+  // NIE bei einem Web-Import: dessen lokale Config trägt die KLARNAMEN aller Mit- und
+  // Gegenspieler, und die bleiben ausschließlich auf diesem Gerät (sync.linkEigenesErgebnis
+  // schreibt allein die eigene Zeile, mit Platzhalter statt Name). Ein Push hier würde genau
+  // diese Namen in die Datenbank tragen — und obendrein die eingedampfte Ein-Spieler-Config
+  // der Ergebniszeile mit einer 12-Spieler-Aufstellung überschreiben.
   function pushConfig(game) {
-    if (game && game.remoteId && syncMod) syncMod.pushConfig(game.remoteId, game.config).catch(() => {});
+    if (!game || !game.remoteId || !syncMod || istWebImport(game)) return;
+    syncMod.pushConfig(game.remoteId, game.config).catch(() => {});
+  }
+
+  // Web-Import: die EIGENE Ergebniszeile in der Datenbank nachziehen, wenn sich lokal etwas an
+  // ihr geändert hat (Startbahn -> Bahnplan und Reihenfolge der Sätze). Ohne das stünde auf
+  // einem zweiten Gerät weiter die alte Zuordnung. Übertragen wird nur die eigene Zeile und nur
+  // das, was sie ohnehin schon enthält — keine Namen (siehe pushConfig).
+  function pushEigenesErgebnis(game) {
+    if (!game || !game.remoteId || !syncMod || !istWebImport(game)) return;
+    // Den Wettkampf hier aus dem Speicher holen: editLane kennt nur die Spiele.
+    const slot = (getWettkampf(game.wettkampfId) || {}).ichSlot;
+    if (!slot) return;
+    const pos = (game.config?.spielerListe || [])
+      .findIndex((sp) => `${sp.mannschaftId}|${sp.teamPos}` === slot);
+    if (pos < 0) return;
+    syncMod.pushEigenesErgebnis(game, pos).catch(() => {});
   }
 
   // Das Durchgang-Spiel finden, in dem (Mannschaft, Position) sitzt, und dessen Config pushen.
@@ -613,6 +659,9 @@ export function wettkampfHubView() {
       b.addEventListener('click', () => exportTeamPdf(wettkampf, games, b.dataset.exportTeamPdf)));
     root.querySelectorAll('[data-export-team-csv]').forEach((b) =>
       b.addEventListener('click', () => exportTeamCsv(wettkampf, games, b.dataset.exportTeamCsv)));
+    // Ergebnis-Grafik (🖼 im Kopf) — wie die Exporte reine Ausgabe, also auch für Zuschauer.
+    const gfx = root.querySelector('[data-act="grafik"]');
+    if (gfx) gfx.addEventListener('click', () => oeffneGrafikMenue({ datenFn: () => aktuelleDaten }));
 
     // Zuschauer-Modus: keine Bearbeitungs-Handler binden; Aufstellungs-Felder sperren.
     if (zuschauer) {
@@ -1114,6 +1163,7 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichS
         <h1 class="page-title">${esc(wettkampf.name || 'Wettkampf')}</h1>
         ${metaLine ? `<p class="wk-hub-meta">${esc(metaLine)}</p>` : ''}
       </div>
+      <button type="button" class="icon-btn wk-hub-gfx" data-act="grafik" aria-label="Ergebnis-Grafik">🖼</button>
     </header>
 
     <div class="setup">

@@ -983,6 +983,71 @@ export async function pushConfig(remoteId, config) {
   if (error) throw error;
 }
 
+// Web-Import: die EIGENE Ergebniszeile nachziehen, nachdem sich lokal etwas an ihr geaendert
+// hat — heute die Startbahn, die Sportwinner nicht nennt und die deshalb im Hub nachgetragen
+// wird (Bahnplan + Reihenfolge der Saetze, siehe bloeckeNachBahn).
+//
+// Bewusst KEIN pushConfig: das Spiel liegt in der DB als EINGEDAMPFTE Ein-Spieler-Zeile mit
+// Platzhalter statt Name (linkEigenesErgebnis). Die lokale Config traegt dagegen die Klarnamen
+// aller Mit- und Gegenspieler, und die bleiben auf diesem Geraet. Deshalb wird die vorhandene
+// Remote-Config gelesen und NUR ihr Bahnplan ersetzt — nichts Neues geht mit hoch.
+//
+// Der Ergebnis-Snapshot (spiel_ergebnis) bleibt dabei unberuehrt: dieselben Saetze in anderer
+// Reihenfolge ergeben dasselbe Gesamtholz, denselben Schnitt und denselben besten Satz.
+//
+// opts.ergebnis: den Snapshot MITSCHREIBEN. Noetig beim Nachimport einer laufenden Partie —
+// dort kommen neue Saetze dazu, und dann aendern sich Gesamtholz und Schnitt sehr wohl. Ohne
+// ihn bliebe in der Konto-Statistik der Zwischenstand des ersten Imports stehen (der Snapshot
+// ist ihre einzige Quelle).
+export async function pushEigenesErgebnis(game, position, { ergebnis = false } = {}) {
+  const remoteId = game && game.remoteId;
+  if (!remoteId || !Number.isInteger(position) || position < 0) return;
+  const bahnplan = ((game.config && game.config.bahnplan) || [])[position] || [];
+
+  const { data: sp, error: e1 } = await supabase
+    .from('spiel').select('config_json').eq('id', remoteId).single();
+  if (e1) throw e1;
+  const { error: e2 } = await supabase.from('spiel')
+    .update({ config_json: { ...(sp && sp.config_json), bahnplan: [bahnplan] } })
+    .eq('id', remoteId);
+  if (e2) throw e2;
+
+  // Die Zeile traegt genau EINEN Spieler (Position 0) — ihn holen statt eine id lokal zu fuehren,
+  // damit auch vor dieser Aenderung importierte Spiele nachgezogen werden koennen.
+  const { data: spieler, error: e3 } = await supabase
+    .from('spiel_spieler').select('id').eq('spiel_id', remoteId).order('position').limit(1);
+  if (e3) throw e3;
+  const spielerId = spieler && spieler[0] && spieler[0].id;
+  if (!spielerId) return;
+
+  const geraet = await ensureGeraet();
+  const bloecke = ((game.erfassung && game.erfassung.bloecke) || [])[position] || [];
+  if (!bloecke.length) return;
+  const { error: e4 } = await supabase.from('satz_block').upsert(
+    bloecke.map((blk, satz) => ({
+      spiel_id: remoteId, spieler_id: spielerId, satz, geraet, block_json: blk,
+    })),
+    { onConflict: 'spieler_id,satz' },
+  );
+  if (e4) throw e4;
+
+  if (!ergebnis) return;
+  // Gerechnet wird auf der EINGEDAMPFTEN Remote-Config (genau ein Spieler, also ichIndex 0) —
+  // wie in linkEigenesErgebnis. Die lokale Config mit den Klarnamen bleibt aussen vor.
+  const dbConfig = { ...(sp && sp.config_json), bahnplan: [bahnplan] };
+  const konto = await kontoId();
+  if (!konto) return;
+  const meinPass = await meinePassnummer();
+  const { players } = computeGameStats(dbConfig, [bloecke], teilsatzRanges(dbConfig));
+  await pushResults(ergebnisZeilen(players, {
+    spielId: remoteId,
+    spielerIdFuer: () => spielerId,
+    konto,
+    passByPos: meinPass ? { 0: meinPass } : null,
+    ichIndex: 0,
+  }));
+}
+
 // Ergebnis-Snapshots bei Spielende schreiben (für die Statistik-Historie).
 // rows = [{ spiel_id, spieler_id, profil_id, gesamt, schnitt_satz, ... }].
 export async function pushResults(rows) {

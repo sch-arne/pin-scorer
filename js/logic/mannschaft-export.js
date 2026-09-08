@@ -18,6 +18,7 @@
 // die Builder '' zurück; der Aufrufer zeigt dann einen Hinweis statt einer leeren Datei.
 
 import { teilsatzRanges } from './teilsaetze.js';
+import { blockHatInhalt } from './holz.js';
 import { buildProtokollSeiten, protokollDokument } from './wurfprotokoll.js';
 import { wurfZeilen, csvText, CSV_SPALTEN, dateiSicher, datumTeil } from './wurf-csv.js';
 
@@ -27,9 +28,7 @@ export const MANNSCHAFT_CSV_SPALTEN = ['Durchgang', 'Mannschaft', ...CSV_SPALTEN
 // Hat der Spieler in diesem Durchgang überhaupt etwas erfasst — Einzelwürfe ODER ein nur
 // eingetragenes Teilsatz-Ergebnis? (Ein Satz kann als `done` markiert und trotzdem leer sein.)
 function hatDaten(bloecke) {
-  return (bloecke || []).some((blk) => blk
-    && ((Array.isArray(blk.wuerfe) && blk.wuerfe.length > 0)
-      || (Array.isArray(blk.overrides) && blk.overrides.some((o) => o != null))));
+  return (bloecke || []).some((blk) => blockHatInhalt(blk));
 }
 
 const teamNamen = (wettkampf) => {

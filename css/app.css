@@ -154,9 +154,10 @@ body {
 }
 .icon-btn:active { background: var(--surface-2); }
 
-/* Kopf der laufenden Erfassung: ← | Pin-Scorer | ⚙ */
-.settings-btn { margin-left: auto; }
-.page-header .brand { font-size: 1.4rem; }
+/* Kopf der laufenden Erfassung: ← | Pin-Scorer | 🏁 🖼 ⚙ — die Knopfgruppe rechts */
+.page-header-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+/* Bei drei Knöpfen wird es auf 320px eng: der Titel weicht, statt die Knöpfe zu schieben. */
+.page-header .brand { font-size: 1.4rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Einstellungsmenü als Overlay-Sheet */
 .erf-settings-backdrop {
@@ -514,6 +515,8 @@ button.mini-pin { cursor: pointer; }
 }
 
 .field-hint { margin: 0; font-size: 0.78rem; color: var(--text-dim); font-style: italic; }
+.field-check { display: flex; align-items: center; gap: 8px; margin: 6px 0; cursor: pointer; }
+.field-check input { width: 17px; height: 17px; flex: none; }
 
 /* Bahnanzahl-Chips + 1.-Bahn-Auswahl fließen in einer Zeile (umbrechend) */
 .bahnen-row { align-items: center; }
@@ -1466,6 +1469,8 @@ button.mini-pin { cursor: pointer; }
    darunter nach oben rückt. */
 .wk-hub-header { position: relative; justify-content: center; padding: 4px 0 10px; }
 .wk-hub-header .back-btn { position: absolute; left: 0; top: 4px; }
+/* Spiegelbildlich rechts: der Knopf zur Ergebnis-Grafik. */
+.wk-hub-header .wk-hub-gfx { position: absolute; right: 0; top: 4px; }
 /* Beidseitig um die Breite des Zurück-Buttons einrücken, damit der mittige Titel ihn nicht
    unterläuft (schmale Schirme mit langem Namen). */
 .wk-hub-heading { min-width: 0; text-align: center; padding: 0 calc(var(--tap) + 8px); }
@@ -2830,3 +2835,64 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 .hn-table .hn-summe { font-weight: 800; color: var(--accent); }
 .hn-table tr.is-aktiv th, .hn-table tr.is-aktiv td { background: var(--surface-2); }
 .hn-actions { flex-wrap: wrap; margin-top: 4px; }
+
+/* ---------- Ergebnis-Grafik (Bild-Export) ---------- */
+/* Das Menue haengt an document.body (nicht im View-Root), damit die Canvas ein Neu-Rendern
+   der Erfassung ueberlebt. Aufbau wie das Einstellungs-Sheet, nur breiter: links die
+   Vorschau, rechts die Optionen. */
+.gfx-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 20px 14px;
+  background: rgba(0, 0, 0, 0.62);
+  overflow-y: auto;
+}
+.gfx-sheet {
+  width: 100%;
+  max-width: 900px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.gfx-head-btns { display: flex; gap: 6px; }
+.gfx-body { display: flex; gap: 18px; align-items: flex-start; }
+.gfx-preview { flex: 0 0 300px; position: sticky; top: 0; }
+.gfx-options { flex: 1 1 auto; min-width: 0; }
+.gfx-options .acc-label { margin-top: 10px; }
+
+/* Schachbrett = "hier ist das Bild transparent". Ohne das sieht die Vorschau auf der
+   dunklen Flaeche so aus, als haette die Grafik einen dunklen Hintergrund. */
+.gfx-canvas-wrap {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background-image:
+    linear-gradient(45deg, #2a2f3a 25%, transparent 25%, transparent 75%, #2a2f3a 75%),
+    linear-gradient(45deg, #2a2f3a 25%, #1a1e27 25%, #1a1e27 75%, #2a2f3a 75%);
+  background-size: 28px 28px;
+  background-position: 0 0, 14px 14px;
+}
+/* Die Canvas ist FEST 1080 breit und wird nur per CSS verkleinert -> immer scharf,
+   unabhaengig vom devicePixelRatio. */
+.gfx-canvas { display: block; width: 100%; height: auto; }
+.gfx-meta { margin: 8px 0 0; font-size: 0.78rem; color: var(--text-dim); text-align: center; }
+
+.gfx-actions { display: flex; gap: 10px; margin-top: 16px; }
+.gfx-actions .erf-btn { flex: 1; }
+.gfx-hint { margin: 10px 0 0; font-size: 0.78rem; color: var(--text-dim); font-style: italic; }
+
+/* Gesperrte Option (z. B. EWP vor Spielende): sichtbar, aber erkennbar aus. */
+.gfx-options .erf-setting-row.is-gesperrt { opacity: 0.55; }
+.gfx-options .erf-switch:disabled { cursor: not-allowed; }
+
+@media (max-width: 720px) {
+  .gfx-body { flex-direction: column; }
+  .gfx-preview { flex: 1 1 auto; width: 100%; max-width: 320px; align-self: center; position: static; }
+  .gfx-actions { flex-direction: column; }
+}
