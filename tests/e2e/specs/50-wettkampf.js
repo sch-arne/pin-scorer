@@ -67,19 +67,27 @@ function baueWettkampfOhneAnlage() {
 // Teilsätze der Bahnart (Volle + Kranz-Abräumen), sie bleiben aber leer — das Holz sitzt am Satz.
 // Hier wird geprüft, dass der Hub damit umgeht, statt eine Volle/Abräum-Trennung zu zeigen, die
 // es nicht gibt. Zeilenformat wie in tests/fixtures/sw-web-spielerinfo-schere.json.
-function baueWebImport() {
+// Die Namen kommen wie beim echten Ergebnisdienst als „Nachname, Vorname" — die App dreht sie
+// beim Lesen (logic/sw-web-import.js, spielerName). `anlage` gibt dem Wettkampf eine Anlage;
+// ohne sie bleibt er lokal und der Teilen-Knopf ist gesperrt.
+function baueWebImport({ anlage = false } = {}) {
   const summe = (s) => s.reduce((a, b) => a + b, 0);
   const zeile = (nGG, sGG, nG, sG) => ['', nGG, ...sGG, 0, summe(sGG),
     summe(sG), 0, ...sG.slice().reverse(), nG, '', 0, 0];
   const bericht = parseSpielerInfo([
-    zeile('Heim 1', [150, 160, 155, 145], 'Gast 1', [140, 150, 160, 150]),
+    zeile('Meier, Anna', [150, 160, 155, 145], 'Kruse, Ben', [140, 150, 160, 150]),
     zeile('Heim 2', [160, 150, 150, 150], 'Gast 2', [150, 150, 150, 150]),
   ], { saetze: 4 });
   const spec = buildImportSpec(
     { heim: 'Heim', gast: 'Gast', datum: '2026-09-02', idSpiel: '328202' }, bericht,
   );
   spec.preset = 'schere';
-  return buildImportWettkampf(spec, { playedLanes: [1, 2, 3, 4] });
+  return buildImportWettkampf(spec, {
+    playedLanes: [1, 2, 3, 4],
+    anlageId: anlage ? 'a1' : null,
+    anlageName: anlage ? 'Testhalle' : '',
+    anlageBahnen: anlage ? [1, 2, 3, 4].map((n) => ({ id: 'b' + n, nummer: n, bahnart: 'schere' })) : [],
+  });
 }
 
 async function starteHub(app, { wettkampf, games }, layout = MOBIL) {
@@ -251,6 +259,24 @@ suite('Wettkampf · Hub', () => {
     await app.setSelect(`.roster-lane[data-team="${teamId}"][data-pos="1"]`, String(andere));
     eq(dg1().config.spielerListe[spielerVon(dg1())].startBahn, andere, 'Startbahn nicht übernommen');
     deepEq(holzJeBahn(), vorher, 'die Ergebnisse sind nicht mit ihrer Bahn gewandert');
+    app.assertClean();
+  });
+
+  test('Web-Import: Namen stehen als „Vorname Nachname" und der Wettkampf ist teilbar', async (app) => {
+    const wk = baueWebImport({ anlage: true });
+    await starteHub(app, wk);
+    const teamId = wk.wettkampf.mannschaften[0].id;
+    eq(app.$(`.roster-name[data-team="${teamId}"][data-pos="1"]`).value, 'Anna Meier',
+      'der Ergebnisdienst meldet „Meier, Anna" — stehen soll der gesprochene Name');
+    const gast = wk.wettkampf.mannschaften[1].id;
+    eq(app.$(`.roster-name[data-team="${gast}"][data-pos="1"]`).value, 'Ben Kruse', 'Gastname');
+    // Ohne Komma gibt es nichts zu drehen — der Name bleibt, wie der Bericht ihn nennt.
+    eq(app.$(`.roster-name[data-team="${teamId}"][data-pos="2"]`).value, 'Heim 2', 'Name ohne Komma');
+
+    const teilen = app.$('[data-action="share"]');
+    ok(teilen && !teilen.disabled, 'Teilen fehlt oder ist trotz Anlage gesperrt');
+    includes(app.page(), 'Aus dem Ergebnisdienst importiert',
+      'vor dem Teilen fehlt der Hinweis, was dabei in die Datenbank geht');
     app.assertClean();
   });
 

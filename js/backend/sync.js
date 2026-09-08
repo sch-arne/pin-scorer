@@ -1048,6 +1048,47 @@ export async function pushEigenesErgebnis(game, position, { ergebnis = false } =
   }));
 }
 
+// Einen GETEILTEN Durchgang komplett nachziehen: alle Satz-Bloecke aller Spieler und, wenn er
+// damit fertig ist, die Ergebnis-Snapshots samt Statuswechsel.
+//
+// Fuer den NACHIMPORT einer laufenden Partie in einen bereits geteilten Wettkampf
+// (views/import-sw-web.js). Der normale Weg dorthin ist die Erfassung, die jeden Wurf einzeln
+// pusht — beim Nachimport kommen dagegen Saetze mehrerer Spieler auf einmal dazu, und zwar
+// ohne dass jemand sie erfasst haette. Das Gegenstueck fuer den UNGETEILTEN Web-Import ist
+// pushEigenesErgebnis: dort liegt in der DB nur die eigene, eingedampfte Zeile.
+//
+// Die spiel_spieler-IDs kommen aus der Besitz-Landkarte des gepullten Spiels (spielerOwners);
+// Positionen, die dort fehlen, werden uebersprungen statt geraten.
+export async function pushDurchgang(game, wettkampf = null) {
+  const remoteId = game && game.remoteId;
+  if (!remoteId) return;
+  const geraet = await ensureGeraet();
+  const owners = game.spielerOwners || {};
+  const posToId = {};
+  Object.keys(owners).forEach((pos) => { if (owners[pos] && owners[pos].id) posToId[pos] = owners[pos].id; });
+
+  const rows = [];
+  ((game.erfassung && game.erfassung.bloecke) || []).forEach((satzArr, pos) => {
+    if (posToId[pos] == null) return;
+    (satzArr || []).forEach((blk, satz) => {
+      rows.push({ spiel_id: remoteId, spieler_id: posToId[pos], satz, geraet, block_json: blk });
+    });
+  });
+  if (rows.length) {
+    const { error } = await supabase.from('satz_block')
+      .upsert(rows, { onConflict: 'spieler_id,satz' });
+    if (error) throw error;
+  }
+
+  // Reihenfolge wie ueberall sonst (finishRemote, linkGame): erst die Snapshots mit der
+  // LizenzID, dann der Statuswechsel — der Anonymisierungs-Trigger braucht sie.
+  if ((game.status || '') !== 'beendet') return;
+  const konto = await kontoId();
+  const { passByPos, ichIndex } = await spielerIdentitaet(game, wettkampf);
+  await ergebnisSnapshot(game, { remoteId, posToId, konto, passByPos, ichIndex });
+  await pushStatus(remoteId, 'beendet');
+}
+
 // Ergebnis-Snapshots bei Spielende schreiben (für die Statistik-Historie).
 // rows = [{ spiel_id, spieler_id, profil_id, gesamt, schnitt_satz, ... }].
 export async function pushResults(rows) {
