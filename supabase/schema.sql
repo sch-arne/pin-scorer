@@ -360,3 +360,17 @@ create table if not exists verborgen (
   verborgen_am timestamptz not null default now(),
   primary key (konto, art, objekt_id)
 );
+
+-- Der Vermerk ist zugleich der PAPIERKORB: solange die Zeile jung ist (14 Tage, siehe
+-- logic/papierkorb.js), zeigen die Statistiken sie als wiederherstellbaren Eintrag. Danach
+-- verschwindet nur der EINTRAG aus dem Papierkorb — die Zeile bleibt stehen, sonst waere das
+-- Spiel schlagartig wieder in Liste und Statistik. Ausgeblendet ist ausgeblendet; was
+-- ablaeuft, ist allein die Moeglichkeit, es mit einem Tippen zurueckzuholen.
+--
+-- `zuordnung` haelt fest, was beim Verbergen an EIGENER Zuordnung geloest wurde
+-- ({ "ergebnisse": [...], "spieler": [...] }), damit das Wiederherstellen sie exakt
+-- zurueckgeben kann. Ohne diese Notiz waere „das war ich" nach dem Entfernen verloren:
+-- zuordnung_loesen_fuer_spiele setzt profil_id auf NULL, und danach weiss niemand mehr,
+-- welcher Slot meiner war — die LizenzID am Ergebnis findet ihn nur fuer Spieler, die eine
+-- hinterlegt haben. Idempotent.
+alter table verborgen add column if not exists zuordnung jsonb;

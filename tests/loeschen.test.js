@@ -77,6 +77,8 @@ test('Die Frage benennt den Unterschied: endgültig weg vs. bleibt bestehen', ()
   const db = loeschFrage(VERBERGEN);
   assert.match(db, /bleiben in der Datenbank bestehen/);
   assert.doesNotMatch(db, /endgültig/);
+  // Und sie sagt, dass es umkehrbar ist — sonst klingt „entfernen" endgültiger als es ist.
+  assert.match(db, /Papierkorb zurückholen/);
   // Und der Punkt, auf den es ankommt: es trifft NUR mich, nicht die Mitspieler.
   assert.match(db, /nur für dich/);
   assert.match(db, /Freigabe-Link .*gilt weiter/);

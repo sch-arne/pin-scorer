@@ -27,6 +27,7 @@ import {
 export { istLizenzWettkampf };
 import { sportwinnerOhnePersonendaten } from '../logic/wettkampf-build.js';
 import { ohneVerborgene } from '../logic/loeschen.js';
+import { papierkorbEintraege, AUFBEWAHRUNG_TAGE } from '../logic/papierkorb.js';
 import { computeGameStats } from '../logic/statistik.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
 import { ergebnisZeilen } from '../logic/ergebnis-snapshot.js';
@@ -1213,6 +1214,79 @@ export async function verborgeneIds() {
     return out;
   } catch (e) {
     return leer;
+  }
+}
+
+// --- Papierkorb: das Entfernen zurueckholen ----------------------------------
+//
+// Der Papierkorb IST die Tabelle `verborgen` — nur eben ihr junger Teil (logic/papierkorb.js:
+// AUFBEWAHRUNG_TAGE). Hier wird er zusammengesetzt: die eigenen verborgen-Zeilen (die RLS
+// gibt nur die eigenen frei) und dazu die Objekte, auf die sie zeigen, damit die Ansicht
+// mehr sagen kann als eine nackte id. Wettkampf-Durchgaenge fallen unter ihren Wettkampf,
+// Zeilen ohne Gegenstueck fallen ganz heraus.
+//
+// Best effort wie ueberall: ohne Verbindung kommt eine leere Liste zurueck und der
+// Papierkorb bleibt schlicht unsichtbar.
+export async function pullPapierkorb({ tage = AUFBEWAHRUNG_TAGE, jetzt = Date.now() } = {}) {
+  const konto = await kontoId();
+  if (!konto) return [];
+  const seit = new Date(jetzt - tage * 24 * 60 * 60 * 1000).toISOString();
+  const { data: rows, error } = await supabase
+    .from('verborgen')
+    .select('art, objekt_id, verborgen_am')
+    .gte('verborgen_am', seit)
+    .order('verborgen_am', { ascending: false });
+  if (error) throw error;
+  if (!rows || !rows.length) return [];
+
+  const spielIds = rows.filter((r) => r.art === 'spiel').map((r) => r.objekt_id);
+  const wkIds = rows.filter((r) => r.art === 'wettkampf').map((r) => r.objekt_id);
+
+  // '*' statt einer Spaltenliste: `wettkampf_id` kennt eine Datenbank ohne die
+  // Wettkampf-Migration gar nicht, und daran soll der Papierkorb nicht scheitern.
+  const spiele = {};
+  if (spielIds.length) {
+    const { data } = await supabase.from('spiel').select('*').in('id', spielIds);
+    (data || []).forEach((r) => { spiele[r.id] = r; });
+  }
+  const wettkaempfe = {};
+  if (wkIds.length) {
+    try {
+      const { data } = await supabase.from('wettkampf')
+        .select('id, name, datum, status, anlage_id, aktualisiert_am').in('id', wkIds);
+      (data || []).forEach((r) => { wettkaempfe[r.id] = r; });
+    } catch (e) { /* alte DB ohne Wettkaempfe */ }
+  }
+  return papierkorbEintraege(rows, { spiele, wettkaempfe, jetzt, tage });
+}
+
+// Einen Papierkorb-Eintrag zurueckholen: der Vermerk in `verborgen` geht weg, und die beim
+// Verbergen geloeste eigene Zuordnung („das war ich") kommt zurueck. Beides erledigt EINE
+// Anweisung in der Datenbank, weil die Reihenfolge zaehlt — die Notiz, welche Zeilen mir
+// gehoerten, haengt an genau der verborgen-Zeile, die geloescht wird.
+//
+// Faellt die RPC aus (Migration noch nicht eingespielt), wird wenigstens der Vermerk selbst
+// entfernt: das Spiel ist dann wieder sichtbar, die Zuordnung fehlt aber und muss ueber
+// „das war ich" an der Karte neu gesetzt werden. Rueckgabe: true = zurueckgeholt.
+export async function papierkorbZurueckholen(art, objektId) {
+  const konto = await kontoId();
+  if (!konto) throw new Error('Nicht angemeldet');
+  try {
+    const { data, error } = await supabase.rpc('papierkorb_wiederherstellen', {
+      p_art: art, p_objekt: objektId,
+    });
+    if (error) throw error;
+    return (data || 0) > 0;
+  } catch (e) {
+    const ids = [objektId];
+    if (art === 'wettkampf') {
+      const { data } = await supabase.from('spiel').select('id').eq('wettkampf_id', objektId);
+      (data || []).forEach((r) => ids.push(r.id));
+    }
+    const { error } = await supabase.from('verborgen')
+      .delete().eq('konto', konto).in('objekt_id', ids);
+    if (error) throw error;
+    return true;
   }
 }
 

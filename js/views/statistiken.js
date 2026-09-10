@@ -50,6 +50,7 @@ import {
 } from '../logic/historie.js';
 import { zuordnungBlock, wireZuordnung, ichPosVon } from './spiel-zuordnung.js';
 import { spielLoeschen, wettkampfLoeschen } from './loeschen.js';
+import { renderPapierkorb } from './papierkorb.js';
 import { loeschart, GESPERRT } from '../logic/loeschen.js';
 
 function fmtDate(iso) {
@@ -301,7 +302,8 @@ export function statistikenView() {
     <div id="stat-meine"></div>
     <h2 class="section-label" id="stat-lokal-head">Auf diesem Gerät erfasst</h2>
     <div id="stat-list-wrap"></div>
-    <p class="field-hint" id="stat-leer" hidden>Keine Spiele passen zu dieser Auswahl.</p>`;
+    <p class="field-hint" id="stat-leer" hidden>Keine Spiele passen zu dieser Auswahl.</p>
+    <div id="stat-papierkorb"></div>`;
 
   const listWrap = root.querySelector('#stat-list-wrap');
   ctx.reload = () => loadAccount(root, listWrap, ctx); // baut die lokale Liste mit auf
@@ -601,7 +603,10 @@ function quellenZeile(quellen) {
 async function loadAccount(root, listWrap, ctx) {
   const el = root.querySelector('#stat-account');
   const meineEl = root.querySelector('#stat-meine');
+  const korbEl = root.querySelector('#stat-papierkorb');
   if (!el) return;
+  // Der Papierkorb hängt am Konto: abgemeldet oder offline steht dort nichts.
+  if (korbEl) korbEl.innerHTML = '';
 
   // Beim Neuladen (nach einer Zuordnung) die lokale Liste frisch aufbauen — sonst würden
   // die remote ergänzten Karten unten ein zweites Mal angehängt.
@@ -628,6 +633,11 @@ async function loadAccount(root, listWrap, ctx) {
   try { ctx.meinPass = await sync.meinePassnummer(); } catch (e) { /* egal */ }
   const hatLizenz = !!ctx.meinPass;
   if (listWrap) renderLokal(listWrap, ctx); // jetzt mit Konto-Wissen (★-Markierungen)
+
+  // --- Papierkorb: was ich in den letzten Wochen entfernt habe ---------------
+  // Unabhängig von allem darunter — er soll auch dann stehen, wenn die Historie leer ist
+  // (genau dann sucht man ihn ja: „wo ist mein Spiel hin?").
+  if (korbEl) renderPapierkorb(korbEl, { onDone: () => ctx.reload() }).catch(() => {});
 
   // --- 0) Selbst markierte Ergebnisse abholen ---------------------------------
   // Hat man sich im Wettkampf-Hub als „das bin ich" markiert, aber ein ANDERER hat erfasst

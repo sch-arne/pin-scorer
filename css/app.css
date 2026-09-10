@@ -2274,6 +2274,24 @@ button.mini-pin { cursor: pointer; }
 .stat-fremd-total { color: var(--accent); font-weight: 800; }
 .stat-fremd-open { color: var(--text-dim); font-weight: 700; padding-left: 2px; }
 
+/* ---------- Papierkorb (Statistiken, ganz unten) ---------- */
+/* Gestrichelter Rahmen statt der durchgezogenen Karten-Linie: was hier steht, ist entfernt
+   und nur noch fuer eine Frist greifbar — es soll sich sichtbar von der Historie absetzen
+   und nicht wie ein weiteres Spiel aussehen. */
+.pk-box {
+  background: var(--surface); border: 1px dashed var(--border, #2c3340);
+  border-radius: 12px; padding: 8px 12px; margin: 0 0 16px;
+}
+.pk-hint { margin: 2px 0 6px; }
+.pk-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0; border-top: 1px solid var(--border, #2c3340);
+}
+.pk-text { flex: 1; min-width: 0; }
+.pk-titel { font-size: 0.9rem; font-weight: 700; }
+.pk-meta { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+.pk-back { flex: none; }
+
 /* ---------- Kontrollzentrum (Vereins-PC / Sportwinner-Deeplink) ---------- */
 /* Der Wettkampf-Hub wird auf dem Vereins-PC (App per Brücke mit ?push=… geöffnet) als
    breite Desktop-Übersicht dargestellt: links Arbeitsbereich (Durchgänge + Aufstellung),
