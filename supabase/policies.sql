@@ -391,23 +391,99 @@ drop function if exists wettkampf_verbergen(uuid);
 -- (spiel_ergebnis.passnummer), findet pullMeineErgebnisse sie weiterhin — die Passnummer ist
 -- die Aufzeichnung, wer gespielt hat, und wird bewusst nicht gelöscht. Ausgeblendet wird
 -- deshalb weiterhin über die Tabelle `verborgen`; das hier räumt zusätzlich die Zuordnung ab.
+--
+-- Was geloest wird, wird zugleich AN DER verborgen-ZEILE NOTIERT (Spalte `zuordnung`) — sonst
+-- waere „das war ich" nach dem Entfernen unwiederbringlich und der Papierkorb koennte ein
+-- Spiel zwar wieder sichtbar machen, aber nicht mehr in die eigene Statistik zuruecklegen.
 drop function if exists zuordnung_loesen_fuer_spiele(uuid[]);
 create or replace function zuordnung_loesen_fuer_spiele(p_spiele uuid[])
 returns void
 language plpgsql security definer
 set search_path = public as $$
+declare
+  v_ich  uuid := auth.uid();
+  v_sid  uuid;
+  v_erg  uuid[];
+  v_spl  uuid[];
 begin
-  if auth.uid() is null or p_spiele is null then
+  if v_ich is null or p_spiele is null then
     return;
   end if;
-  update spiel_ergebnis set profil_id = null
-   where spiel_id = any (p_spiele) and profil_id = auth.uid();
-  update spiel_spieler set profil_id = null
-   where spiel_id = any (p_spiele) and profil_id = auth.uid();
+  foreach v_sid in array p_spiele loop
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_erg
+      from spiel_ergebnis where spiel_id = v_sid and profil_id = v_ich;
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_spl
+      from spiel_spieler  where spiel_id = v_sid and profil_id = v_ich;
+    if cardinality(v_erg) = 0 and cardinality(v_spl) = 0 then
+      continue;
+    end if;
+    update spiel_ergebnis set profil_id = null where id = any (v_erg);
+    update spiel_spieler  set profil_id = null where id = any (v_spl);
+    -- Die Notiz haengt an MEINER verborgen-Zeile; liegt keine vor (Aufruf ausserhalb des
+    -- Verbergens), geht sie ins Leere und das Loesen gilt trotzdem.
+    update verborgen
+       set zuordnung = jsonb_build_object('ergebnisse', to_jsonb(v_erg), 'spieler', to_jsonb(v_spl))
+     where konto = v_ich and art = 'spiel' and objekt_id = v_sid;
+  end loop;
 end;
 $$;
 
 grant execute on function zuordnung_loesen_fuer_spiele(uuid[]) to authenticated;
+
+-- --- Papierkorb: einen Eintrag zurueckholen ----------------------------------
+--
+-- Das Gegenstueck zum Verbergen und die einzige Stelle, die es rueckgaengig macht. Beides
+-- gehoert in EINE Anweisung, weil die Reihenfolge zaehlt: erst die notierte Zuordnung
+-- zurueckgeben (sie steht in der verborgen-Zeile), dann die Zeile loeschen. Andersherum
+-- waere die Notiz weg, bevor sie gelesen wurde.
+--
+-- Ein Wettkampf zieht seine Durchgaenge mit — genau die Menge, die verbergeWettkampf
+-- seinerzeit verborgen hat. Zurueckgegeben werden ausschliesslich Zeilen, die noch FREI sind
+-- (profil_id is null): hat sich in der Zwischenzeit jemand anders zugeordnet, bleibt das so.
+-- Rueckgabe: Anzahl der entfernten verborgen-Zeilen (0 = da war nichts).
+drop function if exists papierkorb_wiederherstellen(text, uuid);
+create or replace function papierkorb_wiederherstellen(p_art text, p_objekt uuid)
+returns int
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_ich uuid := auth.uid();
+  v_ids uuid[];
+  v_n   int := 0;
+  rec   record;
+begin
+  if v_ich is null or p_objekt is null or p_art not in ('spiel', 'wettkampf') then
+    return 0;
+  end if;
+
+  if p_art = 'wettkampf' then
+    select coalesce(array_agg(id), '{}'::uuid[]) into v_ids
+      from spiel where wettkampf_id = p_objekt;
+  end if;
+  v_ids := coalesce(v_ids, '{}'::uuid[]) || p_objekt;
+
+  for rec in
+    select zuordnung from verborgen
+     where konto = v_ich and art = 'spiel' and objekt_id = any (v_ids)
+       and zuordnung is not null
+  loop
+    update spiel_ergebnis set profil_id = v_ich
+     where profil_id is null
+       and id in (select j.wert::uuid
+                    from jsonb_array_elements_text(coalesce(rec.zuordnung -> 'ergebnisse', '[]'::jsonb)) as j(wert));
+    update spiel_spieler set profil_id = v_ich
+     where profil_id is null
+       and id in (select j.wert::uuid
+                    from jsonb_array_elements_text(coalesce(rec.zuordnung -> 'spieler', '[]'::jsonb)) as j(wert));
+  end loop;
+
+  delete from verborgen where konto = v_ich and objekt_id = any (v_ids);
+  get diagnostics v_n = row_count;
+  return v_n;
+end;
+$$;
+
+grant execute on function papierkorb_wiederherstellen(text, uuid) to authenticated;
 
 -- --- RLS aktivieren ----------------------------------------------------------
 alter table geraet          enable row level security;

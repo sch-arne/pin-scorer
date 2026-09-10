@@ -17,7 +17,14 @@
 //               die eigene LizenzID aus fremd erfassten Spielen finden. Da ist schlicht
 //               nichts, was sich entfernen ließe.
 //
+// VERBERGEN ist als einziger der vier Faelle umkehrbar: die verborgen-Zeile ist zugleich der
+// Eintrag im PAPIERKORB (logic/papierkorb.js) und laesst sich dort AUFBEWAHRUNG_TAGE lang
+// zurueckholen — samt der Zuordnung, die beim Verbergen geloest wurde. Danach verschwindet
+// nur der Eintrag; ausgeblendet bleibt das Spiel. Die Rueckfrage unten sagt das mit.
+//
 // Reine Logik ohne Store/DOM/Netz (Browser + Node ladbar, per Unit-Test abgesichert).
+
+import { AUFBEWAHRUNG_TAGE } from './papierkorb.js';
 
 export const KOMPLETT = 'komplett';
 export const VERBERGEN = 'verbergen';
@@ -65,7 +72,9 @@ export function loeschFrage(art, { wettkampf = false } = {}) {
     return `${was} aus deiner Übersicht und deinen Statistiken entfernen?`
       + ' Das gilt nur für dich: die aufgezeichneten Daten bleiben in der Datenbank bestehen,'
       + ` der Freigabe-Link${wettkampf ? ' (inkl. OBS-Overlay)' : ''} gilt weiter, und wer`
-      + ' gerade mit erfasst, macht ungestört weiter.';
+      + ' gerade mit erfasst, macht ungestört weiter.'
+      + ` Die nächsten ${AUFBEWAHRUNG_TAGE} Tage kannst du es unten in den Statistiken aus dem`
+      + ' Papierkorb zurückholen.';
   }
   if (art === NUR_HIER) {
     return `${was} von diesem Gerät entfernen?`
