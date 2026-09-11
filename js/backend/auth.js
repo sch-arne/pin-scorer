@@ -4,14 +4,16 @@
 // Schritt) und sendet eine Bestaetigungs-Mail. Hinweis: Supabase erlaubt es NICHT,
 // einem anonymen Nutzer E-Mail und Passwort zusammen zu geben ("Updating password of
 // an anonymous user without an email is not allowed") — deshalb signUp statt Anon-
-// Aufwertung. Der Account bekommt dadurch eine EIGENE uid; die Geraete-Identitaet ist
-// davon entkoppelt (geraet.js), sodass Mitgliedschaften in geteilten Spielen erhalten
-// bleiben und mehrere Geraete gleichzeitig denselben Account nutzen koennen.
+// Aufwertung. Der Account bekommt dadurch eine EIGENE uid. Was die anonyme Session geteilt
+// hat oder wem sie beigetreten ist, wandert ueber einen Uebergabe-Schein mit
+// (uebergabeVorbereiten, geraet.js); mehrere Geraete koennen gleichzeitig denselben Account
+// nutzen, weil die Geraete-Identitaet vom Account entkoppelt ist.
 //
 // Wird nur lazy geladen (dynamic import), damit die local-first App ohne Verbindung
 // unbeeintraechtigt bleibt.
 
 import { supabase, isRecoveryPending, clearRecovery } from './supabase.js';
+import { uebergabeVorbereiten } from './geraet.js';
 
 export { isRecoveryPending, clearRecovery };
 
@@ -44,6 +46,7 @@ export function pendingEmail(user) {
 // und man kann sich damit anmelden. Die anonyme Session bleibt bis dahin aktiv, die App
 // also weiter nutzbar. Gibt bei bereits vergebener E-Mail einen Fehler zurueck.
 export async function register(email, password) {
+  await uebergabeVorbereiten();
   const { data, error } = await supabase.auth.signUp({
     email: (email || '').trim(),
     password,
@@ -64,6 +67,7 @@ export async function register(email, password) {
 // (anonyme) Session — auth.uid() wechselt dann auf die des Accounts. Erfordert eine
 // bereits bestaetigte E-Mail.
 export async function login(email, password) {
+  await uebergabeVorbereiten();
   const { error } = await supabase.auth.signInWithPassword({
     email: (email || '').trim(), password,
   });

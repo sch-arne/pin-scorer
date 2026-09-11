@@ -355,11 +355,12 @@ async function renderDevices(host) {
 
 function renderDanger(auth, host, msg) {
   host.innerHTML = `
-    <p class="acc-hint">🔒 <strong>Datenschutz.</strong> Namen aus einer Sportwinner-Aufstellung werden nur
-      bis zum Spielende an die verbundenen Geräte und Zuschauer übertragen. Danach ersetzt der Server sie
-      automatisch: durch den öffentlichen <em>Anzeigenamen</em> des Profils, wenn die LizenzID des Spielers
-      dort hinterlegt ist — sonst durch „Mannschaft + Position". LizenzIDen sind nie öffentlich abrufbar.
-      Beim Löschen des Kontos werden auch deine Ergebnisse in fremd erfassten Spielen entfernt.</p>
+    <p class="acc-hint">🔒 <strong>Datenschutz.</strong> Namen aus einer Aufstellung werden nur bis zum
+      Spielende an die verbundenen Geräte und Zuschauer übertragen. Danach — spätestens 48 Stunden nach der
+      letzten Eingabe — ersetzt der Server sie: durch den öffentlichen <em>Anzeigenamen</em> des Profils, wenn
+      die LizenzID des Spielers dort hinterlegt ist, sonst durch „Mannschaft + Position". Die Ergebnisse
+      bleiben über die LizenzID einer Person zuordenbar; die LizenzID selbst sehen nur Beteiligte des Spiels,
+      nie Zuschauer. Beim Löschen des Kontos werden auch deine Ergebnisse in fremd erfassten Spielen entfernt.</p>
     <button type="button" id="acc-delete" class="acc-link acc-link-danger">Konto löschen</button>`;
   host.querySelector('#acc-delete').addEventListener('click', () => {
     host.innerHTML = `

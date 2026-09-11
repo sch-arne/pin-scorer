@@ -6,12 +6,15 @@
 //
 // Deshalb hat jedes Geraet jetzt eine eigene, in localStorage gespeicherte UUID,
 // unabhaengig davon, WER (welcher Account) gerade eingeloggt ist:
-//   * auth.uid()  = Person / Account  -> Statistik (profil_id), spiel.besitzer, profil
-//   * Geraete-ID  = dieses Geraet     -> Mitgliedschaft (spiel_geraet), Spieler-Lock
+//   * auth.uid()  = Person / Account  -> Statistik (profil_id), spiel.besitzer, profil,
+//                                        Mitgliedschaft und Lock — hier haengen die RECHTE
+//   * Geraete-ID  = dieses Geraet     -> nur ETIKETT: welches der eigenen Geraete gerade
+//                                        einen Spieler erfasst (besitzer_geraet)
 //
-// Die Geraete-ID wird serverseitig in der Tabelle `geraet` an den aktuellen Account
-// gebunden (konto = auth.uid()). Die RLS vertraut NUR dieser Bindung — eine allein
-// vom Client gelieferte Geraete-ID zaehlt nicht.
+// Die Geraete-ID wird in der Tabelle `geraet` an den aktuellen Account gebunden (Anzeige in
+// der Geraeteverwaltung). Rechte gibt sie KEINE: sie ist clientseitig erzeugt und laesst sich
+// an jedes Konto binden. Solange die RLS ihr vertraute, liess sich damit ein fremdes Geraet
+// samt seiner Spiele uebernehmen (supabase/migrations/001_rechte_am_konto.sql).
 
 import { supabase } from './supabase.js';
 
@@ -41,13 +44,13 @@ export function geraetId() {
 let pending = null;
 let registeredFor = null; // konto-uid, fuer die die Geraete-ID zuletzt registriert wurde
 
-// Stellt sicher, dass eine (anonyme) Auth-Session existiert, und liefert deren uid.
+// Stellt sicher, dass eine (anonyme) Auth-Session existiert, und liefert deren Nutzer.
 async function ensureSession() {
   const { data: { session } } = await supabase.auth.getSession();
-  if (session && session.user) return session.user.id;
+  if (session && session.user) return session.user;
   const { data, error } = await supabase.auth.signInAnonymously();
   if (error) throw error;
-  return data.user.id;
+  return data.user;
 }
 
 // Stellt sicher, dass (a) eine Auth-Session existiert und (b) dieses Geraet in der
@@ -56,7 +59,8 @@ async function ensureSession() {
 export function ensureGeraet() {
   if (!pending) {
     pending = (async () => {
-      const konto = await ensureSession();
+      const user = await ensureSession();
+      const konto = user.id;
       const id = geraetId();
       if (registeredFor !== konto) {
         // (id, konto) ist der Primaerschluessel: dasselbe Geraet kann ueber die Zeit
@@ -66,6 +70,9 @@ export function ensureGeraet() {
           .upsert({ id, konto, gesehen_am: new Date().toISOString() }, { onConflict: 'id,konto' });
         if (error) throw error;
         registeredFor = konto;
+        // Frisch angemeldet? Dann die Spiele der vorherigen, anonymen Session mitnehmen —
+        // BEVOR der erste Sync-Aufruf sie braucht.
+        if (!user.is_anonymous) await uebergabeEinloesen();
       }
       return id;
     })().catch((e) => { pending = null; throw e; }); // Fehlschlag -> naechster Versuch neu
@@ -78,6 +85,42 @@ export function ensureGeraet() {
 export async function kontoId() {
   const { data: { session } } = await supabase.auth.getSession();
   return (session && session.user && session.user.id) || null;
+}
+
+// --- Uebergabe anonym -> Konto ----------------------------------------------
+// Anmelden oder Registrieren gibt eine NEUE uid. Die Spiele, denen dieses Geraet anonym
+// beigetreten ist (oder die es angelegt hat), wandern ueber einen Uebergabe-Schein mit: VOR
+// dem Auth-Wechsel stellt die anonyme Session ihn aus (auth.js ruft uebergabeVorbereiten),
+// NACH dem Wechsel loest das neue Konto ihn beim naechsten ensureGeraet() ein. Einmalig,
+// 24 Stunden gueltig (RPCs konto_uebergabe_* in supabase/policies.sql). Frueher lief das
+// stillschweigend ueber die gemeinsame Geraete-ID — derselbe Weg, auf dem sich jede fremde
+// Geraete-ID uebernehmen liess.
+const UEBERGABE_KEY = 'pins-scorer:uebergabe';
+
+export async function uebergabeVorbereiten() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session || !session.user || !session.user.is_anonymous) return;
+    const { data, error } = await supabase.rpc('konto_uebergabe_vorbereiten');
+    if (error || !data) return;
+    localStorage.setItem(UEBERGABE_KEY, data);
+  } catch (e) { /* offline, alte DB, privater Modus: dann eben ohne Mitnahme */ }
+}
+
+async function uebergabeEinloesen() {
+  let token = null;
+  try { token = localStorage.getItem(UEBERGABE_KEY); } catch (e) { return; }
+  if (!token) return;
+  try {
+    const { error } = await supabase.rpc('konto_uebergabe_einloesen', { p_token: token });
+    // Hat der Server geantwortet (eingeloest, abgelaufen, unbekannt), ist der Schein
+    // verbraucht. Nur ohne Antwort (offline: kein Fehlercode) bleibt er fuer den naechsten
+    // Versuch liegen.
+    if (error && !error.code) return;
+  } catch (e) {
+    return;
+  }
+  try { localStorage.removeItem(UEBERGABE_KEY); } catch (e) { /* ignore */ }
 }
 
 // --- Geraete-Verwaltung ------------------------------------------------------

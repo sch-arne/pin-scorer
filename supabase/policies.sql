@@ -5,17 +5,18 @@
 -- exists vor jedem create). Setzt voraus, dass "Anonymous Sign-In" im Supabase-
 -- Projekt aktiviert ist (Authentication → Providers → Anonymous).
 --
--- Geräte-Identität ist ENTKOPPELT vom Account (siehe schema.sql, Tabelle `geraet`):
---   * auth.uid()  = Person / Account  (spiel.besitzer, profil, profil_id)
---   * geraet.id   = einzelnes Gerät   (spiel_geraet.geraet, besitzer_geraet, satz_block.geraet)
--- Ein Gerät gehört per geraet.konto = auth.uid() zu genau seinem Account. Die RLS
--- vertraut NUR dieser Bindung — eine allein vom Client gelieferte Geräte-ID zählt nicht.
+-- Rechte hängen am ACCOUNT (auth.uid()), nie an einer Geräte-ID (siehe schema.sql):
+--   * Mitgliedschaft  = spiel_geraet.konto / wettkampf_geraet.konto
+--   * Erfassungs-Lock = spiel_spieler.besitzer_konto (trägt trg_spieler_besitz_konto ein)
+-- Die Geräte-ID (besitzer_geraet, satz_block.geraet) ist nur ein Etikett: sie ist clientseitig
+-- erzeugt und lässt sich an jedes Konto binden. Bis migrations/001 hing die Mitgliedschaft an
+-- ihr — damit ließ sich ein fremdes Gerät samt seiner Spiele übernehmen.
 --
 -- Durchgesetzte Garantien:
---  * Nur Geräte, deren Account einem Spiel BEIGETRETEN ist, dürfen es lesen/beschreiben.
---  * Würfe (satz_block) eines Spielers darf NUR ein Gerät des besitzenden Accounts
---    schreiben (besitzer_geraet gehört zu auth.uid()). Zwischen den EIGENEN Geräten
---    koordiniert die App (Heartbeat/Übernehmen); fremde Accounts sind DB-hart gesperrt.
+--  * Nur Accounts, die einem Spiel BEIGETRETEN sind, dürfen es lesen/beschreiben.
+--  * Würfe (satz_block) eines Spielers darf NUR der Account schreiben, der ihn hält
+--    (besitzer_konto = auth.uid()). Zwischen den EIGENEN Geräten koordiniert die App
+--    (Heartbeat/Übernehmen); fremde Accounts sind DB-hart gesperrt.
 --  * Setup/Config des Spiels verwaltet nur der Ersteller (spiel.besitzer).
 --  * Die eigene Statistik-Historie ist über profil_id = auth.uid() lesbar.
 -- =============================================================================
@@ -38,10 +39,8 @@ returns boolean
 language sql security definer stable
 set search_path = public as $$
   select exists (
-    select 1
-    from wettkampf_geraet wg
-    join geraet g on g.id = wg.geraet
-    where wg.wettkampf_id = p_wettkampf and g.konto = auth.uid()
+    select 1 from wettkampf_geraet wg
+    where wg.wettkampf_id = p_wettkampf and wg.konto = auth.uid()
   );
 $$;
 
@@ -57,16 +56,13 @@ returns boolean
 language sql security definer stable
 set search_path = public as $$
   select exists (
-    select 1
-    from spiel_geraet sg
-    join geraet g on g.id = sg.geraet
-    where sg.spiel_id = p_spiel and g.konto = auth.uid()
+    select 1 from spiel_geraet sg
+    where sg.spiel_id = p_spiel and sg.konto = auth.uid()
   ) or exists (
     select 1
     from spiel s
     join wettkampf_geraet wg on wg.wettkampf_id = s.wettkampf_id
-    join geraet g on g.id = wg.geraet
-    where s.id = p_spiel and g.konto = auth.uid()
+    where s.id = p_spiel and wg.konto = auth.uid()
   );
 $$;
 
@@ -145,9 +141,9 @@ begin
   if v_id is null then
     raise exception 'Ungültiger Beitritts-Code';
   end if;
-  insert into spiel_geraet (spiel_id, geraet)
-    values (v_id, p_geraet)
-    on conflict (spiel_id, geraet) do nothing;
+  insert into spiel_geraet (spiel_id, geraet, konto)
+    values (v_id, p_geraet, auth.uid())
+    on conflict (spiel_id, konto, geraet) do nothing;
   return v_id;
 end;
 $$;
@@ -172,9 +168,9 @@ begin
   if v_id is null then
     raise exception 'Ungültiger Beitritts-Code';
   end if;
-  insert into wettkampf_geraet (wettkampf_id, geraet)
-    values (v_id, p_geraet)
-    on conflict (wettkampf_id, geraet) do nothing;
+  insert into wettkampf_geraet (wettkampf_id, geraet, konto)
+    values (v_id, p_geraet, auth.uid())
+    on conflict (wettkampf_id, konto, geraet) do nothing;
   return v_id;
 end;
 $$;
@@ -499,6 +495,7 @@ alter table spiel_spieler   enable row level security;
 alter table satz_block      enable row level security;
 alter table spiel_ergebnis  enable row level security;
 alter table verborgen       enable row level security;
+alter table konto_uebergabe enable row level security;  -- keine Policies: nur über die RPCs
 
 -- =============================================================================
 -- geraet — jedes Gerät sieht/verwaltet nur die eigenen Bindungen (konto = ich)
@@ -595,25 +592,28 @@ create policy spiel_delete on spiel for delete
   using (besitzer = auth.uid());
 
 -- =============================================================================
--- spiel_geraet — Mitgliedschaft (pro Gerät)
---  * Ersteller trägt eines seiner Geräte selbst ein (Beitritt anderer via spiel_beitreten).
---  * Jeder sieht die Mitglieder von Spielen, in denen er selbst (irgendein Gerät) ist.
---  * Jeder kann die Mitgliedschaft eines EIGENEN Geräts wieder verlassen.
+-- spiel_geraet — Mitgliedschaft (Konto + Geräte-Etikett)
+--  * Ersteller trägt sich selbst ein (Beitritt anderer via spiel_beitreten).
+--  * Jeder sieht NUR seine eigenen Zeilen. Früher auch die der übrigen Mitglieder — damit
+--    lagen deren Geräte-IDs offen, und genau die ließen sich übernehmen. Die App liest die
+--    Tabelle ohnehin nicht.
+--  * Jeder kann seine eigene Mitgliedschaft wieder verlassen.
 -- =============================================================================
 drop policy if exists spiel_geraet_select on spiel_geraet;
 create policy spiel_geraet_select on spiel_geraet for select
-  using (pins_ist_mein_geraet(geraet) or pins_ist_mitglied(spiel_id));
+  using (konto = auth.uid());
 
 drop policy if exists spiel_geraet_insert on spiel_geraet;
 create policy spiel_geraet_insert on spiel_geraet for insert
   with check (
-    pins_ist_mein_geraet(geraet)
+    konto = auth.uid()
+    and pins_ist_mein_geraet(geraet)
     and exists (select 1 from spiel where id = spiel_id and besitzer = auth.uid())
   );
 
 drop policy if exists spiel_geraet_delete on spiel_geraet;
 create policy spiel_geraet_delete on spiel_geraet for delete
-  using (pins_ist_mein_geraet(geraet));
+  using (konto = auth.uid());
 
 -- =============================================================================
 -- wettkampf — Mitglieder lesen; nur der Ersteller ändert Stammdaten/Status
@@ -636,25 +636,26 @@ create policy wettkampf_delete on wettkampf for delete
   using (besitzer = auth.uid());
 
 -- =============================================================================
--- wettkampf_geraet — Wettkampf-Mitgliedschaft (pro Gerät)
---  * Ersteller trägt eines seiner Geräte selbst ein; Beitritt anderer via wettkampf_beitreten.
---  * Jeder sieht die Mitglieder von Wettkämpfen, in denen er selbst (irgendein Gerät) ist.
---  * Jeder kann die Mitgliedschaft eines EIGENEN Geräts wieder verlassen.
+-- wettkampf_geraet — Wettkampf-Mitgliedschaft (Konto + Geräte-Etikett)
+--  * Ersteller trägt sich selbst ein; Beitritt anderer via wettkampf_beitreten.
+--  * Jeder sieht NUR seine eigenen Zeilen (Begründung wie bei spiel_geraet).
+--  * Jeder kann seine eigene Mitgliedschaft wieder verlassen.
 -- =============================================================================
 drop policy if exists wettkampf_geraet_select on wettkampf_geraet;
 create policy wettkampf_geraet_select on wettkampf_geraet for select
-  using (pins_ist_mein_geraet(geraet) or pins_ist_wettkampf_mitglied(wettkampf_id));
+  using (konto = auth.uid());
 
 drop policy if exists wettkampf_geraet_insert on wettkampf_geraet;
 create policy wettkampf_geraet_insert on wettkampf_geraet for insert
   with check (
-    pins_ist_mein_geraet(geraet)
+    konto = auth.uid()
+    and pins_ist_mein_geraet(geraet)
     and exists (select 1 from wettkampf where id = wettkampf_id and besitzer = auth.uid())
   );
 
 drop policy if exists wettkampf_geraet_delete on wettkampf_geraet;
 create policy wettkampf_geraet_delete on wettkampf_geraet for delete
-  using (pins_ist_mein_geraet(geraet));
+  using (konto = auth.uid());
 
 -- =============================================================================
 -- spiel_spieler — Roster + Besitz-Lock
@@ -676,12 +677,16 @@ create policy spiel_spieler_insert on spiel_spieler for insert
   );
 
 -- USING (alte Zeile): der Ersteller darf immer; ein Mitglied darf nur übernehmen,
--- wenn der Spieler frei ist, bereits einem EIGENEN Gerät gehört oder der Vorbesitzer
+-- wenn der Spieler frei ist, bereits dem EIGENEN Account gehört oder der Vorbesitzer
 -- inaktiv ist (heartbeat älter als 30s / nie gesetzt). So kann kein FREMDER Account
 -- einen aktiv bespielten Spieler an sich reißen — Regel "ein Spieler, ein Gerät".
--- WITH CHECK (neue Zeile): als Besitzer nur ein EIGENES Gerät eintragen oder freigeben,
--- und profil_id ("das bin ICH als Spieler") nur auf den EIGENEN Account setzen — sonst
--- könnte ein Mitglied einem fremden Account Ergebnisse unterschieben.
+-- WITH CHECK (neue Zeile): als Besitzer nur ein EIGENES Gerät eintragen (das Konto dazu
+-- trägt trg_spieler_besitz_konto ein) oder freigeben.
+-- profil_id ("das bin ICH als Spieler") schützt NICHT diese Policy, sondern derselbe Trigger:
+-- WITH CHECK sieht nur die neue Zeile und hätte deshalb JEDES Update auf einer Zeile verboten,
+-- die ein Mitspieler per spieler_bin_ich für sich markiert hat — auch den Heartbeat des
+-- erfassenden Geräts, dessen Lock dann nach 30 s verfiel. Der Trigger greift nur, wenn sich
+-- profil_id tatsächlich ändert.
 drop policy if exists spiel_spieler_update on spiel_spieler;
 create policy spiel_spieler_update on spiel_spieler for update
   using (
@@ -690,7 +695,7 @@ create policy spiel_spieler_update on spiel_spieler for update
       pins_ist_mitglied(spiel_id)
       and (
         besitzer_geraet is null
-        or pins_ist_mein_geraet(besitzer_geraet)
+        or besitzer_konto = auth.uid()
         or heartbeat_am is null
         or heartbeat_am < now() - interval '30 seconds'
       )
@@ -698,9 +703,48 @@ create policy spiel_spieler_update on spiel_spieler for update
   )
   with check (
     pins_ist_mitglied(spiel_id)
-    and (pins_ist_mein_geraet(besitzer_geraet) or besitzer_geraet is null)
-    and (profil_id is null or profil_id = auth.uid())
+    and (besitzer_geraet is null
+         or (besitzer_konto = auth.uid() and pins_ist_mein_geraet(besitzer_geraet)))
   );
+
+-- Das KONTO hinter dem Lock. Die App schreibt nur besitzer_geraet/besitzer_seit (auch ältere,
+-- noch gecachte Versionen); dieser Trigger trägt dazu das Konto ein, das den Spieler gerade
+-- übernimmt — und nur dann: ein Heartbeat, die Selbstzuordnung (spieler_bin_ich) oder die
+-- Anonymisierung ändern den Besitz nicht und lassen besitzer_konto stehen. Die Schreib-Policies
+-- für satz_block und spiel_ergebnis prüfen genau diese Spalte.
+--
+-- Außerdem: profil_id darf sich nur auf null oder auf das EIGENE Konto ändern — sonst könnte
+-- ein Mitglied einem fremden Account Ergebnisse unterschieben. Die RPCs, die profil_id setzen
+-- (spieler_bin_ich, papierkorb_wiederherstellen, konto_uebergabe_einloesen), schreiben
+-- ausnahmslos auth.uid() und bestehen die Prüfung.
+create or replace function pins_spieler_besitz_konto()
+returns trigger
+language plpgsql
+set search_path = public as $$
+begin
+  if tg_op = 'UPDATE'
+     and new.profil_id is distinct from old.profil_id
+     and new.profil_id is not null
+     and new.profil_id is distinct from auth.uid() then
+    raise exception 'profil_id darf nur auf das eigene Konto gesetzt werden.'
+      using errcode = '42501';
+  end if;
+
+  if new.besitzer_geraet is null then
+    new.besitzer_konto := null;
+  elsif tg_op = 'INSERT' then
+    new.besitzer_konto := auth.uid();
+  elsif new.besitzer_geraet is distinct from old.besitzer_geraet
+     or new.besitzer_seit  is distinct from old.besitzer_seit then
+    new.besitzer_konto := auth.uid();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_spieler_besitz_konto on spiel_spieler;
+create trigger trg_spieler_besitz_konto before insert or update on spiel_spieler
+  for each row execute function pins_spieler_besitz_konto();
 
 drop policy if exists spiel_spieler_delete on spiel_spieler;
 create policy spiel_spieler_delete on spiel_spieler for delete
@@ -709,8 +753,9 @@ create policy spiel_spieler_delete on spiel_spieler for delete
 -- =============================================================================
 -- satz_block — DER Nebenläufigkeits-Kern
 --  * Mitglieder lesen alle Blöcke.
---  * Schreiben (insert/update/delete) NUR, wenn ein EIGENES Gerät den Spieler besitzt
---    und der Schreib-Tag (geraet) ebenfalls ein eigenes Gerät ist.
+--  * Schreiben (insert/update/delete) NUR, wenn der EIGENE Account den Spieler hält
+--    (besitzer_konto), der Spieler zu genau diesem Spiel gehört und der Schreib-Tag
+--    (geraet) ein eigenes, registriertes Gerät ist.
 -- =============================================================================
 drop policy if exists satz_block_select on satz_block;
 create policy satz_block_select on satz_block for select
@@ -722,7 +767,8 @@ create policy satz_block_insert on satz_block for insert
     pins_ist_mein_geraet(geraet)
     and exists (
       select 1 from spiel_spieler s
-      where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
+      where s.id = spieler_id and s.spiel_id = satz_block.spiel_id
+        and s.besitzer_konto = auth.uid()
     )
   );
 
@@ -731,14 +777,16 @@ create policy satz_block_update on satz_block for update
   using (
     exists (
       select 1 from spiel_spieler s
-      where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
+      where s.id = spieler_id and s.spiel_id = satz_block.spiel_id
+        and s.besitzer_konto = auth.uid()
     )
   )
   with check (
     pins_ist_mein_geraet(geraet)
     and exists (
       select 1 from spiel_spieler s
-      where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
+      where s.id = spieler_id and s.spiel_id = satz_block.spiel_id
+        and s.besitzer_konto = auth.uid()
     )
   );
 
@@ -747,14 +795,15 @@ create policy satz_block_delete on satz_block for delete
   using (
     exists (
       select 1 from spiel_spieler s
-      where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
+      where s.id = spieler_id and s.spiel_id = satz_block.spiel_id
+        and s.besitzer_konto = auth.uid()
     )
   );
 
 -- =============================================================================
 -- spiel_ergebnis — Snapshot bei Spielende
 --  * Lesbar für Mitglieder UND für die eigene Person (Historie über Spiele hinweg).
---  * Schreibt ein Gerät, das den Spieler besitzt.
+--  * Schreibt der Account, der den Spieler hält (besitzer_konto).
 -- =============================================================================
 drop policy if exists spiel_ergebnis_select on spiel_ergebnis;
 create policy spiel_ergebnis_select on spiel_ergebnis for select
@@ -774,7 +823,8 @@ create policy spiel_ergebnis_insert on spiel_ergebnis for insert
   with check (
     exists (
       select 1 from spiel_spieler s
-      where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
+      where s.id = spieler_id and s.spiel_id = spiel_ergebnis.spiel_id
+        and s.besitzer_konto = auth.uid()
     )
     and (profil_id is null or profil_id = auth.uid())
     and (erfasst_von is null or erfasst_von = auth.uid())
@@ -785,13 +835,15 @@ create policy spiel_ergebnis_update on spiel_ergebnis for update
   using (
     exists (
       select 1 from spiel_spieler s
-      where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
+      where s.id = spieler_id and s.spiel_id = spiel_ergebnis.spiel_id
+        and s.besitzer_konto = auth.uid()
     )
   )
   with check (
     exists (
       select 1 from spiel_spieler s
-      where s.id = spieler_id and pins_ist_mein_geraet(s.besitzer_geraet)
+      where s.id = spieler_id and s.spiel_id = spiel_ergebnis.spiel_id
+        and s.besitzer_konto = auth.uid()
     )
     and (profil_id is null or profil_id = auth.uid())
     and (erfasst_von is null or erfasst_von = auth.uid())
@@ -847,22 +899,6 @@ create policy bahn_delete on bahn for delete
 drop policy if exists freischaltung_select on freischaltung;
 create policy freischaltung_select on freischaltung for select
   using (konto = auth.uid());
-
--- =============================================================================
--- MIGRATION (einmalig, optional) — bestehende Daten aus der Zeit "Gerät = auth.uid()"
--- -----------------------------------------------------------------------------
--- Früher standen in spiel_geraet.geraet / besitzer_geraet / satz_block.geraet direkt
--- auth.uid()-Werte. Damit diese alten Geräte-IDs weiter als gültige Geräte gelten,
--- werden sie als "sich selbst gehörend" (id = konto) ins Register übernommen. Nur für
--- Nutzer, deren Auth-Konto noch existiert. Danach funktionieren bereits geteilte Spiele
--- für ihre ursprünglichen Ersteller weiter. NEUE Geräte bekommen frische Geräte-IDs;
--- ein bereits geteiltes Spiel muss auf einem weiteren Gerät ggf. einmalig neu beigetreten
--- werden. Rein lokale (unverknüpfte) Spiele sind nicht betroffen.
-insert into geraet (id, konto)
-  select distinct sg.geraet, sg.geraet
-  from spiel_geraet sg
-  join auth.users u on u.id = sg.geraet
-  on conflict (id, konto) do nothing;
 
 -- =============================================================================
 -- Konto-Löschung (DSGVO) — self-service, atomar
@@ -1292,3 +1328,178 @@ end;
 $$;
 
 grant execute on function meine_ergebnisse_beanspruchen() to authenticated;
+
+-- =============================================================================
+-- Übergabe anonym -> Konto (Tabelle konto_uebergabe, siehe schema.sql)
+-- -----------------------------------------------------------------------------
+-- Zwei Schritte, weil zwischen ihnen die Session wechselt: VOR dem Login stellt die anonyme
+-- Session den Schein aus, NACH dem Login löst das neue Konto ihn ein. Wer den Schein hat,
+-- hatte die anonyme Session. Mehr Nachweis gab es vorher (die gemeinsame Geräte-ID) auch nicht
+-- — nur lässt sich der Schein, anders als die Geräte-ID, nicht aus fremden Daten ablesen.
+drop function if exists konto_uebergabe_vorbereiten();
+create or replace function konto_uebergabe_vorbereiten()
+returns uuid
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_token uuid;
+begin
+  if auth.uid() is null or coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false) is not true then
+    raise exception 'Nur eine anonyme Session kann ihre Spiele übergeben.';
+  end if;
+  delete from konto_uebergabe
+   where von = auth.uid() or erstellt_am < now() - interval '24 hours';
+  insert into konto_uebergabe (von) values (auth.uid()) returning token into v_token;
+  return v_token;
+end;
+$$;
+
+grant execute on function konto_uebergabe_vorbereiten() to authenticated;
+
+-- Löst den Schein ein und zieht alles, was an der anonymen Session hing, auf das aufrufende
+-- Konto um: Mitgliedschaften, eigene Spiele/Wettkämpfe, gehaltene Spieler, „das bin ich",
+-- selbst erfasste Ergebnisse und die eigenen Ausblendungen. Rückgabe: Anzahl der
+-- übernommenen Mitgliedschaften und Spiele/Wettkämpfe (0 = Schein unbekannt, abgelaufen oder
+-- schon eingelöst — dann passiert nichts).
+drop function if exists konto_uebergabe_einloesen(uuid);
+create or replace function konto_uebergabe_einloesen(p_token uuid)
+returns int
+language plpgsql security definer
+set search_path = public as $$
+declare
+  v_ich uuid := auth.uid();
+  v_von uuid;
+  v_n   int := 0;
+  v_k   int;
+begin
+  if v_ich is null or coalesce((auth.jwt() ->> 'is_anonymous')::boolean, false) then
+    raise exception 'Nur ein angemeldetes Konto kann eine Übergabe einlösen.';
+  end if;
+  delete from konto_uebergabe where erstellt_am < now() - interval '24 hours';
+  delete from konto_uebergabe where token = p_token returning von into v_von;
+  if v_von is null or v_von = v_ich then
+    return 0;
+  end if;
+
+  insert into spiel_geraet (spiel_id, geraet, konto, beigetreten_am)
+    select spiel_id, geraet, v_ich, beigetreten_am from spiel_geraet where konto = v_von
+    on conflict do nothing;
+  get diagnostics v_k = row_count; v_n := v_n + v_k;
+  delete from spiel_geraet where konto = v_von;
+
+  insert into wettkampf_geraet (wettkampf_id, geraet, konto, beigetreten_am)
+    select wettkampf_id, geraet, v_ich, beigetreten_am from wettkampf_geraet where konto = v_von
+    on conflict do nothing;
+  get diagnostics v_k = row_count; v_n := v_n + v_k;
+  delete from wettkampf_geraet where konto = v_von;
+
+  update spiel     set besitzer = v_ich where besitzer = v_von;
+  get diagnostics v_k = row_count; v_n := v_n + v_k;
+  update wettkampf set besitzer = v_ich where besitzer = v_von;
+  get diagnostics v_k = row_count; v_n := v_n + v_k;
+
+  update spiel_spieler  set besitzer_konto = v_ich where besitzer_konto = v_von;
+  update spiel_spieler  set profil_id      = v_ich where profil_id      = v_von;
+  update spiel_ergebnis set erfasst_von    = v_ich where erfasst_von    = v_von;
+  update spiel_ergebnis set profil_id      = v_ich where profil_id      = v_von;
+
+  insert into verborgen (konto, art, objekt_id, verborgen_am, zuordnung)
+    select v_ich, art, objekt_id, verborgen_am, zuordnung from verborgen where konto = v_von
+    on conflict do nothing;
+  delete from verborgen where konto = v_von;
+
+  return v_n;
+end;
+$$;
+
+grant execute on function konto_uebergabe_einloesen(uuid) to authenticated;
+
+-- =============================================================================
+-- Frist für Klarnamen
+-- -----------------------------------------------------------------------------
+-- Die Anonymisierung hängt an einem Statuswechsel auf 'beendet'. Den setzt nur das Gerät des
+-- Erstellers, und ein abgebrochenes, vergessenes oder offline beendetes Spiel sieht ihn nie —
+-- dessen Klarnamen blieben unbegrenzt in der Datenbank (Speicherbegrenzung, Art. 5 Abs. 1 e
+-- DSGVO). Diese Funktion zieht sie nach einer Frist nach, unabhängig vom Status:
+--   * 48 Stunden nach der letzten Aktivität, sobald gespielt wurde (ein Wurf oder ein fertiger
+--     Satz liegt vor),
+--   * 14 Tage nach der letzten Änderung, solange nichts gespielt ist — ein Wettkampf wird oft
+--     Tage vorher angelegt und geteilt und braucht die Namen am Spieltag noch.
+-- Letzte Aktivität = das jüngste von spiel.aktualisiert_am, satz_block.aktualisiert_am und
+-- spiel_spieler.heartbeat_am. Läuft stündlich per pg_cron (migrations/002_klarnamen_frist.sql);
+-- kein Client darf sie aufrufen.
+--
+-- Wird ein Spiel nach Ablauf der Frist doch fortgesetzt, behält das erfassende Gerät die Namen
+-- lokal (mergeSpielerNamen); neu beitretende Geräte, Zuschauer und Overlay sehen Platzhalter.
+-- Dasselbe Update wie pins_wettkampf_anonymisieren: anonymisiert_am wird MIT gesetzt, der
+-- dadurch geweckte trg_spiel_anonymisieren spiegelt nur noch.
+create or replace function pins_klarnamen_frist()
+returns int
+language plpgsql security definer
+set search_path = public as $$
+declare
+  r   record;
+  v_n int := 0;
+begin
+  for r in
+    select s.id, s.config_json, s.wettkampf_id
+      from spiel s
+      left join lateral (
+        select max(b.aktualisiert_am) as zuletzt,
+               bool_or(
+                 case when jsonb_typeof(b.block_json -> 'wuerfe') = 'array'
+                      then jsonb_array_length(b.block_json -> 'wuerfe') > 0
+                      else false end
+                 or (b.block_json ->> 'done') = 'true'
+               ) as gespielt
+          from satz_block b where b.spiel_id = s.id
+      ) w on true
+      left join lateral (
+        select max(sp.heartbeat_am) as zuletzt from spiel_spieler sp where sp.spiel_id = s.id
+      ) h on true
+     where s.anonymisiert_am is null
+       and greatest(s.aktualisiert_am, w.zuletzt, h.zuletzt)
+           < now() - case when coalesce(w.gespielt, false) then interval '48 hours'
+                          else interval '14 days' end
+  loop
+    update spiel
+       set config_json     = pins_anonymisierte_liste(r.id, r.config_json, r.wettkampf_id, true),
+           anonymisiert_am = now()
+     where id = r.id;
+    v_n := v_n + 1;
+  end loop;
+  return v_n;
+end;
+$$;
+
+revoke all on function pins_klarnamen_frist() from public, anon, authenticated;
+
+-- =============================================================================
+-- Keine LizenzIDs im Wettkampf-config_json
+-- -----------------------------------------------------------------------------
+-- config_json.sportwinner.spieler[] trug früher je Spieler `pass` (LizenzID) und `extId`
+-- (Sportwinner-interne ID). Der Client entfernt beides seit sportwinnerOhnePersonendaten
+-- (js/logic/wettkampf-build.js) vor dem Hochladen, und die Zuschauer-/Overlay-RPCs lassen den
+-- Block ganz weg — Mitglieder lasen die Altbestände aber weiter. Dieser Trigger macht die Regel
+-- serverseitig verbindlich, auch gegen ältere, noch gecachte App-Versionen; den Altbestand
+-- räumt migrations/003_altbestand_lizenz.sql über ihn auf. `seiten` und `slot` bleiben: das
+-- Rückschreiben an Sportwinner adressiert ausschließlich darüber.
+create or replace function pins_wettkampf_ohne_personendaten()
+returns trigger
+language plpgsql
+set search_path = public as $$
+begin
+  if jsonb_typeof(new.config_json #> '{sportwinner,spieler}') = 'array' then
+    new.config_json := jsonb_set(new.config_json, '{sportwinner,spieler}', coalesce((
+      select jsonb_agg(case when jsonb_typeof(e) = 'object' then e - 'pass' - 'extId' else e end
+                       order by i)
+        from jsonb_array_elements(new.config_json #> '{sportwinner,spieler}') with ordinality as t(e, i)
+    ), '[]'::jsonb));
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_wettkampf_ohne_personendaten on wettkampf;
+create trigger trg_wettkampf_ohne_personendaten before insert or update of config_json on wettkampf
+  for each row execute function pins_wettkampf_ohne_personendaten();

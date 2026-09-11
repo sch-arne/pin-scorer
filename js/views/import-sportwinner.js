@@ -670,9 +670,10 @@ function previewBody(s) {
         ? '★ Deine LizenzID wurde in der Aufstellung erkannt — nur diese Ergebnisse zählen in deine Statistik.'
         : 'ℹ Hinterlege deine LizenzID unter „Spieler", damit deine eigenen Ergebnisse automatisch in deiner Statistik landen.'}</p>
       <p class="field-hint">🔒 Datenschutz: Die Namen werden bis zum Spielende an die verbundenen
-        Geräte und Zuschauer übertragen und danach automatisch anonymisiert — dann steht dort
-        der öffentliche Anzeigename des jeweiligen Profils, sonst „Mannschaft + Position".
-        LizenzIDen verlassen dieses Gerät nicht im Klartext.</p>
+        Geräte und Zuschauer übertragen. Danach — spätestens 48 Stunden nach der letzten Eingabe —
+        steht dort der öffentliche Anzeigename des jeweiligen Profils, sonst „Mannschaft + Position".
+        Die Ergebnisse bleiben über die LizenzID zuordenbar: Teilst du den Wettkampf, geht sie für
+        die Beteiligten mit in die Datenbank, an Zuschauer und das Overlay nie.</p>
     </section>
 
     <section class="field field-readout">

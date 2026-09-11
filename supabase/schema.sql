@@ -1,8 +1,9 @@
 -- =============================================================================
 -- Pins-Scorer — Supabase / Postgres Schema
 -- =============================================================================
--- Im Supabase SQL-Editor ausführen (einmalig; ist idempotent per IF NOT EXISTS).
--- Danach policies.sql ausführen (Row-Level-Security).
+-- Im Supabase SQL-Editor ausführen (idempotent per IF NOT EXISTS, darf beliebig oft laufen).
+-- Danach policies.sql ausführen (Row-Level-Security). EINMALIGE Datenänderungen gehören NICHT
+-- hierher, sondern nach supabase/migrations/ — Reihenfolge siehe migrations/README.md.
 --
 -- Leitidee: Ein Spieler gehört zu jeder Zeit genau EINEM Gerät (ein Gerät darf
 -- mehrere Spieler steuern). Deshalb ist die natürliche Partitionsgrenze der
@@ -12,11 +13,15 @@
 --
 -- Geräte-Identität ist ENTKOPPELT vom Account: jedes Gerät hat eine eigene, vom
 -- Client erzeugte UUID (Tabelle `geraet`), unabhängig davon, wer eingeloggt ist.
---   * auth.uid()  = Person / Account  -> spiel.besitzer, profil, Statistik (profil_id)
---   * geraet.id   = dieses Gerät      -> Mitgliedschaft (spiel_geraet), Spieler-Lock
+--   * auth.uid()  = Person / Account  -> spiel.besitzer, profil, Statistik (profil_id),
+--                                        Mitgliedschaft (spiel_geraet.konto) und Lock
+--                                        (spiel_spieler.besitzer_konto) — hier hängen die RECHTE
+--   * geraet.id   = dieses Gerät      -> nur ETIKETT: welches der eigenen Geräte gerade
+--                                        einen Spieler erfasst (besitzer_geraet)
 -- So können MEHRERE Geräte GLEICHZEITIG im selben Account erfassen (verschiedene
--- Geräte-IDs => der Besitz-Lock trennt sie sauber). Die RLS vertraut nur der
--- serverseitigen Bindung geraet.konto = auth.uid().
+-- Geräte-IDs => die App trennt sie über besitzer_geraet/Heartbeat). Rechte vergibt die
+-- RLS NIE über eine Geräte-ID: die ist clientseitig erzeugt und lässt sich an jedes Konto
+-- binden (siehe migrations/001_rechte_am_konto.sql).
 -- =============================================================================
 
 -- Geräte-Register: bindet eine (client-seitig erzeugte) Geräte-ID an einen Account.
@@ -114,12 +119,15 @@ create table if not exists spiel (
   aktualisiert_am timestamptz not null default now()
 );
 
--- Mitgliedschaft: welches Gerät ist welchem Spiel beigetreten. Basis der RLS-Regeln.
+-- Mitgliedschaft: welches KONTO ist (über welches seiner Geräte) einem Spiel beigetreten.
+-- Basis der RLS-Regeln ist `konto`; `geraet` ist nur das Etikett. Bestehende DBs bekommen
+-- `konto` über migrations/001_rechte_am_konto.sql.
 create table if not exists spiel_geraet (
   spiel_id       uuid not null references spiel(id) on delete cascade,
   geraet         uuid not null,
+  konto          uuid not null default auth.uid() references auth.users(id) on delete cascade,
   beigetreten_am timestamptz not null default now(),
-  primary key (spiel_id, geraet)
+  primary key (spiel_id, konto, geraet)
 );
 
 -- Teilnehmer eines Spiels (= Spieler-Index/Position). besitzer_geraet ist der Lock:
@@ -196,17 +204,19 @@ create table if not exists wettkampf (
   aktualisiert_am timestamptz not null default now()
 );
 
--- Mitgliedschaft: welches Gerät ist welchem Wettkampf beigetreten. Analog zu
--- spiel_geraet, aber auf Wettkampf-Ebene: die Mitgliedschaft öffnet den Lese-/
+-- Mitgliedschaft: welches KONTO ist (über welches Gerät) welchem Wettkampf beigetreten.
+-- Analog zu spiel_geraet, aber auf Wettkampf-Ebene: die Mitgliedschaft öffnet den Lese-/
 -- Schreibzugriff auf ALLE Durchgang-Spiele des Wettkampfs (siehe policies.sql:
 -- pins_ist_mitglied prüft zusätzlich die Wettkampf-Mitgliedschaft).
 create table if not exists wettkampf_geraet (
   wettkampf_id   uuid not null references wettkampf(id) on delete cascade,
   geraet         uuid not null,
+  konto          uuid not null default auth.uid() references auth.users(id) on delete cascade,
   beigetreten_am timestamptz not null default now(),
-  primary key (wettkampf_id, geraet)
+  primary key (wettkampf_id, konto, geraet)
 );
 create index if not exists idx_wettkampf_geraet_geraet on wettkampf_geraet(geraet);
+create index if not exists idx_wettkampf_geraet_konto  on wettkampf_geraet(konto);
 
 -- Ein Durchgang gehört zu genau einem Wettkampf (oder zu keinem = Einzelspiel).
 -- ON DELETE CASCADE: einen Wettkampf löschen entfernt serverseitig seine Durchgänge
@@ -225,10 +235,9 @@ create index if not exists idx_spiel_wettkampf on spiel(wettkampf_id);
 -- reiner Zuschauer-Link teilen, ohne Eingaberecht zu vergeben. Idempotent.
 alter table spiel     add column if not exists zuschauer_code text;
 alter table wettkampf add column if not exists zuschauer_code text;
--- Bestehende Zeilen einmalig mit einem Code füllen (md5(random) ist volatil -> je Zeile ein
--- eigener Wert), danach den Default für neue Zeilen setzen.
-update spiel     set zuschauer_code = upper(substr(md5(random()::text), 1, 6)) where zuschauer_code is null;
-update wettkampf set zuschauer_code = upper(substr(md5(random()::text), 1, 6)) where zuschauer_code is null;
+-- Default für neue Zeilen. Das einmalige Befüllen der Altbestände steht inzwischen in
+-- migrations/archiv_vor_2026-09.sql: hier gab es bei jedem Einspielen den per
+-- *_verbindung_kappen bewusst entwerteten Spielen wieder einen Code.
 alter table spiel     alter column zuschauer_code set default upper(substr(md5(random()::text), 1, 6));
 alter table wettkampf alter column zuschauer_code set default upper(substr(md5(random()::text), 1, 6));
 create unique index if not exists idx_spiel_zuschauer_code     on spiel(zuschauer_code);
@@ -236,6 +245,7 @@ create unique index if not exists idx_wettkampf_zuschauer_code on wettkampf(zusc
 
 -- --- Indizes ----------------------------------------------------------------
 create index if not exists idx_spiel_geraet_geraet   on spiel_geraet(geraet);
+create index if not exists idx_spiel_geraet_konto    on spiel_geraet(konto);
 create index if not exists idx_spiel_spieler_spiel    on spiel_spieler(spiel_id);
 create index if not exists idx_satz_block_spiel       on satz_block(spiel_id);
 create index if not exists idx_satz_block_spieler     on satz_block(spieler_id);
@@ -309,6 +319,12 @@ end $$;
 alter table spiel_spieler add column if not exists passnummer text;
 create index if not exists idx_spiel_spieler_passnummer on spiel_spieler(passnummer);
 
+-- Welches KONTO hält den Spieler gerade (Erfassungs-Lock)? Trägt der Trigger
+-- trg_spieler_besitz_konto (policies.sql) aus auth.uid() ein, sobald ein Gerät den Spieler
+-- übernimmt; die Schreib-Policies prüfen genau diese Spalte. besitzer_geraet sagt nur noch,
+-- WELCHES der eigenen Geräte es ist.
+alter table spiel_spieler add column if not exists besitzer_konto uuid references auth.users(id) on delete set null;
+
 -- Wer hat die Ergebniszeile ERFASST (Gerät/Account des Schreibers) — getrennt von
 -- profil_id, das ab jetzt ausschließlich „das bin ICH als Spieler" bedeutet. Vorher
 -- stand in profil_id der Erfasser, wodurch alle mit erfassten Gegner/Mitspieler in
@@ -320,25 +336,9 @@ create index if not exists idx_spiel_ergebnis_erfasst_von on spiel_ergebnis(erfa
 -- pins_spiel_anonymisieren idempotent; siehe policies.sql).
 alter table spiel add column if not exists anonymisiert_am timestamptz;
 
--- --- MIGRATION (einmalig) — profil_id war der ERFASSER -----------------------
--- Alt-Daten: pushResults setzte profil_id für JEDEN vom Gerät gesteuerten Spieler auf
--- das eigene Konto. Diese Bedeutung zieht auf erfasst_von um; profil_id behält die
--- Zuordnung nur dort, wo sie über die LizenzID belegbar ist (passnummer der Zeile =
--- passnummer des verknüpften Profils). Alles übrige wird gelöst — nicht auflösbare
--- Zuordnungen lassen sich in den Statistiken per RPC ergebnis_mir_zuordnen nachtragen.
-update spiel_ergebnis
-   set erfasst_von = profil_id
- where erfasst_von is null and profil_id is not null;
-
-update spiel_ergebnis e
-   set profil_id = null
- where e.profil_id is not null
-   and not exists (
-     select 1 from profil p
-      where p.id = e.profil_id
-        and p.passnummer is not null
-        and p.passnummer = e.passnummer
-   );
+-- (Die einmalige Umdeutung der Alt-Daten — profil_id war früher der ERFASSER — steht jetzt in
+-- migrations/archiv_vor_2026-09.sql. Hier lief sie bei JEDEM Einspielen erneut und setzte dabei
+-- jedes Mal alle manuellen Zuordnungen ohne LizenzID zurück.)
 
 -- --- „Gelöscht" heißt in der Datenbank: VERBORGEN ----------------------------
 -- Ein Spiel/Wettkampf, das einmal in der Datenbank lag, wird beim Löschen NICHT entfernt:
@@ -374,3 +374,17 @@ create table if not exists verborgen (
 -- welcher Slot meiner war — die LizenzID am Ergebnis findet ihn nur fuer Spieler, die eine
 -- hinterlegt haben. Idempotent.
 alter table verborgen add column if not exists zuordnung jsonb;
+
+-- --- Übergabe anonym -> Konto ------------------------------------------------
+-- Wer anonym geteilt oder beigetreten ist und sich dann anmeldet oder registriert, bekommt
+-- eine NEUE uid. Früher wanderten die Mitgliedschaften stillschweigend mit, weil dieselbe
+-- Geräte-ID an beide Konten gebunden wurde — derselbe Mechanismus, mit dem sich jede fremde
+-- Geräte-ID übernehmen ließ. Jetzt geht es nur ausdrücklich: die anonyme Session holt sich vor
+-- dem Login einen Übergabe-Schein (RPC konto_uebergabe_vorbereiten), das neue Konto löst ihn
+-- danach ein (konto_uebergabe_einloesen). Einmalig, 24 Stunden gültig. Kein Client liest die
+-- Tabelle (RLS an, keine Policies, siehe policies.sql).
+create table if not exists konto_uebergabe (
+  token       uuid primary key default gen_random_uuid(),
+  von         uuid not null references auth.users(id) on delete cascade,
+  erstellt_am timestamptz not null default now()
+);
