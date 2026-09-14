@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   GRAFIK_DEFAULT, grafikModell, grafikOptionen, normalisiereOptionen, grafikDateiname,
+  modellId, grafikTexte, merkeGrafikTexte, GRAFIK_TEXTE_MAX,
 } from '../js/logic/ergebnis-grafik.js';
 
 // Ein Satz-Block, dessen zwei Teilsätze als Summen-Overrides gesetzt sind (holz = a + b) —
@@ -211,4 +212,45 @@ test('grafikDateiname: Ergebnis_<Titel>_<Datum>.png', () => {
   const name = grafikDateiname({ titel: 'VOK / Sontra', datumIso: '2026-09-05T18:00:00.000Z' });
   assert.equal(name, 'Ergebnis_VOK-Sontra_2026-09-05.png');
   assert.match(grafikDateiname({}), /^Ergebnis_Spiel_\d{4}-\d{2}-\d{2}\.png$/);
+});
+
+
+test('Modell-Id: Wettkampf und Spiel bekommen getrennte Schluessel', () => {
+  const { wettkampf, games } = mkWettkampf();
+  wettkampf.id = 'x1';
+  assert.equal(modellId({ wettkampf }), 'wk:x1');
+  assert.equal(grafikModell({ wettkampf, games }).id, 'wk:x1');
+  // Gleiche Roh-Id, andere Quelle -> anderer Schluessel (sonst teilten sie sich den Titel).
+  assert.equal(modellId({ game: { id: 'x1' } }), 'sp:x1');
+  assert.equal(grafikModell({ game: { id: 'x1', config: {} } }).id, 'sp:x1');
+  // Ohne Quelle gibt es nichts zu merken.
+  assert.equal(modellId(null), '');
+  assert.equal(grafikModell(null).id, '');
+});
+
+test('Titel/Untertitel werden je Spiel gemerkt und nicht zurueckgesetzt', () => {
+  // Ohne Eintrag: null -> das Panel nimmt den Vorschlag aus dem Modell.
+  assert.equal(grafikTexte({}, 'wk:1'), null);
+  assert.equal(grafikTexte({ grafikTexte: 'kaputt' }, 'wk:1'), null);
+
+  const topf = merkeGrafikTexte({}, 'wk:1', { titel: 'Derby', untertitel: 'Halle 2' }, 1000);
+  assert.deepEqual(grafikTexte({ grafikTexte: topf }, 'wk:1'), { titel: 'Derby', untertitel: 'Halle 2' });
+  // Ein anderes Spiel bleibt unberuehrt — sonst schluege der Titel ueberall durch.
+  assert.equal(grafikTexte({ grafikTexte: topf }, 'wk:2'), null);
+  // Leer geraeumte Felder sind eine Entscheidung und bleiben leer.
+  const leer = merkeGrafikTexte({ grafikTexte: topf }, 'wk:1', { titel: '', untertitel: '' }, 1001);
+  assert.deepEqual(grafikTexte({ grafikTexte: leer }, 'wk:1'), { titel: '', untertitel: '' });
+  // Ohne Id wird nichts geschrieben.
+  assert.deepEqual(merkeGrafikTexte({ grafikTexte: topf }, '', { titel: 'X' }), topf);
+});
+
+test('Gemerkte Texte: aelteste fliegen raus, der Speicher waechst nicht ewig', () => {
+  let settings = {};
+  for (let i = 0; i < GRAFIK_TEXTE_MAX + 5; i++) {
+    settings = { grafikTexte: merkeGrafikTexte(settings, 'wk:' + i, { titel: 'T' + i }, 1000 + i) };
+  }
+  const ids = Object.keys(settings.grafikTexte);
+  assert.equal(ids.length, GRAFIK_TEXTE_MAX);
+  assert.equal(grafikTexte(settings, 'wk:0'), null);                       // aeltester weg
+  assert.ok(grafikTexte(settings, 'wk:' + (GRAFIK_TEXTE_MAX + 4)));        // juengster da
 });

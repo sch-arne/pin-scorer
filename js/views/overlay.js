@@ -67,18 +67,7 @@ export function overlayView() {
   }
 
   function paint(data) {
-    // Welchen Durchgang die Bahnansicht zeigt (inkl. 1-Minuten-Halten nach „Fertig") lokal
-    // je Tick entscheiden — hängt an der Uhrzeit, kann daher nicht aus dem Datenschnappschuss
-    // allein kommen. Fällt bei Problemen auf den Standard (laufender Durchgang) zurück.
-    let laneNr;
-    try {
-      const { wettkampf, games } = data || {};
-      if (wettkampf) {
-        const stats = computeWettkampfStats(wettkampf, games || []);
-        laneNr = chooseLaneDurchgangNr(wettkampf, games || [], stats, laneHold, Date.now(), HOLD_MS);
-      }
-    } catch (e) { /* Standard greift in buildOverlayHtml */ }
-    const html = buildOverlayHtml(data, { laneNr });
+    const html = overlayHtmlLive(data, laneHold, Date.now(), HOLD_MS);
     if (html === lastJson) return; // nichts geändert → DOM nicht anfassen (kein Flackern)
     lastJson = html;
     stage.innerHTML = html;
@@ -284,6 +273,23 @@ export function chooseLaneDurchgangNr(wettkampf, games, stats, state, now, holdM
   state.fertigNr = null;
   state.fertigSeit = 0;
   return liveNr != null ? liveNr : vorbereitungNr;
+}
+
+// Wie buildOverlayHtml, entscheidet aber zusätzlich den in der Bahnansicht gezeigten Durchgang
+// (inkl. „Halten" nach dem Fertigwerden, siehe chooseLaneDurchgangNr). Das hängt an der Uhrzeit
+// und kann deshalb nicht aus dem Datenschnappschuss allein kommen — `state` ({ fertigNr,
+// fertigSeit }) hält den Beginn über die Aufrufe hinweg. Diese Funktion ist die Fassung, die
+// OBS sieht; die Livestream-Vorschau im Grafik-Panel benutzt sie deshalb ebenfalls.
+export function overlayHtmlLive(data, state, now = Date.now(), holdMs = 60000) {
+  let laneNr;
+  try {
+    const { wettkampf, games } = data || {};
+    if (wettkampf) {
+      const stats = computeWettkampfStats(wettkampf, games || []);
+      laneNr = chooseLaneDurchgangNr(wettkampf, games || [], stats, state || {}, now, holdMs);
+    }
+  } catch (e) { /* Standard greift in buildOverlayHtml */ }
+  return buildOverlayHtml(data, { laneNr });
 }
 
 // Reine Render-Funktion: aus { wettkampf, games } (wie fetchOverlay sie liefert) den

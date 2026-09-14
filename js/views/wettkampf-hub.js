@@ -725,7 +725,13 @@ export function wettkampfHubView() {
       b.addEventListener('click', () => exportTeamCsv(wettkampf, games, b.dataset.exportTeamCsv)));
     // Ergebnis-Grafik (🖼 im Kopf) — wie die Exporte reine Ausgabe, also auch für Zuschauer.
     const gfx = root.querySelector('[data-act="grafik"]');
-    if (gfx) gfx.addEventListener('click', () => oeffneGrafikMenue({ datenFn: () => aktuelleDaten }));
+    if (gfx) gfx.addEventListener('click', () => oeffneGrafikMenue({
+      datenFn: () => aktuelleDaten,
+      // Der Livestream-Reiter (Logos, Akzentfarben, OBS-URL) sitzt im Grafik-Panel und ist der
+      // EINZIGE Ort dafuer. Er schreibt direkt in den Wettkampf — danach rendert der Hub neu
+      // (die Mannschafts-Uebersicht zeigt die Logos) und spiegelt die Config zum Server.
+      livestream: zuschauer ? null : { onChange: render, onPush: pushWettkampfConfigNow },
+    }));
 
     // Zuschauer-Modus: keine Bearbeitungs-Handler binden; Aufstellungs-Felder sperren.
     if (zuschauer) {
@@ -778,43 +784,6 @@ export function wettkampfHubView() {
       if (!id) { anlageMsg = 'Bitte zuerst eine Anlage auswählen.'; render(); return; }
       zuweiseAnlage(id);
     });
-
-    // Team-Logos: Datei wählen → verkleinern → in die Mannschaft schreiben (lokal + Server).
-    root.querySelectorAll('input[data-logo]').forEach((inp) =>
-      inp.addEventListener('change', async () => {
-        const file = inp.files && inp.files[0];
-        if (!file) return;
-        try {
-          const logo = await fileToLogo(file);
-          setTeamLogo(wettkampf, inp.dataset.logo, logo);
-        } catch (e) { setOverlayMsg('Logo konnte nicht geladen werden.'); }
-      }));
-    root.querySelectorAll('[data-logo-del]').forEach((b) =>
-      b.addEventListener('click', () => setTeamLogo(wettkampf, b.dataset.logoDel, null)));
-
-    // Akzentfarbe (change = wenn der Farbwähler schließt, nicht bei jedem Zwischenwert)
-    // und Logo-Hintergrund (hell/dunkel) pro Mannschaft.
-    root.querySelectorAll('input[data-accent]').forEach((inp) =>
-      inp.addEventListener('change', () => setTeamAccent(wettkampf, inp.dataset.accent, inp.value)));
-    root.querySelectorAll('select[data-logobg]').forEach((sel) =>
-      sel.addEventListener('change', () => setTeamLogoBg(wettkampf, sel.dataset.logobg, sel.value)));
-
-    // Overlay-URL kopieren.
-    const copy = root.querySelector('[data-action="copy-overlay"]');
-    if (copy) copy.addEventListener('click', async () => {
-      const url = overlayUrl(wettkampf);
-      try { await navigator.clipboard.writeText(url); setOverlayMsg('URL kopiert.'); }
-      catch (e) {
-        const inp = root.querySelector('[data-overlay-url]');
-        if (inp) { inp.focus(); inp.select(); }
-        setOverlayMsg('Bitte manuell kopieren (Strg+C).');
-      }
-    });
-  }
-
-  function setOverlayMsg(m) {
-    const el = root.querySelector('[data-overlay-msg]');
-    if (el) el.textContent = m || '';
   }
 
   // ── Mannschafts-Export ─────────────────────────────────────────────────────
@@ -852,38 +821,6 @@ export function wettkampfHubView() {
     }
   }
 
-  // Logo einer Mannschaft setzen/entfernen: lokal speichern, neu rendern und (falls geteilt)
-  // die Wettkampf-Config zum Server spiegeln, damit das Overlay das Logo sieht.
-  function setTeamLogo(wettkampf, teamId, logo) {
-    const m = (wettkampf.mannschaften || []).find((x) => x.id === teamId);
-    if (!m) return;
-    if (logo) m.logo = logo; else delete m.logo;
-    saveWettkampf(wettkampf);
-    render();
-    pushWettkampfConfigNow(wettkampf);
-  }
-
-  // Akzentfarbe einer Mannschaft setzen (Default Gold → Feld weglassen). Wie bei den Logos:
-  // lokal speichern, neu rendern und zum Server spiegeln, damit das Overlay die Farbe sieht.
-  function setTeamAccent(wettkampf, teamId, color) {
-    const m = (wettkampf.mannschaften || []).find((x) => x.id === teamId);
-    if (!m || !/^#[0-9a-fA-F]{6}$/.test(color || '')) return;
-    if (color.toLowerCase() === '#f5a623') delete m.accent; else m.accent = color;
-    saveWettkampf(wettkampf);
-    render();
-    pushWettkampfConfigNow(wettkampf);
-  }
-
-  // Logo-Hintergrund (hell/dunkel) einer Mannschaft setzen. Dunkel = Default → Feld weglassen.
-  function setTeamLogoBg(wettkampf, teamId, mode) {
-    const m = (wettkampf.mannschaften || []).find((x) => x.id === teamId);
-    if (!m) return;
-    if (mode === 'light') m.logoBg = 'light'; else delete m.logoBg;
-    saveWettkampf(wettkampf);
-    render();
-    pushWettkampfConfigNow(wettkampf);
-  }
-
   // Wettkampf-Config (Mannschaften/Logos …) zum Server spiegeln — dieselbe Form wie
   // linkWettkampf (ohne Remote-/Laufzeit-Felder). Nur der Ersteller darf das laut RLS;
   // sonst still fehlschlagen (lokale Anzeige bleibt).
@@ -906,80 +843,6 @@ export function wettkampfHubView() {
     swLiveTimer = setInterval(pollKonflikte, 3000);
   }
   return root;
-}
-
-// Overlay-URL des Wettkampfs (Hash-Route + ZUSCHAUER-Code) — von einer OBS-Browser-Quelle
-// eingebunden. Nutzt bewusst den read-only Zuschauer-Code (nicht den Eingabe-Code): das Overlay
-// macht ohnehin keine Eingaben, und so gibt selbst eine geleakte OBS-URL kein Eingaberecht.
-// Braucht einen geteilten Wettkampf (Code), da das Overlay read-only per Code liest.
-function overlayUrl(wettkampf) {
-  const base = location.origin + location.pathname;
-  return `${base}#/overlay?code=${encodeURIComponent(wettkampf.zuschauerCode || '')}`;
-}
-
-// Bilddatei → verkleinerte Data-URL (PNG, längste Kante ≤ MAX). Klein genug, um im
-// Wettkampf-config_json mitzureisen (kein Storage-Bucket nötig).
-function fileToLogo(file, MAX = 256) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-      const w = Math.round(img.width * scale);
-      const h = Math.round(img.height * scale);
-      const cv = document.createElement('canvas');
-      cv.width = w; cv.height = h;
-      cv.getContext('2d').drawImage(img, 0, 0, w, h);
-      resolve(cv.toDataURL('image/png'));
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Bild konnte nicht geladen werden')); };
-    img.src = url;
-  });
-}
-
-// Overlay-Sektion: Team-Logos hochladen + Overlay-URL für OBS (nur wenn geteilt).
-function overlaySection(wettkampf) {
-  const teams = (wettkampf.mannschaften || []).slice(0, 2);
-  const accentOf = (m) => (/^#[0-9a-fA-F]{6}$/.test(m.accent || '') ? m.accent : '#f5a623');
-  const logos = teams.map((m) => `
-    <div class="ov-logo-field">
-      <div class="ov-logo-prev${m.logoBg === 'light' ? ' is-light' : ''}">${m.logo ? `<img src="${esc(m.logo)}" alt="">` : '<span>🎳</span>'}</div>
-      <div class="ov-logo-meta">
-        <span class="erf-setting-label">${esc(m.name)}</span>
-        <label class="btn-mini ov-logo-btn">${m.logo ? 'Logo ändern' : 'Logo wählen'}
-          <input type="file" accept="image/*" hidden data-logo="${esc(m.id)}">
-        </label>
-        ${m.logo ? `<button type="button" class="link-btn" data-logo-del="${esc(m.id)}">entfernen</button>` : ''}
-        <label class="ov-opt">Akzentfarbe
-          <input type="color" class="ov-accent-input" value="${accentOf(m)}" data-accent="${esc(m.id)}">
-        </label>
-        <label class="ov-opt">Logo-Hintergrund
-          <select class="ov-logobg-input" data-logobg="${esc(m.id)}">
-            <option value="dark"${m.logoBg === 'light' ? '' : ' selected'}>Dunkel</option>
-            <option value="light"${m.logoBg === 'light' ? ' selected' : ''}>Hell</option>
-          </select>
-        </label>
-      </div>
-    </div>`).join('');
-
-  const linked = !!(wettkampf.linked && wettkampf.zuschauerCode);
-  const urlBox = linked
-    ? `<div class="ov-url-row">
-         <input class="ov-url-input" type="text" readonly value="${esc(overlayUrl(wettkampf))}" data-overlay-url aria-label="Overlay-URL">
-         <button type="button" class="btn-mini" data-action="copy-overlay">Kopieren</button>
-         <a class="btn-mini" href="${esc(overlayUrl(wettkampf))}" target="_blank" rel="noopener">Öffnen</a>
-       </div>
-       <p class="field-hint">In OBS als <b>Browser-Quelle</b> (1920×1080) mit dieser URL einbinden — transparenter Hintergrund, zeigt die Ergebnisse live.</p>`
-    : `<p class="field-hint">Zuerst oben <b>Wettkampf teilen</b> — dann erscheint hier die Overlay-URL für OBS.</p>`;
-
-  return `
-    <section class="field kz-overlay">
-      <label class="field-label">OBS-Livestream-Overlay</label>
-      <div class="ov-logo-fields">${logos || '<p class="field-hint">Keine Mannschaften.</p>'}</div>
-      ${urlBox}
-      <p class="join-msg" data-overlay-msg role="status"></p>
-    </section>`;
 }
 
 // Ersetzt die Mehrgeräte-Sektion im Zuschauer-Modus: nur ein Hinweis, keine Codes/Teilen.
@@ -1203,10 +1066,13 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichS
 
   // Kontrollzentrum (Vereins-PC): oben über die ganze Breite die Mannschafts-Übersicht — bei zwei
   // Mannschaften stehen sie sich gegenüber (Zahlen zur Mitte). Darunter der Arbeitsbereich: links
-  // die kompakten Durchgänge, rechts Mehrgeräte/Sportwinner und das OBS-Overlay. Die Spalten-Wrapper
-  // lösen sich auf schmalen Schirmen per CSS (display:contents) auf. Das OBS-Overlay ist eine
-  // Desktop-/Vereins-PC-Funktion (Livestream läuft dort) — daher nur im Kontrollzentrum-Layout.
-  const secOverlay = (kz && !zuschauer) ? overlaySection(wettkampf) : '';
+  // die kompakten Durchgänge, rechts Mehrgeräte/Sportwinner. Die Spalten-Wrapper lösen sich auf
+  // schmalen Schirmen per CSS (display:contents) auf.
+  //
+  // Die Livestream-Einstellungen (Logos, Akzentfarben, OBS-URL) standen hier einmal als eigene
+  // Sektion. Sie sind jetzt AUSSCHLIESSLICH im Grafik-Panel (🖼 in der Kopfzeile, Reiter
+  // „Livestream") — dort stehen sie neben der Overlay-Vorschau, sind auch vom Handy und aus der
+  // laufenden Erfassung erreichbar und machen den Hub nicht doppelt breit.
   // Mannschafts-Export (Wurfprotokolle + Wurfdaten einer ganzen Mannschaft) — in jeder Ansicht
   // sichtbar; im Kontrollzentrum unten in der Seitenspalte, mobil am Seitenende.
   const secExport = exportSection(wettkampf, games);
@@ -1217,7 +1083,7 @@ function template(wettkampf, games, stats, wertung, syncMsg, kz, zuschauer, ichS
   const inner = kz
     ? `${secTeam}${secSwitch}${secAuswertung}
        <div class="kz-main">${secDurchAktiv}</div>
-       <div class="kz-side">${secMehr}${secOverlay}${secExport}</div>`
+       <div class="kz-side">${secMehr}${secExport}</div>`
     : `${secTeam}${secSwitch}${secAuswertung}${secDurchAktiv}${secMehr}${secExport}`;
 
   // Zurück dorthin, wo der Wettkampf gelistet ist: fertige stehen in der Historie

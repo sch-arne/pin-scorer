@@ -1460,7 +1460,20 @@ export function spielLaufendView() {
           .map((g) => (g.id === gameId ? { ...g, erfassung: state } : g)),
       })
       : () => ({ game: { ...game, erfassung: state } });
-    oeffneGrafikMenue({ datenFn });
+    // Der Livestream-Reiter des Panels darf Logos/Akzentfarben aendern (nur im Wettkampf und
+    // nicht als Zuschauer). Danach die Seite neu zeichnen und die Config spiegeln, damit
+    // Overlay und Mitspieler-Geraete dasselbe Logo sehen.
+    const livestream = (game.wettkampfId && !zuschauer) ? {
+      onChange: render,
+      onPush: async (w) => {
+        if (!w || !w.remoteId) return;
+        try {
+          if (!syncMod) syncMod = await import('../backend/sync.js');
+          await syncMod.pushWettkampfConfig(w.remoteId, w);
+        } catch (e) { /* lokal bleibt es gesetzt */ }
+      },
+    } : null;
+    oeffneGrafikMenue({ datenFn, livestream });
   }
 
   function template() {

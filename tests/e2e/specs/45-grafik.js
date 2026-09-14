@@ -176,6 +176,111 @@ suite('Ergebnis-Grafik', () => {
     app.assertClean();
   });
 
+  test('Titel und Untertitel stehen beim Wiederöffnen wieder da', async (app) => {
+    const wk = baueWettkampf();
+    fuelleErgebnisse(wk.games);
+    await starteHub(app, wk);
+    await oeffneGrafik(app);
+    await app.setInput('[data-gfx-text="titel"]', 'Derby-Abend');
+    await app.setInput('[data-gfx-text="untertitel"]', 'Halle 2 · 3. Spieltag');
+    await app.click('[data-gfx="close"]');
+
+    // Zweiter Aufruf: die eigenen Eingaben schlagen den Vorschlag aus dem Modell
+    // (der waere wieder 'E2E-Cup').
+    await oeffneGrafik(app);
+    eq(app.need('[data-gfx-text="titel"]').value, 'Derby-Abend', 'Titel zurückgesetzt');
+    eq(app.need('[data-gfx-text="untertitel"]').value, 'Halle 2 · 3. Spieltag', 'Untertitel zurückgesetzt');
+    // Gemerkt wird JE SPIEL, nicht global — sonst truege der naechste Wettkampf den Namen mit.
+    const topf = (app.store('settings') || {}).grafikTexte || {};
+    eq(Object.keys(topf).length, 1, 'genau ein Eintrag erwartet');
+    includes(Object.keys(topf)[0], 'wk:', 'Schlüssel gehört nicht zum Wettkampf');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Reiter „Livestream": Overlay-Vorschau, Logo-Felder und OBS-Hinweis', async (app) => {
+    const wk = baueWettkampf();
+    fuelleErgebnisse(wk.games);
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    // Standard ist die Grafik; der zweite Reiter zeigt das Overlay.
+    ok(!app.$('.gfx-pane[data-pane="grafik"]').hidden, 'Grafik-Reiter ist nicht offen');
+    ok(app.$('.gfx-pane[data-pane="stream"]').hidden, 'Livestream-Reiter ist vorab offen');
+    await app.click('[data-gfx-tab="stream"]');
+    ok(app.$('.gfx-pane[data-pane="grafik"]').hidden, 'Grafik-Reiter blieb offen');
+    const pane = app.need('.gfx-pane[data-pane="stream"]');
+    ok(pane.querySelector('.gfx-ov-frame'), 'Vorschau-Rahmen fehlt');
+    // In der Vorschau steckt das ECHTE Overlay-Markup (dieselbe Funktion wie in OBS).
+    ok(pane.querySelector('.ov-bar'), 'Overlay-Vorschau ist leer');
+    includes(pane.textContent, 'Heim', 'Mannschaft fehlt in der Vorschau');
+    // Logos/Farben sind hier einstellbar — im Hub gab es das nur im Kontrollzentrum.
+    eq(pane.querySelectorAll('input[data-accent]').length, 2, 'Akzentfarbe je Mannschaft');
+    // Ungeteilter Wettkampf: statt der URL der Hinweis aufs Teilen.
+    ok(!pane.querySelector('[data-overlay-url]'), 'URL trotz ungeteiltem Wettkampf');
+    includes(pane.textContent, 'teilen', 'Hinweis auf das Teilen fehlt');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Akzentfarbe aus dem Livestream-Reiter landet im Wettkampf', async (app) => {
+    const wk = baueWettkampf();
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="stream"]');
+    await app.setInput('.gfx-pane[data-pane="stream"] input[data-accent="m1"]', '#123456');
+    const gespeichert = app.activeWettkampf();
+    eq(gespeichert.mannschaften[0].accent, '#123456', 'Akzentfarbe nicht gespeichert');
+    // Das Panel baut den Reiter danach neu auf — der Wert muss stehen bleiben.
+    eq(app.need('.gfx-pane[data-pane="stream"] input[data-accent="m1"]').value, '#123456',
+      'Farbwähler zeigt den alten Wert');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Standardfarben: ein Tupfer setzt die Akzentfarbe und ist danach markiert', async (app) => {
+    const wk = baueWettkampf();
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="stream"]');
+    const tupfer = (team) => `.gfx-pane[data-pane="stream"] [data-accent-preset="${team}"]`;
+    // Je Mannschaft dieselbe Palette; der Standard (Kegel-Gold) steht vorn und ist markiert,
+    // solange die Mannschaft keine eigene Farbe hat.
+    eq(app.$$(tupfer('m1')).length, app.$$(tupfer('m2')).length, 'Paletten unterschiedlich lang');
+    eq(app.$$(tupfer('m1'))[0].dataset.hex, '#F5A623', 'Standardfarbe steht nicht vorn');
+    ok(app.$$(tupfer('m1'))[0].classList.contains('is-on'), 'Standardfarbe ist nicht markiert');
+
+    await app.click(`${tupfer('m1')}[data-hex="#6FD661"]`);
+    eq(app.activeWettkampf().mannschaften[0].accent, '#6fd661', 'Farbe nicht gespeichert');
+    // Nach dem Neuaufbau: der Tupfer ist markiert und der Farbwähler zeigt denselben Ton.
+    ok(app.need(`${tupfer('m1')}[data-hex="#6FD661"]`).classList.contains('is-on'),
+      'gewählter Tupfer ist nicht markiert');
+    eq(app.need('.gfx-pane[data-pane="stream"] input[data-accent="m1"]').value, '#6fd661',
+      'Farbwähler folgt dem Tupfer nicht');
+    // Die Mitmannschaft bleibt unberührt.
+    eq(app.activeWettkampf().mannschaften[1].accent, undefined, 'fremde Mannschaft mitgefärbt');
+
+    // Zurück auf Kegel-Gold = Default -> das Feld wird wieder weggelassen (alte Stände gleich).
+    await app.click(`${tupfer('m1')}[data-hex="#F5A623"]`);
+    eq(app.activeWettkampf().mannschaften[0].accent, undefined, 'Default wurde gespeichert');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Trainingsspiel ohne Wettkampf: Livestream-Reiter erklärt sich', async (app) => {
+    const game = makeGame({
+      preset: 'schere', saetze: 2, wuerfeProSatz: 4,
+      teilsaetze: ['volle', 'kranz-abraeumen'], bahnen: 2, spieler: ['Anna', 'Bert'],
+    });
+    await app.boot({ hash: '/spiel-laufend', ...MOBIL, storage: { games: [game], 'active-game': game.id } });
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="stream"]');
+    const pane = app.need('.gfx-pane[data-pane="stream"]');
+    ok(!pane.querySelector('.gfx-ov-frame'), 'Vorschau trotz fehlendem Wettkampf');
+    includes(pane.textContent, 'Wettkampf', 'Hinweis auf den fehlenden Wettkampf');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
   test('Menü schließt per ✕ und beim Verlassen der Seite', async (app) => {
     const wk = baueWettkampf();
     await starteHub(app, wk);

@@ -2598,6 +2598,21 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 .ov-opt { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.78rem; color: var(--text-dim); }
 .ov-opt input[type="color"] { width: 40px; height: 26px; padding: 0; border: 1px solid var(--border); border-radius: 6px; background: none; cursor: pointer; }
 .ov-opt select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; font-size: 0.78rem; }
+/* Standard-Akzentfarben zum Antippen (AKZENT_PRESETS in views/livestream-einstellungen.js).
+   Die Farbe steht inline auf dem Knopf — hier nur Form, Rahmen und die Markierung der
+   gewaehlten Farbe. 26px = Fingerbreite genug, ohne die Spalte zu sprengen. */
+.ov-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.ov-swatch {
+  width: 26px; height: 26px; padding: 0; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 6px;
+}
+.ov-swatch:hover { transform: scale(1.08); }
+/* Gewaehlt: heller Ring MIT dunklem Zwischenraum — so bleibt die Markierung auf hellen wie
+   auf dunklen Farbtupfern sichtbar. */
+.ov-swatch.is-on {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3px var(--text);
+}
 .ov-logo-btn { cursor: pointer; text-align: center; }
 .link-btn {
   background: none; border: none; color: var(--text-dim); font-size: 0.8rem;
@@ -2904,6 +2919,32 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 .gfx-actions { display: flex; gap: 10px; margin-top: 16px; }
 .gfx-actions .erf-btn { flex: 1; }
 .gfx-hint { margin: 10px 0 0; font-size: 0.78rem; color: var(--text-dim); font-style: italic; }
+
+/* Reiter des Panels: links die Ergebnis-Grafik, rechts die Livestream-Uebersicht. */
+.gfx-tabs { display: flex; gap: 6px; margin: 10px 0 14px; border-bottom: 1px solid var(--border); }
+.gfx-tab {
+  appearance: none; background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--text-dim); font: inherit; font-weight: 600; font-size: 0.9rem;
+  padding: 8px 12px; cursor: pointer; border-radius: 8px 8px 0 0;
+}
+.gfx-tab:hover { color: var(--text); background: var(--surface-2); }
+.gfx-tab.is-on { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Hinweis unter den Titel-Feldern — schmaler als die Fusszeilen-Hinweise. */
+.gfx-text-hint { margin: 6px 0 2px; }
+
+/* Livestream-Reiter: die 1920x1080-Buehne des Overlays, per transform in den Rahmen
+   skaliert (wie fit() in views/overlay.js). Dunkler Grund = das Kamerabild, das in OBS
+   durchscheint; das Overlay selbst bleibt transparent. */
+.gfx-stream-info { margin: 0 0 8px; font-size: 0.82rem; color: var(--text-dim); }
+.gfx-stream-leer { margin: 6px 0; }
+.gfx-ov-frame {
+  position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: linear-gradient(160deg, #12151c, #1d2430 60%, #141922);
+}
+.gfx-ov-stage { transform-origin: center; }
+.gfx-stream-felder { margin-top: 14px; }
 
 /* Gesperrte Option (z. B. EWP vor Spielende): sichtbar, aber erkennbar aus. */
 .gfx-options .erf-setting-row.is-gesperrt { opacity: 0.55; }
