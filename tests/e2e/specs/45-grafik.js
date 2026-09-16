@@ -176,6 +176,236 @@ suite('Ergebnis-Grafik', () => {
     app.assertClean();
   });
 
+  test('Titel und Untertitel stehen beim Wiederöffnen wieder da', async (app) => {
+    const wk = baueWettkampf();
+    fuelleErgebnisse(wk.games);
+    await starteHub(app, wk);
+    await oeffneGrafik(app);
+    await app.setInput('[data-gfx-text="titel"]', 'Derby-Abend');
+    await app.setInput('[data-gfx-text="untertitel"]', 'Halle 2 · 3. Spieltag');
+    await app.click('[data-gfx="close"]');
+
+    // Zweiter Aufruf: die eigenen Eingaben schlagen den Vorschlag aus dem Modell
+    // (der waere wieder 'E2E-Cup').
+    await oeffneGrafik(app);
+    eq(app.need('[data-gfx-text="titel"]').value, 'Derby-Abend', 'Titel zurückgesetzt');
+    eq(app.need('[data-gfx-text="untertitel"]').value, 'Halle 2 · 3. Spieltag', 'Untertitel zurückgesetzt');
+    // Gemerkt wird JE SPIEL, nicht global — sonst truege der naechste Wettkampf den Namen mit.
+    const topf = (app.store('settings') || {}).grafikTexte || {};
+    eq(Object.keys(topf).length, 1, 'genau ein Eintrag erwartet');
+    includes(Object.keys(topf)[0], 'wk:', 'Schlüssel gehört nicht zum Wettkampf');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Reiter „Livestream": Overlay-Vorschau, Logo-Felder und OBS-Hinweis', async (app) => {
+    const wk = baueWettkampf();
+    fuelleErgebnisse(wk.games);
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    // Standard ist die Grafik; der zweite Reiter zeigt das Overlay.
+    ok(!app.$('.gfx-pane[data-pane="grafik"]').hidden, 'Grafik-Reiter ist nicht offen');
+    ok(app.$('.gfx-pane[data-pane="stream"]').hidden, 'Livestream-Reiter ist vorab offen');
+    await app.click('[data-gfx-tab="stream"]');
+    ok(app.$('.gfx-pane[data-pane="grafik"]').hidden, 'Grafik-Reiter blieb offen');
+    const pane = app.need('.gfx-pane[data-pane="stream"]');
+    ok(pane.querySelector('.gfx-ov-frame'), 'Vorschau-Rahmen fehlt');
+    // In der Vorschau steckt das ECHTE Overlay-Markup (dieselbe Funktion wie in OBS).
+    ok(pane.querySelector('.ov-bar'), 'Overlay-Vorschau ist leer');
+    includes(pane.textContent, 'Heim', 'Mannschaft fehlt in der Vorschau');
+    // Logos/Farben sind hier einstellbar — im Hub gab es das nur im Kontrollzentrum.
+    eq(pane.querySelectorAll('input[data-accent]').length, 2, 'Akzentfarbe je Mannschaft');
+    // Ungeteilter Wettkampf: statt der URL der Hinweis aufs Teilen.
+    ok(!pane.querySelector('[data-overlay-url]'), 'URL trotz ungeteiltem Wettkampf');
+    includes(pane.textContent, 'teilen', 'Hinweis auf das Teilen fehlt');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Akzentfarbe aus dem Livestream-Reiter landet im Wettkampf', async (app) => {
+    const wk = baueWettkampf();
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="stream"]');
+    await app.setInput('.gfx-pane[data-pane="stream"] input[data-accent="m1"]', '#123456');
+    const gespeichert = app.activeWettkampf();
+    eq(gespeichert.mannschaften[0].accent, '#123456', 'Akzentfarbe nicht gespeichert');
+    // Das Panel baut den Reiter danach neu auf — der Wert muss stehen bleiben.
+    eq(app.need('.gfx-pane[data-pane="stream"] input[data-accent="m1"]').value, '#123456',
+      'Farbwähler zeigt den alten Wert');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Standardfarben: ein Tupfer setzt die Akzentfarbe und ist danach markiert', async (app) => {
+    const wk = baueWettkampf();
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="stream"]');
+    const tupfer = (team) => `.gfx-pane[data-pane="stream"] [data-accent-preset="${team}"]`;
+    // Je Mannschaft dieselbe Palette; der Standard (Kegel-Gold) steht vorn und ist markiert,
+    // solange die Mannschaft keine eigene Farbe hat.
+    eq(app.$$(tupfer('m1')).length, app.$$(tupfer('m2')).length, 'Paletten unterschiedlich lang');
+    eq(app.$$(tupfer('m1'))[0].dataset.hex, '#F5A623', 'Standardfarbe steht nicht vorn');
+    ok(app.$$(tupfer('m1'))[0].classList.contains('is-on'), 'Standardfarbe ist nicht markiert');
+
+    await app.click(`${tupfer('m1')}[data-hex="#6FD661"]`);
+    eq(app.activeWettkampf().mannschaften[0].accent, '#6fd661', 'Farbe nicht gespeichert');
+    // Nach dem Neuaufbau: der Tupfer ist markiert und der Farbwähler zeigt denselben Ton.
+    ok(app.need(`${tupfer('m1')}[data-hex="#6FD661"]`).classList.contains('is-on'),
+      'gewählter Tupfer ist nicht markiert');
+    eq(app.need('.gfx-pane[data-pane="stream"] input[data-accent="m1"]').value, '#6fd661',
+      'Farbwähler folgt dem Tupfer nicht');
+    // Die Mitmannschaft bleibt unberührt.
+    eq(app.activeWettkampf().mannschaften[1].accent, undefined, 'fremde Mannschaft mitgefärbt');
+
+    // Zurück auf Kegel-Gold = Default -> das Feld wird wieder weggelassen (alte Stände gleich).
+    await app.click(`${tupfer('m1')}[data-hex="#F5A623"]`);
+    eq(app.activeWettkampf().mannschaften[0].accent, undefined, 'Default wurde gespeichert');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Reiter „Beamer": ausführliche Ergebnistafel mit Satz- und Abräum-Spalten', async (app) => {
+    const wk = baueWettkampf();
+    fuelleErgebnisse(wk.games);
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    ok(app.$('.gfx-pane[data-pane="beamer"]').hidden, 'Beamer-Reiter ist vorab offen');
+    await app.click('[data-gfx-tab="beamer"]');
+    ok(app.$('.gfx-pane[data-pane="grafik"]').hidden, 'Grafik-Reiter blieb offen');
+    ok(app.$('.gfx-pane[data-pane="stream"]').hidden, 'Livestream-Reiter blieb offen');
+    const pane = app.need('.gfx-pane[data-pane="beamer"]');
+    ok(pane.querySelector('.gfx-bm-frame'), 'Vorschau-Rahmen fehlt');
+    // In der Vorschau steckt die ECHTE Tafel (dieselbe Funktion wie unter #/beamer).
+    ok(pane.querySelector('.bm-page'), 'Beamer-Vorschau ist leer');
+    // Eine Zeile je Spieler beider Mannschaften (2 x 4).
+    eq(pane.querySelectorAll('.bm-row').length, 8, 'Spielerzeilen');
+    // Standard ist die Bahn-Ansicht -> eine Überschrift über dem Gassen-Block, darunter die
+    // blanken Nummern (die brechen nie um), innen das Gesamt mit der V/A-Aufteilung.
+    eq([...pane.querySelectorAll('.bm-table-l .bm-grp-h')].map((th) => th.textContent).join(' · '),
+      'Bahnen · Gesamt', 'Überschriften der Blöcke');
+    eq([...pane.querySelectorAll('.bm-table-l .bm-nr-h')].map((th) => th.textContent).join(' '),
+      '1 2 3 4', 'Bahn-Nummern');
+    // Beim Gast bleiben die BAHNEN aufsteigend (dieselbe Bahn im Saal), alles andere spiegelt.
+    eq([...pane.querySelectorAll('.bm-table-r .bm-nr-h')].map((th) => th.textContent).join(' '),
+      '1 2 3 4', 'Bahnen laufen rechts rückwärts');
+    eq(pane.querySelectorAll('.bm-table-l .bm-v-h').length, 1, 'V/A nur in der Gesamt-Gruppe');
+    ok(pane.querySelector('.bm-table-l td.bm-v.is-ges'), 'Volle im Gesamt fehlen');
+    ok(pane.querySelector('.bm-table-l td.bm-a.is-ges'), 'Abräumen im Gesamt fehlt');
+    ok(!pane.querySelector('.bm-table-l td.bm-v:not(.is-ges)'), 'Volle stehen wieder je Gasse');
+    // Ohne eingestellte Ueberschrift traegt die Tafel gar keine — und der Wettkampf-Satz im
+    // Kopfband ist ebenfalls weg.
+    ok(!pane.querySelector('.bm-titel'), 'Ueberschrift ohne Eingabe');
+    ok(!pane.querySelector('.bm-wk'), 'der Wettkampf-Satz steht noch im Kopfband');
+    // Unten links das Datum, unten rechts der Spielort.
+    eq(pane.querySelector('.bm-fuss-l').textContent, '02.09.2026', 'Datum unten links');
+    eq(pane.querySelector('.bm-fuss-r').textContent, 'Testhalle', 'Spielort unten rechts');
+    // Ergebnisse zur Mitte: rechts steht der Name außen (gespiegelt wie im Livestream).
+    // Nur die ERSTE Kopfzeile — die zweite trägt das V/A/Ges jeder Gruppe.
+    const rechts = [...pane.querySelectorAll('.bm-table-r thead tr')[0].children].map((th) => th.className);
+    eq(rechts[rechts.length - 1], 'bm-nm-h', 'rechte Tabelle ist nicht gespiegelt');
+    eq(rechts[0], 'bm-ewp-h', 'rechts zeigt die EWP-Spalte nicht zur Mitte');
+    // Durchgangs-Anzeige und Bestenliste sind bewusst weg.
+    ok(!pane.querySelector('.bm-dg, .bm-dg-h, .bm-dg-chip'), 'Durchgangs-Anzeige ist noch da');
+    ok(!pane.querySelector('.bm-foot, .bm-best'), 'Bestenliste ist noch da');
+    // Vollbild geht auf DIESEM Gerät, ganz ohne Teilen; die URL kommt erst mit dem Teilen.
+    ok(pane.querySelector('[data-gfx="beamer-voll"]'), 'Vollbild-Knopf fehlt');
+    ok(!pane.querySelector('[data-beamer-url]'), 'URL trotz ungeteiltem Wettkampf');
+    includes(pane.textContent, 'teilen', 'Hinweis auf das Teilen fehlt');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Geteilter Wettkampf: Beamer-URL zeigt auf #/beamer mit dem Zuschauer-Code', async (app) => {
+    const wk = baueWettkampf();
+    wk.wettkampf.linked = true;
+    wk.wettkampf.zuschauerCode = 'ZS12';
+    wk.wettkampf.code = 'EINGABE';
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="beamer"]');
+    const url = app.need('[data-beamer-url]').value;
+    includes(url, '#/beamer?code=ZS12', 'falsche Beamer-URL');
+    // Spalten und Darstellung stellt das Gerät am Beamer selbst ein (Bedienleiste der Tafel) —
+    // die URL bleibt kurz genug zum Abtippen.
+    ok(!url.includes('spalten') && !url.includes('thema'), 'Einstellungen hängen noch in der URL');
+    // Der EINGABE-Code darf nicht auf die Leinwand-URL — die Tafel liest nur mit.
+    ok(!url.includes('EINGABE'), 'Eingabe-Code in der Beamer-URL');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Beamer-Einstellung: Spalten nach Bahnen oder nach Sätzen', async (app) => {
+    const wk = baueWettkampf();
+    fuelleErgebnisse(wk.games);
+    wk.wettkampf.linked = true;
+    wk.wettkampf.zuschauerCode = 'ZS12';
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="beamer"]');
+    const pane = () => app.need('.gfx-pane[data-pane="beamer"]');
+    const koepfe = () => [...pane().querySelectorAll('.bm-table-l .bm-grp-h')].map((th) => th.textContent).join(',')
+      + ' [' + [...pane().querySelectorAll('.bm-table-l .bm-nr-h')].map((th) => th.textContent).join(' ') + ']';
+    const schalter = (id, wert) => `[data-bm="${id}"][data-wert="${wert}"]`;
+    // Standard: Bahnen (vier bespielte Bahnen) und dunkle Darstellung.
+    eq(koepfe(), 'Bahnen,Gesamt [1 2 3 4]', 'Standard ist nicht die Bahn-Ansicht');
+    ok(app.need(schalter('spalten', 'bahnen')).classList.contains('is-on'), 'Schalter zeigt Bahnen nicht an');
+    ok(!pane().querySelector('.bm-page').classList.contains('is-hell'), 'Standard ist nicht dunkel');
+
+    // Umschalten auf Sätze: der Wettkampf hat 2 Sätze -> zwei Gruppen plus Gesamt.
+    await app.click(schalter('spalten', 'saetze'));
+    eq(koepfe(), 'Sätze,Gesamt [1 2]', 'nach dem Umschalten keine Satz-Spalten');
+    // Sätze sind eine Reihenfolge, keine Bahn -> beim Gast laufen sie rückwärts.
+    eq([...pane().querySelectorAll('.bm-table-r .bm-nr-h')].map((th) => th.textContent).join(' '),
+      '2 1', 'Sätze sind rechts nicht gespiegelt');
+    ok(app.need(schalter('spalten', 'saetze')).classList.contains('is-on'), 'Schalter ist nicht umgesprungen');
+
+    // Heller Modus für helle Säle — Tafel und Rahmen ziehen mit.
+    await app.click(schalter('thema', 'hell'));
+    ok(pane().querySelector('.bm-page').classList.contains('is-hell'), 'Tafel bleibt dunkel');
+    ok(pane().querySelector('.gfx-bm-frame').classList.contains('is-hell'), 'Rahmen bleibt dunkel');
+    // Ueberschrift: freies Feld. Ohne Eingabe traegt die Tafel keine Ueberschrift.
+    ok(!pane().querySelector('.bm-titel'), 'Ueberschrift ohne Eingabe');
+    await app.setInput('[data-bm-titel]', 'Stadtpokal 2026');
+    eq(pane().querySelector('.bm-titel').textContent, 'Stadtpokal 2026', 'Ueberschrift nicht in der Tafel');
+
+    // Gespeichert wird AM WETTKAMPF (nicht am Geraet): nur so sieht auch der zweite Rechner
+    // am Beamer die Umstellung — er liest den Wettkampf und hat keine eigene Oberflaeche.
+    eq((app.activeWettkampf() || {}).beamer.spalten, 'saetze', 'Spaltenwahl nicht am Wettkampf');
+    eq((app.activeWettkampf() || {}).beamer.thema, 'hell', 'Darstellung nicht am Wettkampf');
+    eq((app.activeWettkampf() || {}).beamer.titel, 'Stadtpokal 2026', 'Ueberschrift nicht am Wettkampf');
+
+    // Nach dem Schließen und erneuten Öffnen stehen beide Wahlen noch.
+    await app.click('[data-gfx="close"]');
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="beamer"]');
+    eq(koepfe(), 'Sätze,Gesamt [1 2]', 'Einstellung beim Öffnen zurückgesetzt');
+    ok(pane().querySelector('.bm-page').classList.contains('is-hell'), 'Darstellung beim Öffnen zurückgesetzt');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Trainingsspiel ohne Wettkampf: Livestream- und Beamer-Reiter erklären sich', async (app) => {
+    const game = makeGame({
+      preset: 'schere', saetze: 2, wuerfeProSatz: 4,
+      teilsaetze: ['volle', 'kranz-abraeumen'], bahnen: 2, spieler: ['Anna', 'Bert'],
+    });
+    await app.boot({ hash: '/spiel-laufend', ...MOBIL, storage: { games: [game], 'active-game': game.id } });
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="stream"]');
+    const pane = app.need('.gfx-pane[data-pane="stream"]');
+    ok(!pane.querySelector('.gfx-ov-frame'), 'Vorschau trotz fehlendem Wettkampf');
+    includes(pane.textContent, 'Wettkampf', 'Hinweis auf den fehlenden Wettkampf');
+    // Dasselbe für die Beamer-Tafel: ohne Wettkampf gibt es nichts anzuzeigen.
+    await app.click('[data-gfx-tab="beamer"]');
+    const bm = app.need('.gfx-pane[data-pane="beamer"]');
+    ok(!bm.querySelector('.gfx-bm-frame'), 'Beamer-Vorschau trotz fehlendem Wettkampf');
+    includes(bm.textContent, 'Wettkampf', 'Hinweis auf den fehlenden Wettkampf');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
   test('Menü schließt per ✕ und beim Verlassen der Seite', async (app) => {
     const wk = baueWettkampf();
     await starteHub(app, wk);

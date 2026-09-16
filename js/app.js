@@ -17,6 +17,7 @@ import { anlagenView } from './views/anlagen.js';
 import { importSportwinnerView } from './views/import-sportwinner.js';
 import { importSwWebView } from './views/import-sw-web.js';
 import { overlayView } from './views/overlay.js';
+import { beamerView } from './views/beamer.js';
 
 register('/menu', menuView);
 register('/neues-spiel', neuesSpielView);
@@ -39,6 +40,9 @@ register('/import/sportwinner', importSportwinnerView);
 register('/import/sportwinner-web', importSwWebView);
 // OBS-Livestream-Overlay (transparent, per Beitritts-Code): #/overlay?code=XXXX
 register('/overlay', overlayView);
+// Beamer-Ergebnistafel fuer die Leinwand im Saal: #/beamer?code=XXXX (zweites Geraet am
+// Beamer; am eigenen Geraet geht es ohne URL ueber den Vollbild-Knopf im Grafik-Panel).
+register('/beamer', beamerView);
 
 start({ mount: '#app', notFound: menuView });
 

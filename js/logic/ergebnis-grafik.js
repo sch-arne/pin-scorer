@@ -173,6 +173,7 @@ function duellModell(wettkampf, games) {
   });
   return {
     modus: 'duell',
+    id: modellId({ wettkampf }),
     ...wettkampfKopf(wettkampf),
     fertig,
     mitEwp,
@@ -188,6 +189,7 @@ function wettkampfListeModell(wettkampf, games) {
   const { stats } = wettkampfAuswertung(wettkampf, games);
   return {
     modus: 'liste',
+    id: modellId({ wettkampf }),
     ...wettkampfKopf(wettkampf),
     fertig: wettkampfBaseStatus(wettkampf, games) === 'beendet',
     mitEwp: false,
@@ -207,6 +209,7 @@ function spielModell(game) {
     : [];
   return {
     modus: 'liste',
+    id: modellId({ game }),
     titel: 'Ergebnis',
     untertitel: [datumText(game && game.createdAt), c.anlageName || ''].filter(Boolean).join(' · '),
     datumIso: (game && game.createdAt) || null,
@@ -221,10 +224,20 @@ function spielModell(game) {
 
 function leeresModell() {
   return {
-    modus: 'liste', titel: 'Ergebnis', untertitel: '', datumIso: null,
+    modus: 'liste', id: '', titel: 'Ergebnis', untertitel: '', datumIso: null,
     fertig: false, mitEwp: false, mitSpielpunkte: false, hatLogos: false,
     teams: [], zeilen: [],
   };
+}
+
+// Stabiler Schluessel der Quelle — unter ihm merkt sich das Panel Titel/Untertitel
+// (siehe grafikTexte()). Ein Wettkampf und ein Einzelspiel koennen dieselbe id tragen,
+// deshalb der Praefix.
+export function modellId(quelle) {
+  const q = quelle || {};
+  if (q.wettkampf && q.wettkampf.id) return 'wk:' + q.wettkampf.id;
+  if (q.game && q.game.id) return 'sp:' + q.game.id;
+  return '';
 }
 
 // Rohdaten -> Grafik-Modell.
@@ -246,4 +259,52 @@ export function grafikModell(quelle) {
 export function grafikDateiname(modell) {
   const m = modell || {};
   return ['Ergebnis', dateiSicher(m.titel) || 'Spiel', datumTeil(m.datumIso)].join('_') + '.png';
+}
+
+// ── Gemerkte Titel/Untertitel ────────────────────────────────────────────────
+// Titel und Untertitel gehoeren zum konkreten Spiel, nicht zu den Grafik-Optionen — ein
+// global gemerkter Titel wuerde beim naechsten Wettkampf den falschen Namen vorschlagen.
+// Deshalb werden sie JE QUELLE (modellId) gemerkt: dasselbe Spiel wieder geoeffnet zeigt die
+// eigenen Eingaben, ein anderes den Vorschlag aus dem Modell.
+//
+// Abgelegt unter settings.grafikTexte = { <id>: { titel, untertitel, ts } }. Die Liste wird
+// auf GRAFIK_TEXTE_MAX Eintraege begrenzt (aelteste fliegen raus), damit der Speicher nicht
+// mit jedem je geoeffneten Spiel waechst.
+export const GRAFIK_TEXTE_MAX = 30;
+
+function texteTopf(settings) {
+  const roh = settings && settings.grafikTexte;
+  return roh && typeof roh === 'object' ? roh : {};
+}
+
+// Gemerkte Texte einer Quelle — oder null, wenn dort noch nichts eingegeben wurde.
+// Der Aufrufer faellt dann auf die Vorschlaege des Modells zurueck.
+export function grafikTexte(settings, id) {
+  const e = id ? texteTopf(settings)[id] : null;
+  if (!e || typeof e !== 'object') return null;
+  return {
+    titel: typeof e.titel === 'string' ? e.titel : '',
+    untertitel: typeof e.untertitel === 'string' ? e.untertitel : '',
+  };
+}
+
+// Neuen Topf mit den Texten dieser Quelle bauen (rein, ohne Speicherzugriff — der Aufrufer
+// gibt ihn an saveSettings). `now` nur fuer den Test.
+export function merkeGrafikTexte(settings, id, texte, now = Date.now()) {
+  const alt = texteTopf(settings);
+  if (!id) return { ...alt };
+  const neu = {
+    ...alt,
+    [id]: {
+      titel: String((texte && texte.titel) || ''),
+      untertitel: String((texte && texte.untertitel) || ''),
+      ts: now,
+    },
+  };
+  const ids = Object.keys(neu);
+  if (ids.length <= GRAFIK_TEXTE_MAX) return neu;
+  // Aelteste zuerst wegwerfen; Eintraege ohne Zeitstempel (Altbestand) gelten als aeltest.
+  ids.sort((a, b) => ((neu[a] && neu[a].ts) || 0) - ((neu[b] && neu[b].ts) || 0));
+  ids.slice(0, ids.length - GRAFIK_TEXTE_MAX).forEach((k) => { delete neu[k]; });
+  return neu;
 }
