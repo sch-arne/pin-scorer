@@ -2869,6 +2869,255 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 .hn-table tr.is-aktiv th, .hn-table tr.is-aktiv td { background: var(--surface-2); }
 .hn-actions { flex-wrap: wrap; margin-top: 4px; }
 
+/* ============================================================================
+   Beamer-Ergebnistafel (#/beamer?code=… und die Vorschau im Grafik-Panel) —
+   deckende 1920×1080-Bühne für die Leinwand im Saal.
+   Anders als das OBS-Overlay liegt hier nichts über einem Kamerabild: die Fläche
+   gehört uns ganz, deshalb der ganze Spielbericht statt eines schmalen Bandes.
+   Die Tabellen sind wie im Overlay gespiegelt — Name außen, Zahlen innen —, damit
+   die Ergebnisse beider Mannschaften in der Bildmitte nebeneinander liegen.
+
+   Farben kommen aus Variablen auf .bm-page, damit die Tafel dunkel ODER hell laufen
+   kann (Einstellung im Beamer-Reiter): dunkel wie die App, hell für Säle, in denen
+   ein dunkles Bild vom Beamer grau an der Wand ankommt.
+
+   BEWUSST OHNE AKZENTFARBEN der Mannschaften (anders als Overlay und Ergebnis-Grafik):
+   auf der Leinwand entscheidet Lesbarkeit, und ein Vereinston trifft mal den dunklen, mal
+   den hellen Grund daneben. Hervorgehoben wird über Helligkeit und Gewicht — `--bm-betont`
+   ist in beiden Themen der kontraststärkste Ton, den die Tafel hat. Die Vereinsfarben
+   bleiben da, wo sie tragen: im Logo.
+
+   EINE Farbe gibt es doch, und zwar für eine feste Bedeutung statt für eine Mannschaft:
+   `--bm-gold` trägt das Gesamtergebnis. Dunkel ist das das Kegel-Gold der App; hell wäre
+   dasselbe Gold auf Weiß nicht mehr zu lesen (rund 2:1), deshalb steht dort sein dunkler
+   Verwandter — ein tiefes Bernstein, das denselben Ton meint: 8,2:1 auf der weißen Fläche
+   und 6,8:1 in der etwas dunkleren Summenzeile.
+   ========================================================================== */
+.bm-root { position: fixed; inset: 0; overflow: hidden; background: #0d1016; }
+.bm-root.is-hell { background: #dfe4ee; }
+.bm-stage {
+  position: absolute; top: 50%; left: 50%;
+  width: 1920px; height: 1080px;
+  transform: translate(-50%, -50%);
+  color: #eef1f6;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+.bm-wait {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(26, 30, 39, 0.92); color: #eef1f6; padding: 18px 34px;
+  border: 1px solid #2c3340; border-radius: 14px; font-size: 30px; font-weight: 600; white-space: nowrap;
+}
+.bm-page {
+  --bm-grund-1: #12151c;
+  --bm-grund-2: #1b212c;
+  --bm-flaeche: rgba(26, 30, 39, 0.92);
+  --bm-kopf: #232834;
+  --bm-rand: #2c3340;
+  --bm-text: #eef1f6;
+  --bm-betont: #ffffff;
+  --bm-gold: #f5a623;
+  --bm-dim: #9aa4b4;
+  --bm-linie: rgba(255, 255, 255, 0.06);
+  --bm-live: rgba(255, 255, 255, 0.07);
+  --bm-schatten: 0 6px 22px rgba(0, 0, 0, 0.35);
+  box-sizing: border-box; width: 1920px; height: 1080px; padding: 20px 18px;
+  display: flex; flex-direction: column; gap: 16px;
+  background: linear-gradient(160deg, var(--bm-grund-1), var(--bm-grund-2) 55%, var(--bm-grund-1));
+  color: var(--bm-text);
+}
+/* Heller Modus für helle Säle: dieselben Rollen, nur umgedreht. Weil die Tafel ohne
+   Akzentfarben auskommt, genügt hier das Tauschen der Töne — Sonderregeln je Farbe (früher
+   ein color-mix je Akzent) braucht es nicht mehr. */
+.bm-page.is-hell {
+  --bm-grund-1: #e9edf4;
+  --bm-grund-2: #ffffff;
+  --bm-flaeche: #ffffff;
+  --bm-kopf: #e4e9f2;
+  --bm-rand: #b9c3d4;
+  --bm-text: #161a22;
+  --bm-betont: #000000;
+  --bm-gold: #7b3f00;
+  --bm-dim: #596373;
+  --bm-linie: rgba(0, 0, 0, 0.09);
+  --bm-live: rgba(0, 0, 0, 0.05);
+  --bm-schatten: 0 4px 16px rgba(20, 30, 50, 0.12);
+}
+
+/* Überschrift über allem — im Reiter „Beamer" frei einstellbar, sonst der Name des
+   Wettkampfs. Sie ersetzt die frühere Zeile im Kopfband (Name + Stand der Durchgänge). */
+.bm-titel {
+  flex: 0 0 auto; margin: 0; text-align: center;
+  font-size: 44px; font-weight: 800; letter-spacing: 0.5px; line-height: 1.1;
+  color: var(--bm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Fußleiste: links das Datum, rechts der Spielort. Ruhig am Rand — sie beantwortet die
+   Frage „welches Spiel ist das?", ohne der Tafel Platz zu nehmen. */
+.bm-fuss {
+  flex: 0 0 auto; display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline;
+  gap: 16px; padding: 0 8px; font-size: 24px; font-weight: 600; color: var(--bm-dim);
+}
+.bm-fuss-r { text-align: right; }
+/* Der Hinweis vor dem ersten Wurf sitzt in der Mitte DIESER Leiste — er bekommt keine eigene
+   Zeile, sonst ruckte die ganze Tafel, sobald er verschwindet. */
+.bm-fuss-m { font-weight: 500; font-style: italic; text-align: center; }
+
+/* Kopfband: außen Logo + Mannschaftsname, in der Mitte der Spielstand. */
+.bm-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 24px;
+  background: var(--bm-flaeche); border: 1px solid var(--bm-rand); border-radius: 20px;
+  padding: 10px 24px; box-shadow: var(--bm-schatten);
+}
+.bm-head-team { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 18px; }
+.bm-head-r { justify-content: flex-end; }
+.bm-head-nm { font-size: 36px; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-logo {
+  flex: 0 0 auto; width: 84px; height: 84px; display: flex; align-items: center; justify-content: center;
+  background: var(--bm-kopf); border: 3px solid var(--bm-rand); border-radius: 16px;
+  font-size: 38px;
+}
+.bm-logo.is-light { background: #ffffff; }
+.bm-logo img { max-width: 68px; max-height: 68px; object-fit: contain; }
+.bm-head-mitte { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.bm-score { display: flex; align-items: baseline; gap: 18px; line-height: 1; }
+.bm-score-v { font-size: 58px; font-weight: 900; color: var(--bm-betont); }
+.bm-score-x { font-size: 40px; font-weight: 700; color: var(--bm-dim); }
+.bm-score-lbl { margin-top: 4px; font-size: 15px; text-transform: uppercase; letter-spacing: 1.2px; color: var(--bm-dim); }
+
+/* Zwei gleich breite Mannschaftsspalten — links Heim, rechts Gast wie im Kopfband.
+   Eine eigene Überschrift je Spalte gibt es NICHT mehr: der Mannschaftsname stand damit
+   zweimal auf der Leinwand (groß im Kopfband, klein darunter) und kostete jede Tabelle eine
+   Zeile Höhe. Welche Tabelle zu welcher Mannschaft gehört, sagt das Logo darüber. */
+.bm-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.bm-team { min-width: 0; display: flex; flex-direction: column; }
+
+/* Die Tabelle fuellt die Hoehe ihrer Spalte: bei sechs Spielern stehen die Zeilen dann
+   luftig statt als schmales Band unter dem Kopfband — auf einer Leinwand zaehlt jede Zeilenhoehe. */
+.bm-table {
+  flex: 1 1 auto; width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed;
+  background: var(--bm-flaeche); border: 1px solid var(--bm-rand); border-radius: 18px; overflow: hidden;
+  box-shadow: var(--bm-schatten);
+}
+.bm-table th, .bm-table td {
+  padding: 10px 6px; font-size: 30px; text-align: center; line-height: 1.15;
+  border-bottom: 1px solid var(--bm-linie); vertical-align: middle;
+}
+/* WOHIN GEHT DER ÜBRIGE PLATZ? Die Tabelle ist höher als ihre Zeilen zusammen (sie füllt
+   ihre Spalte), und der Überschuss gehört den SPIELERZEILEN — dort steht, was im Saal
+   gelesen wird. Verteilt wird er aber vom Browser, und der gibt ihn den Zeilen OHNE feste
+   Höhe. Solange die Spielerzeilen 74px fest hatten und der Kopf frei war, war genau das
+   verkehrt herum: Firefox schob den ganzen Überschuss in die beiden Kopfzeilen (Kopf ~175px
+   bei 74px Spielerzeile), Chrome dagegen in die Spielerzeilen — dieselbe Tafel sah je nach
+   Browser völlig anders aus.
+   Deshalb jetzt umgekehrt: Kopf und Summenzeile bekommen eine feste Höhe, die Spielerzeilen
+   keine. So bleibt in beiden Browsern nur EINE Sorte freier Zeilen übrig — die Spielerzeilen. */
+/* `height: 1px` heißt nicht „1px hoch": eine Tabellenzeile wird nie niedriger als ihr Inhalt.
+   Es heißt „so hoch wie nötig und keinen Pixel mehr" — und nimmt den Kopf aus der Verteilung. */
+.bm-table thead tr { height: 1px; }
+/* ALLE Spielerzeilen sind gleich hoch — und zwar unabhängig davon, ob schon Ergebnisse
+   dastehen und wie lang die Namen sind. Sonst wanderten die Zeilen beim ersten Wurf nach
+   unten, und die Zeilen der beiden Mannschaften lägen sich nicht mehr gegenüber (die
+   Namenslängen unterscheiden sich ja). Ihre Grundhöhe (~74px) kommt aus dem Namensblock:
+   der ist immer zwei Zeilen hoch (siehe .bm-nm-t), damit sind alle Zeilen von Haus aus gleich
+   hoch — und was der Browser draufgibt, gibt er auf gleich hohe Zeilen gleich. */
+.bm-table tbody tr { height: auto; }
+/* Auch die Summenzeile bekommt ihre Höhe fest: leer ist sie sonst niedriger als mit Zahlen
+   und schenkt den Spielerzeilen ein paar Pixel — dann ruckte die Tafel beim ersten Wurf. */
+.bm-table tfoot tr { height: 56px; }
+/* Der Kopf ist Beschriftung, keine Anzeige: lesbar ja, aber jeder Pixel, den er nicht
+   braucht, gehört den Spielerzeilen darunter. Gespart wird deshalb am LEERRAUM (Polster und
+   Zeilenabstand), nicht an der Schriftgröße — beide Kopfzeilen zusammen kommen so mit gut
+   der Hälfte der früheren Höhe aus. */
+.bm-table thead th {
+  background: var(--bm-kopf); color: var(--bm-text); font-size: 19px; font-weight: 700;
+  padding: 1px 6px; line-height: 1.15;
+  text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--bm-rand);
+}
+/* Zweite Kopfzeile. Die Gassen-/Satz-NUMMERN sind das, wonach im Saal gefragt wird („was
+   steht auf der 4?") — sie stehen so groß wie die Überschrift darüber. V · A · Ges des
+   Gesamtergebnisses dagegen leise. */
+.bm-table thead .bm-nr-h { font-size: 19px; }
+.bm-table thead .bm-v-h, .bm-table thead .bm-a-h, .bm-table thead .bm-g-h {
+  font-size: 15px; color: var(--bm-dim); letter-spacing: 0.4px;
+}
+.bm-table tbody tr:last-child td { border-bottom: none; }
+
+/* Spaltenbreiten (colgroup). Je Gasse steht nur noch eine Zahl (siehe beamer.js), deshalb
+   sitzen die Spalten jetzt breit statt gedrängt: rund 88px je Gasse tragen auch die
+   vierstellige Mannschaftssumme der Fußzeile, das Gesamtergebnis bekommt die breiteste
+   Spalte, und die Namensspalte behält den Rest (~280px) — genug für „Müller-Lüdenscheidt"
+   in einer Zeile. Die halbe Leinwand hat ~942px zu verteilen. */
+.bm-c-g { width: 88px; }
+.bm-c-gv { width: 72px; }
+.bm-c-ga { width: 66px; }
+.bm-c-gg { width: 104px; }
+.bm-c-ewp { width: 66px; }
+
+/* Namen werden NICHT gekürzt: ein „Schierbaum, A…" auf der Leinwand hilft niemandem. Die
+   Spalte nimmt ohnehin nur den Rest der Breite, deshalb darf der Name umbrechen (und ein
+   überlanger Einzelname notfalls im Wort) statt zu verschwinden.
+   23px gegen die 30px der Zahlen: so passt auch ein „Oberkampfhausen" in die Restbreite der
+   Spalte (~280px) und bricht am Wort statt mitten hinein — gelesen werden im Saal ohnehin die
+   Holzzahlen, der Name muss nur zuzuordnen sein. */
+.bm-nm, .bm-nm-h { font-weight: 700; padding-left: 12px; }
+/* Die Ausrichtung MUSS je Seite gesetzt werden: `.bm-table td` (zentriert) ist spezifischer
+   als ein blankes `.bm-nm`, und `.bm-table-r .bm-nm` ist es wiederum als jenes. Stand die
+   Regel nur für die Gastseite da, rutschten die Heimnamen in die Mitte. */
+.bm-table-l .bm-nm, .bm-table-l .bm-nm-h { text-align: left; }
+.bm-table tbody td.bm-nm {
+  font-size: 23px; line-height: 1.15; white-space: normal; overflow-wrap: anywhere; hyphens: auto;
+}
+/* Höchstens zwei Zeilen — was darüber hinausginge, würde die Zeile höher machen als alle
+   anderen. Zwei Zeilen tragen auch „Friedrich-Wilhelm Brinkschulte". */
+.bm-nm-t { display: block; max-height: 2.3em; overflow: hidden; }
+/* In den Spielerzeilen sind es IMMER zwei Zeilen Platz, auch bei „Ada Li": die Zeilenhöhe
+   hängt jetzt am Namensblock (siehe .bm-table tbody tr), und nur wenn der überall gleich hoch
+   ist, liegen sich die Zeilen der beiden Mannschaften gegenüber. Der Name steht darin
+   mittig — als Flex-Box, sonst klebte ein kurzer Name oben am Zweizeiler. */
+.bm-table tbody .bm-nm-t { display: flex; align-items: center; height: 2.3em; max-height: none; }
+.bm-table-l tbody .bm-nm-t { justify-content: flex-start; }
+.bm-table-r tbody .bm-nm-t { justify-content: flex-end; }
+/* Gespiegelte Seite: der Name steht rechts außen und wird auch dorthin ausgerichtet. */
+.bm-table-r .bm-nm, .bm-table-r .bm-nm-h { text-align: right; padding-left: 4px; padding-right: 12px; }
+/* Volle und Abräumen stehen leiser als die Summe daneben — die Summe ist die Zahl, die zählt.
+   Es gibt sie nur noch in der Gesamt-Gruppe. */
+.bm-table td.bm-v, .bm-table td.bm-a { font-size: 24px; color: var(--bm-dim); }
+.bm-table td.bm-wert { font-weight: 700; }
+/* Die Tafel besteht aus vier Blöcken: Name | Gassen | Gesamt | EWP. Damit sie nicht als eine
+   Zahlenwand verschwimmen, steht zwischen ihnen eine Linie. Name und EWP sitzen außen bzw.
+   innen, ihre Kante ist deshalb je Seite eine andere — spiegelverkehrt wie die ganze Tabelle. */
+.bm-table-l .bm-nm, .bm-table-l .bm-nm-h { border-right: 3px solid var(--bm-rand); }
+.bm-table-r .bm-nm, .bm-table-r .bm-nm-h { border-left: 3px solid var(--bm-rand); }
+.bm-table-l .bm-ewp, .bm-table-l .bm-ewp-h { border-left: 3px solid var(--bm-rand); }
+.bm-table-r .bm-ewp, .bm-table-r .bm-ewp-h { border-right: 3px solid var(--bm-rand); }
+
+/* Gesamt-Gruppe vom Gassen-Block abtrennen — sonst liest sich die Gesamtsumme wie eine
+   weitere Bahn. Die Linie sitzt auf der KANTE zwischen beiden Blöcken, und die ist je Seite
+   eine andere: links folgt Gesamt auf die Gassen (erste is-ges-Zelle), rechts steht Gesamt
+   davor (erste Zelle NACH der Gruppe). `A + B` trifft genau diese Nahtstelle. */
+.bm-table-l td:not(.is-ges) + td.is-ges,
+.bm-table-l th:not(.is-ges) + th.is-ges,
+.bm-table-r td.is-ges + td:not(.is-ges),
+.bm-table-r th.is-ges + th:not(.is-ges) { border-left: 3px solid var(--bm-rand); }
+
+/* Gesamt-Gruppe: die Spalte, auf die im Saal gezeigt wird. */
+.bm-table td.bm-wert.is-ges { font-weight: 900; color: var(--bm-gold); }
+.bm-table td.bm-v.is-ges, .bm-table td.bm-a.is-ges { color: var(--bm-text); }
+.bm-table td.bm-ewp { font-weight: 700; }
+/* Laufender Durchgang hervorgehoben, noch nicht gespielte Zeilen zurückgenommen. */
+.bm-row.is-live td { background: var(--bm-live); }
+.bm-row.is-live .bm-nm { color: var(--bm-betont); }
+.bm-row.is-offen .bm-nm { color: var(--bm-dim); font-weight: 600; }
+.bm-total td { background: var(--bm-kopf); font-weight: 800; border-bottom: none; }
+/* Fußzeile je Gasse: der Durchschnitt, nicht die Summe. Das ⌀ steht klein davor — es muss
+   nur erklären, nicht gelesen werden, und die Spalte bleibt damit auch bei sechs Gassen eng. */
+.bm-total .bm-schnitt { font-size: 26px; }
+.bm-schnitt-z { font-size: 17px; font-weight: 600; color: var(--bm-dim); margin-right: 3px; }
+.bm-total .bm-sum { color: var(--bm-betont); }
+/* Die Mannschaftssumme trägt dieselbe Farbe wie die Einzel-Gesamtergebnisse darüber. */
+.bm-total .bm-wert.bm-sum.is-ges { color: var(--bm-gold); }
+.bm-total .bm-v.bm-sum, .bm-total .bm-a.bm-sum { color: var(--bm-dim); }
+
 /* ---------- Ergebnis-Grafik (Bild-Export) ---------- */
 /* Das Menue haengt an document.body (nicht im View-Root), damit die Canvas ein Neu-Rendern
    der Erfassung ueberlebt. Aufbau wie das Einstellungs-Sheet, nur breiter: links die
@@ -2945,6 +3194,21 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 }
 .gfx-ov-stage { transform-origin: center; }
 .gfx-stream-felder { margin-top: 14px; }
+
+/* Beamer-Reiter: dieselbe Buehne, aber DECKEND (die Tafel bringt ihren eigenen Grund mit).
+   Im Vollbild faellt das 16:9-Korsett weg — der Rahmen fuellt den Schirm, und die Buehne
+   wird per JS (passeBuehnenAn) auf die kleinere der beiden Achsen skaliert. */
+.gfx-bm-frame {
+  position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 12px; background: #0d1016;
+}
+/* Heller Modus der Tafel: auch der Rahmen um die Buehne wird hell. */
+.gfx-bm-frame.is-hell { background: #dfe4ee; }
+.gfx-bm-stage { transform-origin: center; }
+/* Anzeige-Einstellungen ueber der Vorschau (Spalten: Gassen oder Saetze). */
+.gfx-bm-einstellungen { margin: 0 0 10px; }
+.gfx-buehne:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border: 0; border-radius: 0; }
+.gfx-buehne:-webkit-full-screen { width: 100vw; height: 100vh; border: 0; border-radius: 0; }
 
 /* Gesperrte Option (z. B. EWP vor Spielende): sichtbar, aber erkennbar aus. */
 .gfx-options .erf-setting-row.is-gesperrt { opacity: 0.55; }

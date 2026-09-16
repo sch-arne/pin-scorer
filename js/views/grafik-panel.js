@@ -1,6 +1,8 @@
-// Grafik-Menü: das Ausgabe-Fenster des 🖼-Knopfs. Zwei Reiter:
+// Grafik-Menü: das Ausgabe-Fenster des 🖼-Knopfs. Drei Reiter:
 //   • „Ergebnis-Grafik" — Vorschau + Optionen des Bild-Exports, Teilen und PNG-Speichern.
 //   • „Livestream"      — Vorschau des OBS-Overlays, Team-Logos/Farben und die OBS-URL.
+//   • „Beamer"          — Vorschau der ausführlichen Ergebnistafel für die Leinwand, mit
+//                         Vollbild auf diesem Gerät und einer URL für ein zweites Gerät.
 // Geöffnet aus der Wurferfassung (views/spiel-laufend.js) und dem Wettkampf-Hub
 // (views/wettkampf-hub.js) über den 🖼-Knopf in der Kopfzeile.
 //
@@ -27,18 +29,21 @@ import {
 } from '../logic/ergebnis-grafik.js';
 import { FORMATE, zeichneGrafik } from '../logic/grafik-zeichnen.js';
 import { overlayHtmlLive } from './overlay.js';
+import { buildBeamerHtml, beamerUrl, beamerOptionen } from './beamer.js';
 import {
-  livestreamFelderHtml, livestreamUrlHtml, wireLivestreamFelder,
+  livestreamFelderHtml, livestreamUrlHtml, wireLivestreamFelder, overlayBereit,
+  beamerFelderHtml, wireBeamerFelder,
 } from './livestream-einstellungen.js';
 import { esc } from '../util.js';
 
 // Es gibt immer höchstens EIN Panel — ein zweiter Öffnen-Klick ersetzt das erste.
 let offen = null;
 
-// Takt der Livestream-Vorschau (nur solange der Reiter offen ist). Etwas ruhiger als das
-// Overlay selbst (2 s) — die Vorschau ist eine Kontrolle, kein Stream.
+// Takt der mitlaufenden Vorschauen (Livestream/Beamer, nur solange der Reiter offen ist).
+// Etwas ruhiger als das Overlay selbst (2 s) — die Vorschau ist eine Kontrolle, kein Stream.
 const STREAM_POLL_MS = 3000;
 const STAGE_W = 1920;
+const STAGE_H = 1080;
 
 const SEGMENTE = [
   ['format', 'Format', 'Seitenverhältnis des Bildes', [['hoch', 'Hochformat'], ['story', 'Story']]],
@@ -89,9 +94,9 @@ function reiterHtml(id, label, aktiv) {
 
 function panelHtml(titel, untertitel) {
   return `
-    <div class="gfx-sheet" role="dialog" aria-modal="true" aria-label="Grafik und Livestream">
+    <div class="gfx-sheet" role="dialog" aria-modal="true" aria-label="Grafik, Livestream und Beamer">
       <div class="erf-settings-head">
-        <h2 class="erf-settings-title">🖼 Grafik &amp; Livestream</h2>
+        <h2 class="erf-settings-title">🖼 Grafik, Stream &amp; Beamer</h2>
         <span class="gfx-head-btns">
           <button type="button" class="icon-btn" data-gfx="refresh" aria-label="Stand aktualisieren" title="Aktuellen Spielstand holen">↻</button>
           <button type="button" class="icon-btn" data-gfx="close" aria-label="Schließen">✕</button>
@@ -100,6 +105,7 @@ function panelHtml(titel, untertitel) {
       <div class="gfx-tabs" role="tablist" aria-label="Ansicht">
         ${reiterHtml('grafik', '🖼 Ergebnis-Grafik', true)}
         ${reiterHtml('stream', '📺 Livestream', false)}
+        ${reiterHtml('beamer', '📽 Beamer', false)}
       </div>
 
       <div class="gfx-pane" data-pane="grafik" role="tabpanel">
@@ -127,6 +133,7 @@ function panelHtml(titel, untertitel) {
       </div>
 
       <div class="gfx-pane" data-pane="stream" role="tabpanel" hidden></div>
+      <div class="gfx-pane" data-pane="beamer" role="tabpanel" hidden></div>
     </div>`;
 }
 
@@ -148,8 +155,42 @@ function streamHtml(roh, bearbeitbar) {
   return `
     <p class="gfx-stream-info">So sieht das Overlay gerade in OBS aus (1920×1080, transparenter Hintergrund).
       Die Vorschau läuft mit dem Spielstand mit.</p>
-    <div class="gfx-ov-frame"><div class="ov-stage gfx-ov-stage" data-ov-stage></div></div>
+    <div class="gfx-ov-frame gfx-buehne"><div class="ov-stage gfx-ov-stage" data-stage></div></div>
     ${felder}`;
+}
+
+// Inhalt des Beamer-Reiters: Vorschau der Ergebnistafel, die Anzeige-Einstellungen, der
+// Vollbild-Knopf für DIESES Gerät und — nur bei geteiltem Wettkampf — die URL für ein
+// zweites Gerät am Beamer. Die Einstellungen (Markup und Handler) kommen aus
+// views/livestream-einstellungen.js: sie stehen am Wettkampf, nicht am Gerät.
+function beamerHtml(roh, bearbeitbar) {
+  const wettkampf = roh && roh.wettkampf;
+  if (!wettkampf) {
+    return `<p class="field-hint gfx-stream-leer">Die Beamer-Tafel zeigt einen <b>Wettkampf</b> mit zwei Mannschaften.
+      Dieses Spiel läuft ohne Wettkampf — es gibt hier nichts anzuzeigen.</p>`;
+  }
+  const url = esc(beamerUrl(wettkampf));
+  const zweitgeraet = overlayBereit(wettkampf)
+    ? `<div class="ov-url-row">
+         <input class="ov-url-input" type="text" readonly value="${url}" data-beamer-url aria-label="Beamer-URL">
+         <button type="button" class="btn-mini" data-action="copy-beamer">Kopieren</button>
+         <a class="btn-mini" href="${url}" target="_blank" rel="noopener">Öffnen</a>
+       </div>
+       <p class="field-hint">Für einen <b>zweiten Rechner</b> am Beamer: diese URL dort öffnen und
+         mit F11 auf Vollbild stellen — sie liest den Stand live mit. Spalten und Darstellung
+         stellt man weiter <b>hier</b> um; die Leinwand zieht wenige Sekunden später nach.</p>`
+    : `<p class="field-hint">Hängt der Beamer an einem <b>anderen Gerät</b>, zuerst den
+         <b>Wettkampf teilen</b> — dann erscheint hier eine URL für dieses Gerät.</p>`;
+  return `
+    <p class="gfx-stream-info">Die ausführliche Tafel für die Leinwand: jede Gasse, Volle, Abräumen
+      und Fehlwürfe, Gesamt und EWP — dazu die Bestenliste. Läuft mit dem Spielstand mit.</p>
+    <div class="gfx-bm-einstellungen">${beamerFelderHtml(wettkampf, bearbeitbar)}</div>
+    <div class="gfx-bm-frame gfx-buehne${beamerOptionen(wettkampf).thema === 'hell' ? ' is-hell' : ''}"><div class="bm-stage gfx-bm-stage" data-stage></div></div>
+    <div class="gfx-actions">
+      <button type="button" class="erf-btn done" data-gfx="beamer-voll">⛶ Vollbild auf diesem Gerät</button>
+    </div>
+    <p class="join-msg" data-beamer-msg role="status"></p>
+    ${zweitgeraet}`;
 }
 
 // Das Menü öffnen.
@@ -164,8 +205,9 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   let historyEintrag = false;
   let letzteDatei = null;
   let reiter = 'grafik';
-  let streamTimer = null;
+  let vorschauTimer = null;
   let streamHtmlStand = '';   // zuletzt gezeichnetes Overlay-HTML (kein Flackern)
+  let beamerHtmlStand = '';   // dito für die Beamer-Tafel
   const laneHold = { fertigNr: null, fertigSeit: 0 }; // Bahnansicht-Halten wie im Overlay
   let textTimer = null;       // entprellt das Merken von Titel/Untertitel
   const bilder = {};
@@ -195,6 +237,7 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   const titelEl = backdrop.querySelector('[data-gfx-text="titel"]');
   const untertitelEl = backdrop.querySelector('[data-gfx-text="untertitel"]');
   const streamPane = backdrop.querySelector('[data-pane="stream"]');
+  const beamerPane = backdrop.querySelector('[data-pane="beamer"]');
 
   // ── Zeichnen ───────────────────────────────────────────────────────────────
   function zeichne() {
@@ -276,7 +319,7 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
 
   // Nur die Overlay-Vorschau neu malen (Gerüst bleibt stehen).
   function malStream() {
-    const stage = streamPane.querySelector('[data-ov-stage]');
+    const stage = streamPane.querySelector('[data-stage]');
     if (!stage) return;
     let html = '';
     // Dieselbe Fassung wie in OBS — inklusive des Haltens der Bahnansicht nach einem
@@ -287,27 +330,122 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
       streamHtmlStand = html;
       stage.innerHTML = html;
     }
-    passeStageAn();
+    passeBuehnenAn();
   }
 
-  // Die 1920×1080-Bühne in den Rahmen skalieren (wie fit() in views/overlay.js).
-  function passeStageAn() {
-    const frame = streamPane.querySelector('.gfx-ov-frame');
-    const stage = streamPane.querySelector('[data-ov-stage]');
-    if (!frame || !stage) return;
-    const breite = frame.clientWidth || frame.offsetWidth || 0;
-    if (!breite) return;
-    stage.style.transform = `translate(-50%, -50%) scale(${breite / STAGE_W})`;
+  // ── Beamer-Reiter ──────────────────────────────────────────────────────────
+  // Gerüst (Vorschau-Rahmen, Vollbild-Knopf, URL) aufbauen und verdrahten.
+  function baueBeamer() {
+    // Die Tafel-Einstellungen stehen am Wettkampf — ändern darf sie, wer auch Logos/Farben
+    // ändern darf (also nicht der Zuschauer). Danach: Gerüst neu (Schalter und Vorschau
+    // zeigen die Wahl) und die Config spiegeln, damit die Leinwand nachzieht.
+    const bearbeitbar = !!(livestream && roh && roh.wettkampf);
+    beamerPane.innerHTML = beamerHtml(roh, bearbeitbar);
+    beamerHtmlStand = '';
+    if (bearbeitbar) {
+      // Kein livestream.onChange: die Wahl ändert nur die Tafel, nicht die aufrufende Ansicht.
+      wireBeamerFelder(beamerPane, roh.wettkampf, {
+        onChange: baueBeamer,
+        onVorschau: malBeamer, // Tippen in der Überschrift: nur die Tafel neu malen (Fokus!)
+        onPush: livestream.onPush || (() => {}),
+      });
+    }
+    const copy = beamerPane.querySelector('[data-action="copy-beamer"]');
+    if (copy) copy.addEventListener('click', async () => {
+      const url = beamerUrl(roh.wettkampf);
+      try { await navigator.clipboard.writeText(url); beamerMsg('URL kopiert.'); }
+      catch (e) {
+        const inp = beamerPane.querySelector('[data-beamer-url]');
+        if (inp) { inp.focus(); inp.select(); }
+        beamerMsg('Bitte manuell kopieren (Strg+C).');
+      }
+    });
+    malBeamer();
   }
 
-  function streamTakt(an) {
-    clearInterval(streamTimer);
-    streamTimer = null;
-    if (an) streamTimer = setInterval(() => { if (lebt) malStream(); }, STREAM_POLL_MS);
+  function beamerMsg(text) {
+    const el = beamerPane.querySelector('[data-beamer-msg]');
+    if (el) el.textContent = text || '';
+  }
+
+  // Nur die Tafel neu malen (Gerüst bleibt stehen) — dieselbe Fassung wie unter #/beamer.
+  function malBeamer() {
+    const stage = beamerPane.querySelector('[data-stage]');
+    if (!stage) return;
+    let html = '';
+    try { html = buildBeamerHtml(holeRoh() || {}); }
+    catch (e) { html = '<div class="bm-wait">Vorschau nicht möglich.</div>'; }
+    if (html !== beamerHtmlStand) {
+      beamerHtmlStand = html;
+      stage.innerHTML = html;
+    }
+    passeBuehnenAn();
+  }
+
+  // Vollbild auf DIESEM Gerät — der Normalfall, wenn der Beamer am erfassenden Laptop hängt
+  // (kein Teilen, keine zweite URL nötig). Der Rahmen selbst geht ins Vollbild, die Bühne
+  // wird danach neu eingepasst (fullscreenchange).
+  function vollbild() {
+    const frame = beamerPane.querySelector('.gfx-bm-frame');
+    if (!frame) return;
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      (document.exitFullscreen || document.webkitExitFullscreen || (() => {})).call(document);
+      return;
+    }
+    const anfrage = frame.requestFullscreen || frame.webkitRequestFullscreen;
+    if (!anfrage) {
+      // iPhone-Safari kennt Vollbild nur für Videos — dort bleibt die URL auf einem zweiten
+      // Gerät der Weg auf die Leinwand.
+      beamerMsg('Dieses Gerät kann kein Vollbild — bitte die Beamer-URL auf dem Anzeigegerät öffnen.');
+      return;
+    }
+    try {
+      Promise.resolve(anfrage.call(frame)).catch(() => beamerMsg('Vollbild wurde abgelehnt.'));
+    } catch (e) { beamerMsg('Vollbild wurde abgelehnt.'); }
+    // Manche eingebetteten Browser verschlucken die Anfrage lautlos (kein Fehler, kein
+    // Vollbild). Dann bleibt der Knopf scheinbar wirkungslos — deshalb nach kurzer Frist
+    // nachsehen und den Weg über die Taste F11 nennen.
+    setTimeout(() => {
+      if (lebt && !document.fullscreenElement && !document.webkitFullscreenElement) {
+        beamerMsg('Dieser Browser gibt kein Vollbild frei — mit F11 (Windows) bzw. ⌃⌘F (Mac) geht es trotzdem.');
+      }
+    }, 1200);
+  }
+
+  // Die 1920×1080-Bühnen in ihre Rahmen skalieren (wie fit() in views/overlay.js). Gilt für
+  // beide Vorschauen und auch für den Vollbild-Rahmen, der nicht 16:9 sein muss.
+  function passeBuehnenAn() {
+    backdrop.querySelectorAll('.gfx-buehne').forEach((frame) => {
+      const stage = frame.querySelector('[data-stage]');
+      if (!stage) return;
+      const breite = frame.clientWidth || frame.offsetWidth || 0;
+      const hoehe = frame.clientHeight || frame.offsetHeight || 0;
+      if (!breite || !hoehe) return;
+      const skala = Math.min(breite / STAGE_W, hoehe / STAGE_H);
+      stage.style.transform = `translate(-50%, -50%) scale(${skala})`;
+    });
+  }
+
+  // Ein Takt für beide mitlaufenden Vorschauen — gemalt wird nur der offene Reiter.
+  function vorschauTakt(an) {
+    clearInterval(vorschauTimer);
+    vorschauTimer = null;
+    if (!an) return;
+    vorschauTimer = setInterval(() => {
+      if (!lebt) return;
+      if (reiter === 'stream') malStream();
+      else if (reiter === 'beamer') malBeamer();
+    }, STREAM_POLL_MS);
+  }
+
+  // Nach dem Wechsel in/aus dem Vollbild hat der Rahmen eine andere Größe — Bühne neu
+  // einpassen (erst nach dem Layout-Schritt).
+  function aufVollbild() {
+    requestAnimationFrame(passeBuehnenAn);
   }
 
   function setzeReiter(id) {
-    reiter = id === 'stream' ? 'stream' : 'grafik';
+    reiter = (id === 'stream' || id === 'beamer') ? id : 'grafik';
     backdrop.querySelectorAll('[data-gfx-tab]').forEach((b) => {
       const an = b.dataset.gfxTab === reiter;
       b.classList.toggle('is-on', an);
@@ -316,7 +454,9 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     backdrop.querySelectorAll('.gfx-pane').forEach((p) => {
       p.hidden = p.dataset.pane !== reiter;
     });
-    if (reiter === 'stream') { baueStream(); streamTakt(true); } else streamTakt(false);
+    if (reiter === 'stream') baueStream();
+    else if (reiter === 'beamer') baueBeamer();
+    vorschauTakt(reiter !== 'grafik');
   }
 
   // ── Bedienelemente ─────────────────────────────────────────────────────────
@@ -375,6 +515,7 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     syncUi();
     zeichne();
     if (reiter === 'stream') baueStream();
+    else if (reiter === 'beamer') baueBeamer();
   }
 
   // ── Ausgabe ────────────────────────────────────────────────────────────────
@@ -413,10 +554,16 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     merkeTexte();
     lebt = false;
     offen = null;
-    streamTakt(false);
+    vorschauTakt(false);
+    // Ein offenes Vollbild gehört zum Panel — mit ihm verschwinden.
+    if (document.fullscreenElement && backdrop.contains(document.fullscreenElement)) {
+      try { document.exitFullscreen(); } catch (e) { /* egal */ }
+    }
     window.removeEventListener(UNMOUNT_EVENT, schliessen);
     window.removeEventListener('popstate', aufPopstate);
-    window.removeEventListener('resize', passeStageAn);
+    window.removeEventListener('resize', passeBuehnenAn);
+    document.removeEventListener('fullscreenchange', aufVollbild);
+    document.removeEventListener('webkitfullscreenchange', aufVollbild);
     document.removeEventListener('keydown', aufTaste);
     letzteDatei = null;
     canvas.width = 0;
@@ -431,6 +578,9 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   }
 
   function aufTaste(e) {
+    // Im Vollbild beendet Escape zuerst das Vollbild — das Panel darf dabei nicht mit
+    // zugehen, sonst ist die Tafel samt Einstellungen weg.
+    if (document.fullscreenElement && backdrop.contains(document.fullscreenElement)) return;
     if (e.key === 'Escape') { e.preventDefault(); schliessen(); }
   }
 
@@ -445,6 +595,7 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     else if (id === 'refresh') aktualisieren();
     else if (id === 'share') teilen();
     else if (id === 'download') { if (letzteDatei) herunterladen(letzteDatei); }
+    else if (id === 'beamer-voll') vollbild();
     else if (el.dataset.wert !== undefined) setOption(id, el.dataset.wert);
     else setOption(id, !opts[id]);
   });
@@ -454,7 +605,9 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
 
   window.addEventListener(UNMOUNT_EVENT, schliessen);
   window.addEventListener('popstate', aufPopstate);
-  window.addEventListener('resize', passeStageAn);
+  window.addEventListener('resize', passeBuehnenAn);
+  document.addEventListener('fullscreenchange', aufVollbild);
+  document.addEventListener('webkitfullscreenchange', aufVollbild);
   document.addEventListener('keydown', aufTaste);
   // Eigener History-Eintrag, damit die Zurück-Geste das Panel schließt statt die Seite zu
   // verlassen. Der Hash bleibt gleich -> kein hashchange, der Router rendert nicht neu.

@@ -11,8 +11,12 @@
 // `wireLivestreamFelder()` hängt die Handler an einen beliebigen Container. Geschrieben wird
 // direkt in den Wettkampf (store) und danach die Config zum Server gespiegelt — sonst sähe
 // das Overlay (und jedes andere Gerät) das neue Logo nicht.
+//
+// Nach demselben Muster (und deshalb hier) stehen die Anzeige-Einstellungen der BEAMER-Tafel:
+// `beamerFelderHtml()` / `wireBeamerFelder()`, benutzt im Reiter „Beamer" desselben Panels.
 
 import { saveWettkampf } from '../store.js';
+import { beamerOptionen, TITEL_MAX } from './beamer.js';
 import { esc } from '../util.js';
 
 const ACCENT_DEFAULT = '#f5a623';
@@ -133,6 +137,88 @@ export function livestreamUrlHtml(wettkampf) {
       <a class="btn-mini" href="${url}" target="_blank" rel="noopener">Öffnen</a>
     </div>
     <p class="field-hint">In OBS als <b>Browser-Quelle</b> (1920×1080) mit dieser URL einbinden — transparenter Hintergrund, zeigt die Ergebnisse live.</p>`;
+}
+
+// ── Anzeige-Einstellungen der Beamer-Tafel ─────────────────────────────────
+// Spaltenwahl (Gassen/Sätze) und Hell/Dunkel stehen AM WETTKAMPF, nicht am Gerät — genau wie
+// Logos und Akzentfarben und aus demselben Grund: der Rechner am Beamer liest den Wettkampf
+// nur read-only und hat keine eigene Oberfläche. Wer hier umstellt, stellt die Leinwand um;
+// die Änderung reist im config_json mit und steht dort beim nächsten Abruf (3 s).
+const BEAMER_FELDER = [
+  ['spalten', 'Spalten',
+    'Je bespielter Gasse (dann steht in jeder Spalte dieselbe Bahn) oder je Satz in Spielreihenfolge',
+    [['bahnen', 'Bahnen'], ['saetze', 'Sätze']]],
+  ['thema', 'Darstellung',
+    'Hell für helle Säle — ein dunkles Bild kommt vom Beamer sonst grau an der Wand an',
+    [['dunkel', 'Dunkel'], ['hell', 'Hell']]],
+];
+
+// Die Einstellungen als Überschrift-Feld und Segment-Schalter. `bearbeitbar` = false
+// (Zuschauer) zeigt nur an.
+export function beamerFelderHtml(wettkampf, bearbeitbar = true) {
+  const aktiv = beamerOptionen(wettkampf);
+  const titelZeile = `
+    <div class="erf-setting-row">
+      <div class="erf-setting-text">
+        <span class="erf-setting-label">Überschrift</span>
+        <span class="erf-setting-hint">Steht groß über der Tafel — leer lassen heißt: keine Überschrift</span>
+      </div>
+      <input class="join-input gfx-bm-titel" type="text" data-bm-titel maxlength="${TITEL_MAX}"
+        aria-label="Überschrift der Beamer-Tafel" placeholder="Ohne Überschrift"
+        value="${esc(aktiv.titel)}"${bearbeitbar ? '' : ' disabled'}>
+    </div>`;
+  const zeile = ([id, label, hinweis, werte]) => {
+    const knopf = ([wert, text]) => `<button type="button" class="erf-seg-btn${aktiv[id] === wert ? ' is-on' : ''}"
+      data-bm="${id}" data-wert="${wert}" aria-pressed="${aktiv[id] === wert ? 'true' : 'false'}"
+      ${bearbeitbar ? '' : 'disabled'}>${text}</button>`;
+    return `
+      <div class="erf-setting-row">
+        <div class="erf-setting-text">
+          <span class="erf-setting-label">${esc(label)}</span>
+          <span class="erf-setting-hint">${esc(hinweis)}</span>
+        </div>
+        <div class="erf-seg" role="group" aria-label="${esc(label)}">${werte.map(knopf).join('')}</div>
+      </div>`;
+  };
+  return titelZeile + BEAMER_FELDER.map(zeile).join('');
+}
+
+// Handler für die Felder oben. Dieselben Rückrufe wie wireLivestreamFelder:
+//   onChange()   nach einer Änderung, die das Gerüst neu bauen darf (Schalter)
+//   onVorschau() nach jedem Tastendruck im Textfeld — nur neu MALEN, sonst verlöre das
+//                Feld bei jedem Zeichen den Fokus
+//   onPush(wk)   spiegelt die Config zum Server
+export function wireBeamerFelder(container, wettkampf, opts = {}) {
+  if (!container || !wettkampf) return;
+  const onChange = opts.onChange || (() => {});
+  const vorschau = opts.onVorschau || onChange;
+  const push = opts.onPush || (() => {});
+  container.querySelectorAll('[data-bm]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const alt = beamerOptionen(wettkampf);
+      const neu = beamerOptionen({ beamer: { ...alt, [b.dataset.bm]: b.dataset.wert } });
+      if (neu[b.dataset.bm] === alt[b.dataset.bm]) return;
+      wettkampf.beamer = neu;
+      saveWettkampf(wettkampf);
+      onChange();
+      push(wettkampf);
+    }));
+
+  // Überschrift: beim Tippen sofort in die Vorschau, gespeichert und zum Server gespiegelt
+  // aber erst mit kurzer Ruhe (bzw. beim Verlassen des Feldes) — ein Push je Zeichen wäre
+  // eine Schreiblast für nichts.
+  const feld = container.querySelector('[data-bm-titel]');
+  if (feld) {
+    let timer = null;
+    const merken = () => { clearTimeout(timer); saveWettkampf(wettkampf); push(wettkampf); };
+    feld.addEventListener('input', () => {
+      wettkampf.beamer = { ...beamerOptionen(wettkampf), titel: feld.value.slice(0, TITEL_MAX) };
+      vorschau();
+      clearTimeout(timer);
+      timer = setTimeout(merken, 700);
+    });
+    feld.addEventListener('change', merken);
+  }
 }
 
 // Handler für alles oben Erzeugte an `container` hängen.
