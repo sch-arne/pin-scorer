@@ -1018,7 +1018,9 @@ grant execute on function konto_loeschen() to authenticated;
 -- danach beitreten/pullen, sehen die anonymisierte Fassung.
 --
 -- ZWEI Auslöser, weil einer nachweislich nicht reicht:
---   * trg_spiel_anonymisieren   — ein Durchgang/Einzelspiel geht auf 'beendet'.
+--   * trg_spiel_anonymisieren   — ein Einzelspiel geht auf 'beendet'. Ein DURCHGANG eines
+--     noch laufenden Wettkampfs ist ausgenommen (er wird während des Livestreams weiter
+--     mit Namen angezeigt) — ihn zieht der Wettkampf-Trigger nach.
 --   * trg_wettkampf_anonymisieren — der WETTKAMPF geht auf 'beendet': dann werden ALLE
 --     seine Durchgänge nachgezogen, auch die, die nie einen Statuswechsel gesehen haben
 --     (z.B. schon fertig geteilt) oder deren Status-Push scheiterte. Vorher blieb in genau
@@ -1119,6 +1121,20 @@ set search_path = public as $$
 declare
   v_frisch boolean := (new.anonymisiert_am is null);
 begin
+  -- Ein DURCHGANG eines noch laufenden Wettkampfs behaelt seine Klarnamen. Der Wettkampf ist
+  -- erst vorbei, wenn ALLE Durchgaenge fertig sind — bis dahin laeuft der Livestream weiter,
+  -- und das Overlay (wie jedes beigetretene Geraet und jeder Zuschauer) liest die Aufstellung
+  -- aus der Datenbank. Ohne diese Ausnahme verlor die Mannschaft ihre Namen, sobald der erste
+  -- Durchgang fertig war — mitten im Wettkampf. Nachgezogen wird am Wettkampfende
+  -- (trg_wettkampf_anonymisieren, greift JEDEN Durchgang mit anonymisiert_am is null);
+  -- bleibt der Statuswechsel aus (offline, fremdes Geraet, Abbruch), holt es die Frist
+  -- (pins_klarnamen_frist, 48 h nach der letzten Aktivitaet).
+  if v_frisch and new.wettkampf_id is not null
+     and exists (select 1 from wettkampf w
+                  where w.id = new.wettkampf_id and w.status is distinct from 'beendet') then
+    return new;
+  end if;
+
   new.config_json := pins_anonymisierte_liste(new.id, new.config_json, new.wettkampf_id, v_frisch);
   if v_frisch then
     new.anonymisiert_am := now();

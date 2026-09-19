@@ -15,10 +15,11 @@
 //     aber diese Leute wissen von dieser App nichts. Deshalb bleiben sie beim Import
 //     ausschließlich LOKAL: in die Datenbank wandert allein die eigene Ergebniszeile, und auch
 //     die ohne Namen (sync.linkEigenesErgebnis). Wer den Wettkampf später im Hub ausdrücklich
-//     TEILT, gibt die Ergebnisse aller Spieler frei — die Namen bleiben trotzdem hier: ein
-//     beendeter Durchgang geht mit Platzhaltern in die DB (sync.linkGame), und den
-//     öffentlichen Anzeigenamen zur LizenzID setzt der Server selbst. Klarnamen sieht die
-//     Datenbank nur bei einer noch LAUFENDEN Partie, deren Live-Anzeige sie braucht; am
+//     TEILT, gibt die Ergebnisse aller Spieler frei — die Namen bleiben trotzdem hier: der
+//     Durchgang eines beendeten Wettkampfs geht mit Platzhaltern in die DB (sync.linkGame),
+//     und den öffentlichen Anzeigenamen zur LizenzID setzt der Server selbst. Klarnamen sieht
+//     die Datenbank nur, solange der WETTKAMPF läuft und seine Live-Anzeige sie braucht —
+//     auch in dessen schon fertigen Durchgängen, denn das Overlay zeigt sie weiter. Am
 //     Wettkampfende ersetzt der Anonymisierungs-Trigger auch sie. Der Hub sagt das vorher.
 //
 //  3. IDENTITÄT. Der Ergebnisdienst nennt keine LizenzIDen; die amtliche Zuordnung des

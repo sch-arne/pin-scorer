@@ -127,7 +127,9 @@ export function mergeSpielerNamen(remoteListe, lokalListe) {
 //
 // Gebraucht beim Teilen eines BEREITS BEENDETEN Spiels: dort werden die Namen ohnehin
 // serverseitig ersetzt (Trigger trg_spiel_anonymisieren), also sollen die echten Namen gar
-// nicht erst mitreisen. Was der Trigger danach besser weiß — den öffentlichen Anzeigenamen
+// nicht erst mitreisen. NICHT gebraucht beim fertigen Durchgang eines noch LAUFENDEN
+// Wettkampfs — dessen Namen bleiben bis zum Wettkampfende stehen (sync.linkGame).
+// Was der Trigger danach besser weiß — den öffentlichen Anzeigenamen
 // eines Profils zur LizenzID — setzt er selbst; dafür braucht er nur die passnummer, keinen
 // Namen. Alles andere am Eintrag (startBahn, mannschaftId, teamPos) bleibt unverändert.
 //

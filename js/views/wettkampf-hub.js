@@ -575,9 +575,11 @@ export function wettkampfHubView() {
       // und ginge sonst beim Austausch der lokalen Kopie verloren — samt der eigenen Zeile in
       // Rangliste und Statistik. Wie beim Sportwinner-Import: nach dem Pull wieder ansetzen.
       if (w.ichSlot) fresh.ichSlot = w.ichSlot;
-      // Ein beim Teilen schon FERTIGER Durchgang geht ohne Klarnamen in die DB (linkGame fügt
-      // ihn mit Platzhaltern ein, der Trigger setzt danach die Anzeigenamen) — der Pull bringt
-      // also nicht die Namen zurück, die hier stehen. Für die eigene Kopie gilt dieselbe Regel
+      // Ein beim Teilen schon FERTIGER Durchgang eines BEENDETEN Wettkampfs geht ohne Klarnamen
+      // in die DB (linkGame fügt ihn mit Platzhaltern ein, der Trigger setzt danach die
+      // Anzeigenamen) — der Pull bringt also nicht die Namen zurück, die hier stehen. (Läuft der
+      // Wettkampf noch, reisen die Namen mit: das Overlay braucht sie, siehe linkGame.)
+      // Für die eigene Kopie gilt dieselbe Regel
       // wie für jedes Gerät, das während des Spiels dabei war: die Klarnamen bleiben HIER
       // stehen, sie kommen ja von hier. In der Datenbank und bei allen, die später beitreten,
       // steht die anonyme Fassung. Bei einem noch laufenden Durchgang ist der Merge folgenlos:
