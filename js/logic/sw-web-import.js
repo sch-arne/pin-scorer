@@ -472,10 +472,11 @@ export function buildImportSpec(partie, bericht) {
 //     Ergebniszeile — ohne Namen (sync.linkEigenesErgebnis). Aenderungen gehen dann ueber
 //     pushEigenesErgebnis statt ueber pushConfig, das die volle Aufstellung schriebe.
 //     Wird er geteilt, gilt der normale Weg: die Aufstellung geht mit in die DB — die
-//     KLARNAMEN aber nur bei einem noch laufenden Durchgang, den die Live-Anzeige braucht.
-//     Ein beendeter Durchgang wird von vornherein mit Platzhaltern eingefuegt (sync.linkGame
-//     ueber anonymeSpielerListe); den oeffentlichen Anzeigenamen zur LizenzID setzt danach
-//     der Anonymisierungs-Trigger — genau wie bei jedem selbst erfassten Wettkampf.
+//     KLARNAMEN aber nur, solange der WETTKAMPF laeuft und die Live-Anzeige sie braucht.
+//     Ein Durchgang eines laengst beendeten Wettkampfs wird von vornherein mit Platzhaltern
+//     eingefuegt (sync.linkGame ueber anonymeSpielerListe); den oeffentlichen Anzeigenamen
+//     zur LizenzID setzt danach der Anonymisierungs-Trigger — genau wie bei jedem selbst
+//     erfassten Wettkampf.
 export function istWebImport(wettkampf) {
   if (!wettkampf) return false;
   return wettkampf.quelle === 'sportwinner-web' || !!wettkampf.swWeb;

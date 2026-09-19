@@ -151,6 +151,8 @@ export function resetPassCache() { passCache = null; }
 //                 neutralen Platzhalter, mit denen linkGame ein bereits beendetes Spiel
 //                 einfuegt (anonymeSpielerListe). Reist hier mit, weil jeder Aufrufer von
 //                 linkGame das Ergebnis dieser Funktion ohnehin durchreicht.
+//   wettkampfStatus: laeuft der Wettkampf noch? Ebenfalls nur fuer linkGame — solange er
+//                 laeuft, gehen auch fertige Durchgaenge MIT Klarnamen in die DB (siehe dort).
 // `wettkampf` ist optional (Einzelspiele haben keinen) und liefert die Sportwinner-Zuordnung
 // sowie die manuelle Wettkampf-Markierung (ichSlot).
 //
@@ -188,7 +190,11 @@ export async function spielerIdentitaet(game, wettkampf = null) {
     passByPos,
     meinePass: await meinePassnummer(),
   });
-  return { passByPos, ichIndex, mannschaften: (wettkampf && wettkampf.mannschaften) || null };
+  return {
+    passByPos, ichIndex,
+    mannschaften: (wettkampf && wettkampf.mannschaften) || null,
+    wettkampfStatus: (wettkampf && wettkampf.status) || null,
+  };
 }
 
 // Ist ein Spieler von einem FREMDEN, aktiven Geraet gehalten? (fuer UI/Politeness)
@@ -232,6 +238,7 @@ function schreibeVertraeglich(table, rows, optionale, run) {
 export async function linkGame(game, opts = {}) {
   const {
     wettkampfRemoteId = null, passByPos = null, ichIndex = null, mannschaften = null,
+    wettkampfStatus = null,
   } = opts;
   const geraet = await ensureGeraet();
   // Besitzer des Spiels ist der ACCOUNT (auth.uid()), NICHT das Geraet: die RLS
@@ -257,10 +264,17 @@ export async function linkGame(game, opts = {}) {
   // Platzhalter (dieselbe Regel wie pins_platzhalter_name) — die Aufstellung mit den echten
   // Namen bleibt lokal, und was der Server besser weiss (der oeffentliche Anzeigename zur
   // LizenzID), traegt er beim Statuswechsel selbst ein; dafuer reicht ihm die passnummer.
-  const dbListe = fertig
+  //
+  // AUSNAHME: ein fertiger DURCHGANG eines noch laufenden Wettkampfs. Der Livestream laeuft
+  // weiter, und das Overlay zeigt die Tabellen ALLER Durchgaenge — auch der bereits
+  // gespielten. Mit Platzhaltern stuenden dort ab dem zweiten Durchgang "Heimverein 1..6"
+  // statt der Mannschaft. Der Server haelt sich an dieselbe Grenze (pins_spiel_anonymisieren
+  // ueberspringt Durchgaenge eines laufenden Wettkampfs); anonymisiert wird am Wettkampfende.
+  const wkLaeuft = !!wettkampfStatus && wettkampfStatus !== 'beendet';
+  const dbListe = fertig && !wkLaeuft
     ? anonymeSpielerListe(config.spielerListe, mannschaften)
     : (config.spielerListe || []);
-  const dbConfig = fertig ? { ...config, spielerListe: dbListe } : config;
+  const dbConfig = fertig && !wkLaeuft ? { ...config, spielerListe: dbListe } : config;
 
   const insertRow = {
     besitzer: konto,
