@@ -14,6 +14,10 @@ import { divisors, nearestDivisor, throwsPerPart } from '../logic/teilsaetze.js'
 import { planDurchgaenge } from '../logic/wettkampf.js';
 import { buildWettkampf } from '../logic/wettkampf-build.js';
 import { MODI, BAHNWECHSEL, PRESETS, ART_LABEL } from '../logic/sportkegeln-presets.js';
+// Die Standard-Wertung liegt bei der Wertungs-LOGIK, nicht hier: computeWertung leitet für
+// Wettkämpfe ohne gespeicherte Wertung (Sportwinner-Import) denselben Standard ab. Zwei Kopien
+// liefen auseinander — der Import landete dadurch auf einer anderen EWP-Schwelle als dieser Tab.
+import { defaultWertung, defaultEwpSchwelle, teamEwpBereich } from '../logic/wettkampf-wertung.js';
 
 const TAB_ORDER = ['programm', 'mannschaften', 'wertung'];
 
@@ -67,44 +71,8 @@ function defaultState() {
   };
 }
 
-// Standard-Wertung nach Bahnart: Kriterium 1 Gesamtholz (2 Pkt), Kriterium 2 EWP (1 Pkt);
-// Classic nutzt Satzpunkte. EWP-Verteilung: Bester = Anzahl aller Spieler, Schlechtester = 1
-// (min. 1 Holz gespielt). Die EWP-Schwelle entscheidet im Duell, ab welcher Team-EWP-Summe
-// der Gast den EWP-Punkt bekommt.
-function defaultWertung(preset, spieler) {
-  return {
-    modus: 'duell',            // 'duell' (2 Mannschaften) | 'rangliste' (mehr als 2)
-    gesamtholzPunkte: 2,       // Kriterium 1: Gesamtholz der Mannschaft
-    kriterium2: preset === 'classic' ? 'satzpunkte' : 'ewp',
-    kriterium2Punkte: 1,       // Punkte für Kriterium 2
-    ewp: { beste: 'anzahlSpieler', schlechteste: 1, minHolz: 1 },
-    ewpSchwelle: defaultEwpSchwelle(preset, spieler),
-  };
-}
-
 // Empfohlener Modus nach Mannschaftszahl: genau 2 → Duell, sonst Rangliste.
 const empfohlenerModus = (teams) => (teams === 2 ? 'duell' : 'rangliste');
-
-// Möglicher Team-EWP-Bereich im Duell: EWP werden über ALLE Spieler (2×spieler) von N bis 1
-// vergeben. Eine Mannschaft (spieler Spieler) hat min. die untersten, max. die obersten Werte.
-//   min = 1+…+spieler ;  max = (N−spieler+1)+…+N   mit N = 2×spieler.
-function teamEwpBereich(spieler) {
-  const s = Math.max(1, spieler | 0);
-  const N = 2 * s;
-  const min = (s * (s + 1)) / 2;
-  const max = s * N - (s * (s - 1)) / 2;
-  return { min, max };
-}
-
-// Standard-EWP-Schwelle (ab wann der Gast den EWP-Punkt bekommt) nach Bahnart + Mannschaftsgröße.
-// Vorgabewerte des Vereins; für unbekannte Größen die neutrale Mitte des Bereichs.
-function defaultEwpSchwelle(preset, spieler) {
-  const tabelle = { schere: { 6: 31, 4: 15 }, bohle: { 6: 32, 4: 15 } };
-  const v = tabelle[preset] && tabelle[preset][spieler];
-  if (v != null) return v;
-  const { min, max } = teamEwpBereich(spieler);
-  return Math.round((min + max) / 2);
-}
 
 export function setupWettkampfView() {
   const root = document.createElement('div');

@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assignEwp, computeWertung, fmtPunkte, bahnartOf } from '../js/logic/wettkampf-wertung.js';
+import {
+  assignEwp, computeWertung, fmtPunkte, bahnartOf,
+  defaultWertung, defaultEwpSchwelle, teamEwpBereich,
+} from '../js/logic/wettkampf-wertung.js';
 
 // Hilfs-Spieler: p(team, gesamt, abraeum).
 function p(team, gesamt, abraeum = 0, name = team + gesamt) {
@@ -88,12 +91,59 @@ test('computeWertung: konfigurierte EWP-Wertung rechnet, Satzpunkte-Config → n
   assert.equal(computeWertung(wkSatz, { einzel: [p('A', 500), p('B', 400)] }, []), null);
 });
 
-test('computeWertung: ohne Konfiguration nur Schere gewertet (Bohle/Classic → null)', () => {
-  const einzel = [p('A', 500), p('B', 400)];
+test('computeWertung: ohne Konfiguration greift der Bahnart-Standard (Classic → null)', () => {
   const teams = [{ id: 'A' }, { id: 'B' }];
-  assert.ok(computeWertung({ mannschaften: teams, programm: { preset: 'schere' } }, { einzel }, []));
-  assert.equal(computeWertung({ mannschaften: teams, programm: { preset: 'bohle' } }, { einzel }, []), null);
-  assert.equal(computeWertung({ mannschaften: teams, programm: { preset: 'classic' } }, { einzel }, []), null);
+  const wk = (preset) => ({ mannschaften: teams, spielerJeMannschaft: 6, programm: { preset } });
+  const neu = () => [p('A', 500), p('B', 400)];
+  // Schere UND Bohle werten über EWP — Bohle blieb früher ungewertet (Rückgabe null).
+  assert.ok(computeWertung(wk('schere'), { einzel: neu() }, []));
+  assert.ok(computeWertung(wk('bohle'), { einzel: neu() }, []));
+  // Classic nutzt Satzpunkte — die folgen noch, deshalb weiterhin null.
+  assert.equal(computeWertung(wk('classic'), { einzel: neu() }, []), null);
+  // Bahnart nicht erkennbar → nichts ableitbar, es bleibt beim Kegel-Zwischenstand.
+  assert.equal(computeWertung({ mannschaften: teams, spielerJeMannschaft: 6 }, { einzel: neu() }, []), null);
+});
+
+test('defaultEwpSchwelle: Vereinsvorgaben, sonst neutrale Mitte, ohne Größe null', () => {
+  assert.equal(defaultEwpSchwelle('schere', 6), 31);
+  assert.equal(defaultEwpSchwelle('schere', 4), 15);
+  assert.equal(defaultEwpSchwelle('bohle', 6), 32);
+  // Unbekannte Mannschaftsgröße → neutrale Mitte des möglichen Team-EWP-Bereichs (5er: 15–40).
+  const { min, max } = teamEwpBereich(5);
+  assert.equal(defaultEwpSchwelle('schere', 5), Math.round((min + max) / 2));
+  // Ohne brauchbare Größe kein Ratewert — computeWertung nimmt dann den halben Topf.
+  assert.equal(defaultEwpSchwelle('schere', 0), null);
+  assert.equal(defaultEwpSchwelle('schere', undefined), null);
+});
+
+test('computeWertung: importierter Schere-Wettkampf ohne Wertung nutzt die Schwelle 31', () => {
+  // Echter Fall aus der Produktion (VOK Osnabrück 1 – SK Mülheim 1, per Sportwinner-Brücke
+  // importiert, deshalb OHNE wettkampf.wertung): Heim 5081 Holz / 41 EWP, Gast 5028 / 37.
+  // Der alte Standard ohne Schwelle nahm den halben Topf (39) und schob den EWP-Punkt dem
+  // Heim-Team zu → 3:0. Mit der Vereinsvorgabe 31 erreicht der Gast die Schwelle → 2:1.
+  const teams = [{ id: 'A', name: 'VOK Osnabrück 1' }, { id: 'B', name: 'SK Mülheim 1' }];
+  const wk = { mannschaften: teams, spielerJeMannschaft: 6, programm: { preset: 'schere' } };
+  const holz = { A: [915, 864, 852, 832, 824, 794], B: [897, 867, 859, 815, 800, 790] };
+  const einzel = [...holz.A.map((h) => p('A', h)), ...holz.B.map((h) => p('B', h))];
+  const w = computeWertung(wk, { einzel }, []);
+  assert.equal(w.ewpSchwelle, 31);
+  assert.equal(w.home.gesamtholz, 5081);
+  assert.equal(w.away.gesamtholz, 5028);
+  assert.equal(w.home.ewpSumme, 41);
+  assert.equal(w.away.ewpSumme, 37);
+  assert.equal(w.home.mannschaftspunkte, 2); // mehr Holz
+  assert.equal(w.away.ewpPunkt, 1);          // 37 >= 31
+  assert.equal(w.home.spielpunkte, 2);
+  assert.equal(w.away.spielpunkte, 1);
+});
+
+test('defaultWertung: Bahnart bestimmt Kriterium 2, Mannschaftszahl den Modus', () => {
+  assert.equal(defaultWertung('schere', 6).kriterium2, 'ewp');
+  assert.equal(defaultWertung('bohle', 6).kriterium2, 'ewp');
+  assert.equal(defaultWertung('classic', 6).kriterium2, 'satzpunkte');
+  assert.equal(defaultWertung('schere', 6).ewpSchwelle, 31);
+  assert.equal(defaultWertung('schere', 6, 2).modus, 'duell');
+  assert.equal(defaultWertung('schere', 6, 4).modus, 'rangliste');
 });
 
 test('assignEwp: Spieler ohne Holz (0) bekommen 0 EWP, Rest lückenlos', () => {

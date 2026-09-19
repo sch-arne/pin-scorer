@@ -13,6 +13,7 @@ import { navigate, currentQuery } from '../router.js';
 import { esc } from '../util.js';
 import { parseRoster, parseBahnen, teamLanesByBahnart } from '../logic/roster-import.js';
 import { buildWettkampf } from '../logic/wettkampf-build.js';
+import { defaultWertung } from '../logic/wettkampf-wertung.js';
 import { ichSlotAusRoster } from '../logic/spieler-identitaet.js';
 import { planDurchgaenge } from '../logic/wettkampf.js';
 import { divisors, nearestDivisor, throwsPerPart } from '../logic/teilsaetze.js';
@@ -370,6 +371,11 @@ export function importSportwinnerView() {
         playedLanes: played,
         mannschaften,
         spielerJeMannschaft: state.spielerJeMannschaft,
+        // Wertung aus der oben gewählten Bahnart ableiten — der Import hat (anders als das
+        // manuelle Setup) keinen „Wertung"-Tab. Ohne dieses Feld müsste computeWertung sie sich
+        // jedes Mal neu herleiten; mitgeschrieben steht sie im Wettkampf und reist über
+        // config_json zu allen Geräten, dem Overlay und dem Beamer mit.
+        wertung: defaultWertung(state.preset, state.spielerJeMannschaft, mannschaften.length),
         namesByTeamPos: spec.namesByTeamPos,
         quelle: 'sportwinner',
         sportwinner: spec.sportwinner,
