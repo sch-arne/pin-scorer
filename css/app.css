@@ -3210,6 +3210,16 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 .gfx-buehne:fullscreen { width: 100vw; height: 100vh; aspect-ratio: auto; border: 0; border-radius: 0; }
 .gfx-buehne:-webkit-full-screen { width: 100vw; height: 100vh; border: 0; border-radius: 0; }
 
+/* Spieler-Reiter: die Auswahl ueber Vorschau und Optionen. Das Bild selbst ist dieselbe
+   Canvas-Vorschau wie bei der Ergebnis-Grafik (gfx-preview/gfx-canvas-wrap) — nur das
+   Auswahlfeld kommt hinzu. */
+.gfx-sp-wahl { margin: 0 0 12px; }
+.gfx-sp-wahl .acc-label { display: block; margin-bottom: 4px; }
+.gfx-sp-wahl select.join-input { width: 100%; }
+.gfx-sp-titel { margin: 0 0 14px; }
+.gfx-sp-titel .acc-label { display: block; margin-bottom: 4px; }
+.gfx-sp-titel input.join-input { width: 100%; }
+
 /* Gesperrte Option (z. B. EWP vor Spielende): sichtbar, aber erkennbar aus. */
 .gfx-options .erf-setting-row.is-gesperrt { opacity: 0.55; }
 .gfx-options .erf-switch:disabled { cursor: not-allowed; }

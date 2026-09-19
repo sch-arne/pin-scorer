@@ -82,7 +82,9 @@ export const METRIK = {
 
 // Farbwelten je Textfarbe. `kontur` ist der Halo um jede Schrift — auf unruhigen Fotos
 // deutlich wirksamer als ein weicher Schatten allein.
-const PALETTE = {
+// Exportiert, weil die Spieler-Grafik (logic/spieler-zeichnen.js) dasselbe Bild auf
+// demselben Untergrund abgibt — zwei Farbwelten waeren zwei Aussehen.
+export const PALETTE = {
   hell: {
     text: '#ffffff',
     dim: 'rgba(255,255,255,0.72)',
@@ -101,7 +103,7 @@ const PALETTE = {
 
 const LOGO_PLATTE = 'rgba(255,255,255,0.92)'; // nur für Logos mit hellem Hintergrund
 
-function fontStr(groesse, gewicht, familie) {
+export function fontStr(groesse, gewicht, familie) {
   return `${gewicht} ${groesse}px ${familie || FAMILIE}`;
 }
 
@@ -286,7 +288,7 @@ export function berechneLayout(modell, opts, messText) {
 // ── Zeichen-Helfer (Browser) ─────────────────────────────────────────────────
 
 // Abgerundetes Rechteck ohne ctx.roundRect — das gibt es erst ab Safari 16.
-function rundRect(ctx, x, y, w, h, r) {
+export function rundRect(ctx, x, y, w, h, r) {
   const rad = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
   ctx.moveTo(x + rad, y);
@@ -302,7 +304,7 @@ function rundRect(ctx, x, y, w, h, r) {
 // Ohne `o.kontur` (Umrandung aus) bleibt die reine Füllung — sauberer über ruhigen Flächen,
 // auf einem unruhigen Foto aber schlechter lesbar. Der Schatten hängt an derselben Farbe und
 // fällt deshalb mit weg: sonst bliebe ein grauer Rand ohne die Kante, die ihn trägt.
-function text(ctx, s, x, y, o) {
+export function text(ctx, s, x, y, o) {
   if (s == null || s === '') return;
   const [groesse, gewicht] = o.schrift;
   ctx.font = fontStr(groesse, gewicht, o.familie);
@@ -330,7 +332,8 @@ function text(ctx, s, x, y, o) {
 }
 
 // Ein Logo in seine Box einpassen (contain), bei hellem Logo-Hintergrund mit weißer Platte.
-function zeichneLogo(ctx, bild, cx, y, box, logoBg) {
+// Exportiert: die Spieler-Grafik setzt dasselbe Logo in ihren Kopf.
+export function zeichneLogo(ctx, bild, cx, y, box, logoBg) {
   if (!bild || !bild.width || !bild.height) return;
   if (logoBg === 'light') {
     ctx.fillStyle = LOGO_PLATTE;
