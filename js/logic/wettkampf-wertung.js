@@ -63,23 +63,61 @@ export function fmtPunkte(n) {
   return Number.isInteger(n) ? String(n) : String(n).replace('.', ',');
 }
 
+// Möglicher Team-EWP-Bereich im Duell: EWP werden über ALLE Spieler (2×spieler) von N bis 1
+// vergeben. Eine Mannschaft (spieler Spieler) hat min. die untersten, max. die obersten Werte.
+//   min = 1+…+spieler ;  max = (N−spieler+1)+…+N   mit N = 2×spieler.
+export function teamEwpBereich(spieler) {
+  const s = Math.max(1, spieler | 0);
+  const N = 2 * s;
+  const min = (s * (s + 1)) / 2;
+  const max = s * N - (s * (s - 1)) / 2;
+  return { min, max };
+}
+
+// Standard-EWP-Schwelle (ab wann der Gast den EWP-Punkt bekommt) nach Bahnart + Mannschaftsgröße.
+// Vorgabewerte des Vereins; für unbekannte Größen die neutrale Mitte des möglichen Bereichs.
+//
+// WICHTIG: Diese Tabelle ist die EINZIGE Quelle der Vereinsvorgaben — sie stand früher privat
+// im Setup-View, und der Standard für Wettkämpfe OHNE gespeicherte Wertung (Sportwinner-Import)
+// kannte sie nicht. Der leitete stattdessen „halber EWP-Topf" ab (bei 2×6 Schere 39 statt 31)
+// und schob den EWP-Punkt dadurch systematisch dem Heim-Team zu.
+//
+// Ohne brauchbare Mannschaftsgröße null: computeWertung nimmt dann wie bisher den halben Topf,
+// statt über `spieler|0 === 0` auf eine unsinnig niedrige Schwelle zu rutschen.
+export function defaultEwpSchwelle(preset, spieler) {
+  const tabelle = { schere: { 6: 31, 4: 15 }, bohle: { 6: 32, 4: 15 } };
+  const v = tabelle[preset] && tabelle[preset][spieler];
+  if (v != null) return v;
+  if (!(spieler > 0)) return null;
+  const { min, max } = teamEwpBereich(spieler);
+  return Math.round((min + max) / 2);
+}
+
+// Standard-Wertung nach Bahnart: Kriterium 1 Gesamtholz (2 Pkt), Kriterium 2 EWP (1 Pkt);
+// Classic nutzt Satzpunkte. EWP-Verteilung: Bester = Anzahl aller Spieler, Schlechtester = 1
+// (min. 1 Holz gespielt). Die EWP-Schwelle entscheidet im Duell, ab welcher Team-EWP-Summe
+// der Gast den EWP-Punkt bekommt.
+export function defaultWertung(preset, spieler, teams = 2) {
+  return {
+    modus: teams === 2 ? 'duell' : 'rangliste',
+    gesamtholzPunkte: 2,
+    kriterium2: preset === 'classic' ? 'satzpunkte' : 'ewp',
+    kriterium2Punkte: 1,
+    ewp: { beste: 'anzahlSpieler', schlechteste: 1, minHolz: 1 },
+    ewpSchwelle: defaultEwpSchwelle(preset, spieler),
+  };
+}
+
 // Wertungskonfiguration ermitteln: bevorzugt die im Setup gespeicherte wettkampf.wertung.
-// Fehlt sie (Altbestand ohne „Wertung"-Tab), wird nur für SCHERE ein Standard abgeleitet —
-// so bleiben bestehende Schere-Wettkämpfe gewertet, während andere ohne Konfiguration den
-// Kegel-Zwischenstand behalten (Rückgabe null). Neue Wettkämpfe bringen ihre Wertung mit.
+// Fehlt sie — der Sportwinner-Import fragt sie nicht ab und schreibt sie deshalb nicht mit —,
+// wird sie aus der ERKANNTEN BAHNART abgeleitet, mit denselben Vorgaben wie im Setup-Tab.
+// So kommt ein importierter Schere-Wettkampf auf dieselbe Schwelle (2×6 → 31) wie ein von Hand
+// angelegter, ohne dass irgendwo etwas ausgewählt werden müsste.
+// Nur wenn die Bahnart selbst unbekannt ist, bleibt es beim Kegel-Zwischenstand (null).
 function wertungConfig(wettkampf, art, teamsCount) {
   if (wettkampf && wettkampf.wertung) return wettkampf.wertung;
-  if (art === 'schere') {
-    return {
-      modus: teamsCount === 2 ? 'duell' : 'rangliste',
-      gesamtholzPunkte: 2,
-      kriterium2: 'ewp',
-      kriterium2Punkte: 1,
-      ewp: { minHolz: 1 },
-      ewpSchwelle: null, // ohne Vorgabe: neutrale Mitte des möglichen Team-EWP-Bereichs
-    };
-  }
-  return null;
+  if (!art) return null;
+  return defaultWertung(art, (wettkampf && wettkampf.spielerJeMannschaft) || 0, teamsCount);
 }
 
 // Vollständige Wertung für ein Duell (2 Mannschaften) mit EWP als Kriterium 2. Rückgabe null,

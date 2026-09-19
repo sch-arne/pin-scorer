@@ -106,14 +106,26 @@ test('Duell-Modell: EWP erst nach Spielende', () => {
   assert.equal(fertig.teams[0].summeEwp + fertig.teams[1].summeEwp, 36);
 });
 
-test('Duell-Modell: beendeter Wettkampf OHNE hinterlegte Wertung zeigt keine EWP', () => {
-  // Bohle-Programm und wertung: null -> computeWertung liefert null. Die von assignEwp
-  // gesetzten Zahlen gehen dann in keine Wertung ein und dürfen nicht als Spalte erscheinen.
-  const m = grafikModell(mkWettkampf({ wertung: null, programm: { preset: 'bohle' } }));
+test('Duell-Modell: beendeter Wettkampf OHNE ableitbare Wertung zeigt keine EWP', () => {
+  // Classic-Programm und wertung: null -> computeWertung liefert null (Satzpunkte folgen noch).
+  // Die von assignEwp gesetzten Zahlen gehen dann in keine Wertung ein und dürfen nicht als
+  // Spalte erscheinen.
+  const m = grafikModell(mkWettkampf({ wertung: null, programm: { preset: 'classic' } }));
   assert.equal(m.fertig, true);
   assert.equal(m.mitEwp, false);
   assert.equal(m.mitSpielpunkte, false);
   assert.equal(m.teams[0].spielpunkte, null);
+});
+
+test('Duell-Modell: Bohle OHNE hinterlegte Wertung nutzt den Bahnart-Standard', () => {
+  // Bohle wird wie Schere über EWP gewertet — früher blieb ein importierter Bohle-Wettkampf
+  // ganz ohne Spielpunkte, weil der Standard nur für Schere abgeleitet wurde.
+  const m = grafikModell(mkWettkampf({ wertung: null, programm: { preset: 'bohle' } }));
+  assert.equal(m.mitEwp, true);
+  assert.equal(m.mitSpielpunkte, true);
+  // spielpunkte sind fürs Zeichnen bereits formatierte Strings ("1,5" statt 1.5).
+  assert.equal(m.teams[0].spielpunkte, '3'); // Heim hat je Position 10 Holz mehr
+  assert.equal(m.teams[1].spielpunkte, '0');
 });
 
 test('Duell-Modell: Spieler ohne Würfe sind nicht gespielt', () => {

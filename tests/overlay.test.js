@@ -67,15 +67,27 @@ test('buildOverlayHtml: zwei Team-Tabellen mit Namen, Bahn-Spalten und Kegel-Sum
   assert.ok(html.includes('ov-c ov-lane">106<'));
 });
 
-test('buildOverlayHtml ohne Wertung: Team-Kopf zeigt Kegel-Zwischenstand', () => {
+test('buildOverlayHtml ohne ableitbare Wertung: Team-Kopf zeigt Kegel-Zwischenstand', () => {
   const { wettkampf, games } = mkWettkampf();
-  const html = buildOverlayHtml({ wettkampf, games });
+  // Classic wird über Satzpunkte gewertet — die folgen noch, also gibt es keine Spielpunkte.
+  const html = buildOverlayHtml({ wettkampf: { ...wettkampf, programm: { preset: 'classic' } }, games });
   // Heim-Gesamt = Summe der vier Heim-Spieler.
   // Heim p: Summe_s (100+p+s+5) = 4*105 + 4*p + (0+1+2+3) = 420 + 4p + 6 = 426 + 4p.
-  // p=1..4 -> 430+434+438+442 = 1744. Ohne hinterlegte Wertung zeigt die Team-Kopfzeile
+  // p=1..4 -> 430+434+438+442 = 1744. Ohne Wertung zeigt die Team-Kopfzeile
   // den Kegel-Zwischenstand mit Label "Kegel".
   assert.ok(html.includes('ov-th-pts">1744<'));
   assert.ok(html.includes('ov-th-lbl">Kegel<'));
+});
+
+test('buildOverlayHtml: Bahnart-Standard (hier Bohle) gibt dem Kopf Spielpunkte', () => {
+  // Reines Volle-Programm ohne Preset -> bahnartOf leitet Bohle ab, der Bahnart-Standard
+  // greift auch ohne hinterlegte Wertung. Heim und Gast haben je Position dasselbe Holz:
+  // Gesamtholz-Gleichstand -> 1:1, und bei Gleichheit bekommt der Gast die höhere EWP
+  // (Gast 8+6+4+2 = 20 >= Schwelle 15) -> Zusatzpunkt an den Gast.
+  const html = buildOverlayHtml(mkWettkampf());
+  assert.ok(html.includes('ov-th-lbl">Punkte<'));
+  assert.ok(html.includes('ov-th-pts">1<'), 'Heim 1 Punkt');
+  assert.ok(html.includes('ov-th-pts">2<'), 'Gast 2 Punkte');
 });
 
 // Ein echter Schere-Wettkampf (2 Teams je 4 Spieler, 4 Bahnen, kranz-abräumen) über

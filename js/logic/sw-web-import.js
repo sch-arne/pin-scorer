@@ -70,6 +70,7 @@ import { blockHatInhalt } from './holz.js';
 import { gameBaseStatus, wettkampfBaseStatus } from './wettkampf.js';
 import { ABRAEUM_MODI, bahnSlot, bahnplanOf } from './sportwinner-ergebnis.js';
 import { buildWettkampf } from './wettkampf-build.js';
+import { defaultWertung } from './wettkampf-wertung.js';
 import { teamLanesByBahnart } from './roster-import.js';
 import { PRESETS } from './sportkegeln-presets.js';
 
@@ -639,6 +640,8 @@ export function buildImportWettkampf(spec, opt = {}) {
     playedLanes: played,
     mannschaften: spec.mannschaften.map((m, i) => ({ id: m.id, name: m.name, lanes: split[i] || [] })),
     spielerJeMannschaft: spec.spielerJeMannschaft,
+    // Wertung aus der Bahnart des Berichts ableiten — siehe views/import-sportwinner.js.
+    wertung: defaultWertung(spec.preset, spec.spielerJeMannschaft, spec.mannschaften.length),
     namesByTeamPos: spec.namesByTeamPos,
     quelle: 'sportwinner-web',
   });

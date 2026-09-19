@@ -190,9 +190,17 @@ test('Auch bei sechs Gassen: je Gasse die Summe, Aufteilung nur beim Gesamt', ()
 test('Ohne Abräumen (Bohle): eine Spalte je Gasse, keine V/A-Aufteilung', () => {
   const html = buildBeamerHtml(mkWettkampf({ preset: 'bohle', teilsaetze: ['volle', 'volle'] }));
   assert.ok(!html.includes('bm-v-h'), 'V/A-Kopfzeile trotz reinem Volle-Programm');
-  assert.ok(!html.includes('bm-ewp-h'), 'EWP-Spalte ohne hinterlegte Wertung');
   assert.deepEqual(gruppen(html, 0), ['Bahnen', 'Gesamt']);
   assert.deepEqual(nummern(html, 0), ['2', '3', '4', '5']);
+  // Bohle wird wie Schere über EWP gewertet — der Bahnart-Standard greift auch ohne
+  // hinterlegte Wertung (früher blieb hier der Kegelstand stehen).
+  assert.ok(html.includes('bm-ewp-h'), 'EWP-Spalte');
+  assert.ok(html.includes('>Spielpunkte<'), 'Kopf zeigt Spielpunkte');
+});
+
+test('Classic: keine Wertung ableitbar (Satzpunkte folgen) → Kegelstand im Kopf', () => {
+  const html = buildBeamerHtml(mkWettkampf({ preset: 'classic', teilsaetze: ['volle', 'abraeumen'] }));
+  assert.ok(!html.includes('bm-ewp-h'), 'EWP-Spalte ohne Wertung');
   assert.ok(html.includes('>Kegel<'), 'Kopf zeigt den Kegelstand');
 });
 
