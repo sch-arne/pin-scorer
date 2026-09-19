@@ -406,6 +406,93 @@ suite('Ergebnis-Grafik', () => {
     app.assertClean();
   });
 
+  test('Reiter „Spieler": Auswahl aller Spieler, Wurfbild und eigene Texte', async (app) => {
+    const wk = baueWettkampf();
+    fuelleErgebnisse(wk.games);
+    // Ein Logo an der Heim-Mannschaft -> der Logo-Schalter ist nur dort frei.
+    wk.wettkampf.mannschaften[0].logo = 'data:image/png;base64,AAA';
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    ok(app.$('.gfx-pane[data-pane="spieler"]').hidden, 'Spieler-Reiter ist vorab offen');
+    await app.click('[data-gfx-tab="spieler"]');
+    ok(app.$('.gfx-pane[data-pane="grafik"]').hidden, 'Grafik-Reiter blieb offen');
+    const pane = app.need('.gfx-pane[data-pane="spieler"]');
+
+    // Alle 8 Spieler (2 Mannschaften à 4, über 2 Durchgänge), nach Mannschaft gruppiert.
+    const wahl = pane.querySelector('[data-sp-wahl]');
+    eq(wahl.options.length, 8, 'Spieler in der Auswahl');
+    eq([...wahl.querySelectorAll('optgroup')].map((g) => g.label).join(' · '), 'Heim · Gast',
+      'Gruppierung nach Mannschaft');
+
+    // Das Bild entsteht mit denselben Maßen wie die Ergebnis-Grafik.
+    const canvas = pane.querySelector('[data-sp-canvas]');
+    eq(canvas.width, 1080, 'Canvas-Breite');
+    eq(canvas.height, 1440, 'Canvas-Höhe');
+    includes(pane.querySelector('[data-sp-meta]').textContent, 'Transparenz', 'Hinweis fehlt');
+    // Ohne eigenen Namen steht der aus der Aufstellung im Platzhalter.
+    eq(pane.querySelector('[data-sp-titel]').placeholder, wahl.options[0].text.replace(/^\d+\. /, '').replace(/ · Bahn.*$/, ''),
+      'Platzhalter nennt nicht den Spielernamen');
+
+    // Der Logo-Schalter hängt an der Mannschaft des GEWÄHLTEN Spielers.
+    eq(pane.querySelector('.erf-switch[data-sgfx="logo"]').disabled, false, 'Heim hat ein Logo');
+    await app.setSelect('[data-sp-wahl]', wahl.options[4].value); // erster Gast-Spieler
+    eq(pane.querySelector('.erf-switch[data-sgfx="logo"]').disabled, true,
+      'Gast hat kein Logo, der Schalter müsste gesperrt sein');
+    await app.setSelect('[data-sp-wahl]', wahl.options[0].value);
+
+    // Überschrift und Name werden JE SPIELER gemerkt.
+    await app.setInput('[data-sp-ueber]', 'Einzelergebnis');
+    await app.setInput('[data-sp-titel]', 'Der Kapitän');
+    await app.setSelect('[data-sp-wahl]', wahl.options[1].value);
+    eq(app.need('[data-sp-ueber]').value, '', 'Überschrift wanderte zum nächsten Spieler mit');
+    await app.setSelect('[data-sp-wahl]', wahl.options[0].value);
+    eq(app.need('[data-sp-ueber]').value, 'Einzelergebnis', 'Überschrift ging verloren');
+    eq(app.need('[data-sp-titel]').value, 'Der Kapitän', 'Name ging verloren');
+
+    // Reihenfolge und Optionen werden getrennt von der Ergebnis-Grafik gespeichert.
+    await app.click('[data-sgfx="reihenfolge"][data-wert="bahnen"]');
+    eq((app.store('settings') || {}).spielerGrafik.reihenfolge, 'bahnen', 'Reihenfolge nicht gemerkt');
+    // Getrennte Töpfe: die Optionen der Ergebnis-Grafik bleiben unberührt (hier: ungesetzt).
+    eq((app.store('settings') || {}).grafik, undefined, 'die Ergebnis-Grafik wurde mitverstellt');
+
+    // PNG speichern trägt den eigenen Namen im Dateinamen.
+    await app.waitFor(() => !pane.querySelector('[data-sgfx="download"]').disabled, 'PNG wurde nicht erzeugt');
+    await app.click('[data-sgfx="download"]');
+    eq(app.downloads.length, 1, 'kein Download ausgelöst');
+    includes(app.downloads[0].name, 'Der-Kapitän', 'eigener Name fehlt im Dateinamen');
+    includes(app.downloads[0].name, 'Wurfbild', 'Präfix fehlt im Dateinamen');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
+  test('Reiter „Spieler": Trainingsspiel ohne Mannschaften', async (app) => {
+    const game = makeGame({
+      preset: 'schere', saetze: 2, wuerfeProSatz: 4,
+      teilsaetze: ['volle', 'kranz-abraeumen'], bahnen: 2, spieler: ['Anna', 'Bert'],
+    });
+    game.erfassung = makeErfassung(game.config, [
+      [[9, 8, 7, 2], [6, 6, 5, 4]],
+      [[3, 3, 3, 3], [2, 2, 2, 2]],
+    ]);
+    game.status = 'beendet';
+    await app.boot({ hash: '/spiel-laufend', ...MOBIL, storage: { games: [game], 'active-game': game.id } });
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="spieler"]');
+    const pane = app.need('.gfx-pane[data-pane="spieler"]');
+    // Ohne Wettkampf gibt es keine Gruppen, aber sehr wohl Spieler.
+    eq(pane.querySelector('[data-sp-wahl]').options.length, 2, 'Spieler in der Auswahl');
+    eq(pane.querySelectorAll('[data-sp-wahl] optgroup').length, 0, 'Gruppen ohne Mannschaften');
+    // Ohne Logo bleibt der Schalter gesperrt — anders als Livestream und Beamer ist der
+    // Reiter aber nutzbar: das Wurfbild braucht keinen Wettkampf.
+    eq(pane.querySelector('.erf-switch[data-sgfx="logo"]').disabled, true, 'Logo ohne Mannschaft');
+    ok(!pane.querySelector('.gfx-body').hidden, 'Vorschau fehlt im Trainingsspiel');
+    await app.waitFor(() => !pane.querySelector('[data-sgfx="download"]').disabled, 'PNG wurde nicht erzeugt');
+    await app.click('[data-sgfx="download"]');
+    includes(app.downloads[0].name, 'Anna', 'Spielername fehlt im Dateinamen');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
   test('Menü schließt per ✕ und beim Verlassen der Seite', async (app) => {
     const wk = baueWettkampf();
     await starteHub(app, wk);

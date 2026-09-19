@@ -1,5 +1,7 @@
-// Grafik-Menü: das Ausgabe-Fenster des 🖼-Knopfs. Drei Reiter:
+// Grafik-Menü: das Ausgabe-Fenster des 🖼-Knopfs. Vier Reiter:
 //   • „Ergebnis-Grafik" — Vorschau + Optionen des Bild-Exports, Teilen und PNG-Speichern.
+//   • „Spieler"         — dasselbe für EINEN Spieler: alle Einzelwürfe mit Teilsatz- und
+//                         Satzergebnissen auf einem Bild (das Wurfprotokoll zum Teilen).
 //   • „Livestream"      — Vorschau des OBS-Overlays, Team-Logos/Farben und die OBS-URL.
 //   • „Beamer"          — Vorschau der ausführlichen Ergebnistafel für die Leinwand, mit
 //                         Vollbild auf diesem Gerät und einer URL für ein zweites Gerät.
@@ -28,6 +30,11 @@ import {
   grafikTexte, merkeGrafikTexte,
 } from '../logic/ergebnis-grafik.js';
 import { FORMATE, zeichneGrafik } from '../logic/grafik-zeichnen.js';
+import {
+  spielerQuellen, spielerGrafikModell, spielerGrafikOptionen, normalisiereSpielerOptionen,
+  spielerGrafikDateiname, spielerTextId,
+} from '../logic/spieler-grafik.js';
+import { zeichneSpielerGrafik } from '../logic/spieler-zeichnen.js';
 import { overlayHtmlLive } from './overlay.js';
 import { buildBeamerHtml, beamerUrl, beamerOptionen } from './beamer.js';
 import {
@@ -61,9 +68,27 @@ const SCHALTER = [
   ['kontur', 'Umrandung', 'Dunkler Rand um jede Schrift — hält den Text auf unruhigen Fotos lesbar', null, ''],
 ];
 
-function segmentHtml(id, label, hinweis, werte) {
+// Die Regler des Spieler-Reiters: erst die Reihenfolge der Blöcke (nur hier), dann dieselben
+// fünf wie oben. Die Optionen werden GETRENNT gemerkt — eine Wurftabelle braucht oft ein
+// anderes Format als die Rangliste.
+const SEGMENTE_SP = [
+  ['reihenfolge', 'Reihenfolge', 'Blöcke nach Satz-Nummer oder nach Bahnnummer (wie die Spalten der Beamer-Tafel)', [['saetze', 'Sätze'], ['bahnen', 'Bahnen']]],
+  ...SEGMENTE,
+];
+
+const SCHALTER_SP = [
+  ['logo', 'Mannschaftslogo', 'Das Logo der Mannschaft links neben dem Namen', 'hatLogo', 'Für diese Mannschaft ist kein Logo hinterlegt (Reiter „Livestream").'],
+  ['kegelbilder', 'Kegelbilder', 'Über jedem Wurf das Bild: ● gefallen · ○ stehend', 'hatKegel', 'Für dieses Spiel sind keine Kegelbilder erfasst.'],
+  ['wurfnummern', 'Wurfnummern', 'Kleine Nummer unter jedem Wurf (je Satz gezählt)', 'hatWuerfe', 'Es sind keine Einzelwürfe erfasst.'],
+  ['kennzahlen', 'Kennzahlen', 'Fußzeile mit Teilsatz-Summen, 9ern, Kränzen und Fehlern', null, ''],
+  ['kontur', 'Umrandung', 'Dunkler Rand um jede Schrift — hält den Text auf unruhigen Fotos lesbar', null, ''],
+];
+
+// `attr` ist der Datenname, an dem die Klick-Auswertung hängt: 'gfx' für die Ergebnis-Grafik,
+// 'sgfx' für den Spieler-Reiter. So stören sich die beiden Optionssätze nicht.
+function segmentHtml(id, label, hinweis, werte, attr = 'gfx') {
   const btns = werte.map(([w, t]) =>
-    `<button type="button" class="erf-seg-btn" data-gfx="${id}" data-wert="${w}">${esc(t)}</button>`).join('');
+    `<button type="button" class="erf-seg-btn" data-${attr}="${id}" data-wert="${w}">${esc(t)}</button>`).join('');
   return `
     <div class="erf-setting-row">
       <div class="erf-setting-text">
@@ -74,14 +99,14 @@ function segmentHtml(id, label, hinweis, werte) {
     </div>`;
 }
 
-function schalterHtml(id, label, hinweis) {
+function schalterHtml(id, label, hinweis, attr = 'gfx') {
   return `
     <div class="erf-setting-row" data-row="${id}">
       <div class="erf-setting-text">
         <span class="erf-setting-label">${esc(label)}</span>
         <span class="erf-setting-hint" data-hint="${id}">${esc(hinweis)}</span>
       </div>
-      <button type="button" class="erf-switch" role="switch" data-gfx="${id}" aria-label="${esc(label)}">
+      <button type="button" class="erf-switch" role="switch" data-${attr}="${id}" aria-label="${esc(label)}">
         <span class="erf-switch-knob"></span>
       </button>
     </div>`;
@@ -104,6 +129,7 @@ function panelHtml(titel, untertitel) {
       </div>
       <div class="gfx-tabs" role="tablist" aria-label="Ansicht">
         ${reiterHtml('grafik', '🖼 Ergebnis-Grafik', true)}
+        ${reiterHtml('spieler', '👤 Spieler', false)}
         ${reiterHtml('stream', '📺 Livestream', false)}
         ${reiterHtml('beamer', '📽 Beamer', false)}
       </div>
@@ -132,9 +158,53 @@ function panelHtml(titel, untertitel) {
           Auf dem iPhone am besten „Teilen" → „Bild sichern".</p>
       </div>
 
+      <div class="gfx-pane" data-pane="spieler" role="tabpanel" hidden>${spielerPaneHtml()}</div>
       <div class="gfx-pane" data-pane="stream" role="tabpanel" hidden></div>
       <div class="gfx-pane" data-pane="beamer" role="tabpanel" hidden></div>
     </div>`;
+}
+
+// Inhalt des Spieler-Reiters. Er wird EINMAL mit dem Panel gebaut und danach nur noch
+// neu gezeichnet: die Canvas darin überlebt kein innerHTML (dasselbe Argument, aus dem das
+// ganze Panel am body und nicht im View-Root hängt). Aktualisiert werden später nur noch
+// die Einträge der Spieler-Auswahl (fuelleSpielerWahl) und das Bild selbst.
+function spielerPaneHtml() {
+  return `
+    <p class="gfx-stream-info">Die Ergebnisansicht EINES Spielers: alle Einzelwürfe, je Teilsatz
+      die Summe, je Satz das Ergebnis — das Wurfprotokoll als teilbares Bild.</p>
+    <div class="gfx-sp-wahl">
+      <label class="acc-label" for="gfx-sp-wahl">Spieler</label>
+      <select class="join-input acc-text" id="gfx-sp-wahl" data-sp-wahl></select>
+    </div>
+    <div class="gfx-sp-titel">
+      <label class="acc-label" for="gfx-sp-ueber">Überschrift</label>
+      <input class="join-input acc-text" id="gfx-sp-ueber" type="text" data-sp-ueber maxlength="60"
+        placeholder="Ohne Überschrift">
+      <label class="acc-label" for="gfx-sp-titel">Name</label>
+      <input class="join-input acc-text" id="gfx-sp-titel" type="text" data-sp-titel maxlength="60"
+        placeholder="Name des Spielers">
+      <p class="gfx-hint gfx-text-hint">Die Überschrift steht über dem Namen; leer lassen heißt:
+        keine Überschrift. Beim Namen heißt leer: der Name aus der Aufstellung.
+        Beides bleibt je Spieler gespeichert.</p>
+    </div>
+    <p class="field-hint gfx-stream-leer" data-sp-leer hidden>Für dieses Spiel ist noch niemand
+      in der Aufstellung — es gibt hier nichts anzuzeigen.</p>
+    <div class="gfx-body">
+      <div class="gfx-preview">
+        <div class="gfx-canvas-wrap"><canvas class="gfx-canvas" data-sp-canvas role="img" aria-label="Vorschau des Spieler-Bildes"></canvas></div>
+        <p class="gfx-meta" data-sp-meta role="status"></p>
+      </div>
+      <div class="gfx-options">
+        ${SEGMENTE_SP.map(([id, l, h, w]) => segmentHtml(id, l, h, w, 'sgfx')).join('')}
+        ${SCHALTER_SP.map(([id, l, h]) => schalterHtml(id, l, h, 'sgfx')).join('')}
+      </div>
+    </div>
+    <div class="gfx-actions">
+      <button type="button" class="erf-btn done" data-sgfx="share" disabled>↗ Teilen</button>
+      <button type="button" class="erf-btn" data-sgfx="download" disabled>⤓ PNG speichern</button>
+    </div>
+    <p class="gfx-hint">Auch hier bleibt der Hintergrund transparent. Titel und Untertitel des
+      Reiters „Ergebnis-Grafik" stehen als Kontextzeile unter dem Namen.</p>`;
 }
 
 // Inhalt des Livestream-Reiters. `roh` sind die Rohdaten aus datenFn() ({ wettkampf, games }
@@ -211,6 +281,18 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   const laneHold = { fertigNr: null, fertigSeit: 0 }; // Bahnansicht-Halten wie im Overlay
   let textTimer = null;       // entprellt das Merken von Titel/Untertitel
   const bilder = {};
+  // Spieler-Reiter: gewählter Spieler, sein Modell und seine (eigenen) Optionen.
+  // `spWunsch` ist die GEMERKTE Wahl, `spOpts` die gegen das Modell gültig gemachte Fassung —
+  // getrennt, damit ein Spiel ohne Kegelbilder den Schalter nicht dauerhaft löscht.
+  let spKey = '';
+  let spModell = null;
+  let spWunsch = spielerGrafikOptionen(getSettings());
+  let spOpts = normalisiereSpielerOptionen(spWunsch, null);
+  let spDatei = null;
+  let spGezeichnet = false;   // erst beim ersten Öffnen des Reiters zeichnen
+  let spUeber = '';           // freie Überschrift über dem Namen ('' = keine Zeile)
+  let spTitel = '';           // eigener Name des gewählten Spielers ('' = der aus der Aufstellung)
+  let spTextTimer = null;     // entprellt das Merken der Überschrift
 
   let roh = holeRoh();
   let modell = grafikModell(roh);
@@ -238,6 +320,14 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   const untertitelEl = backdrop.querySelector('[data-gfx-text="untertitel"]');
   const streamPane = backdrop.querySelector('[data-pane="stream"]');
   const beamerPane = backdrop.querySelector('[data-pane="beamer"]');
+  const spielerPane = backdrop.querySelector('[data-pane="spieler"]');
+  const spCanvas = spielerPane.querySelector('[data-sp-canvas]');
+  const spMetaEl = spielerPane.querySelector('[data-sp-meta]');
+  const spShareBtn = spielerPane.querySelector('[data-sgfx="share"]');
+  const spDownloadBtn = spielerPane.querySelector('[data-sgfx="download"]');
+  const spWahlEl = spielerPane.querySelector('[data-sp-wahl]');
+  const spTitelEl = spielerPane.querySelector('[data-sp-titel]');
+  const spUeberEl = spielerPane.querySelector('[data-sp-ueber]');
 
   // ── Zeichnen ───────────────────────────────────────────────────────────────
   function zeichne() {
@@ -266,20 +356,36 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   // Die PNG-Datei EAGER nach jedem Zeichnen erzeugen: navigator.share() muss synchron in der
   // Nutzergeste stehen — ein `await toBlob()` davor verbraucht die User-Activation und iOS
   // wirft NotAllowedError. Der Teilen-Knopf teilt deshalb eine schon fertige Datei.
-  function planeBlob() {
-    letzteDatei = null;
-    shareBtn.disabled = true;
-    downloadBtn.disabled = true;
+  // Beide Bilder (Ergebnis-Grafik und Spieler-Reiter) gehen denselben Weg, deshalb ein
+  // gemeinsamer Helfer: `merke` legt die fertige Datei dort ab, wo der jeweilige Reiter sie
+  // beim Teilen/Speichern sucht.
+  //
+  // toBlob ist ASYNCHRON: tippt jemand weiter, ist schon das nächste Zeichnen unterwegs,
+  // bevor das vorige seine Datei abgeliefert hat. Deshalb zählt `blobLauf` je Ziel mit — ein
+  // verspäteter Rückruf aus einem überholten Lauf wird verworfen, statt die neuere Datei
+  // (und ihren Dateinamen) zu überschreiben. `nameFn` wird aus demselben Grund erst im
+  // Rückruf ausgewertet.
+  const blobLauf = { grafik: 0, spieler: 0 };
+  function planeDatei(ziel, cv, nameFn, share, download, meta, merke) {
+    const lauf = (blobLauf[ziel] += 1);
+    merke(null);
+    share.disabled = true;
+    download.disabled = true;
     try {
-      canvas.toBlob((blob) => {
-        if (!lebt || !blob) return;
-        letzteDatei = new File([blob], grafikDateiname({ ...modell, titel }), { type: 'image/png' });
-        shareBtn.disabled = false;
-        downloadBtn.disabled = false;
+      cv.toBlob((blob) => {
+        if (!lebt || !blob || blobLauf[ziel] !== lauf) return;
+        merke(new File([blob], nameFn(), { type: 'image/png' }));
+        share.disabled = false;
+        download.disabled = false;
       }, 'image/png');
     } catch (e) {
-      metaEl.textContent = 'Das Bild konnte nicht erzeugt werden.';
+      meta.textContent = 'Das Bild konnte nicht erzeugt werden.';
     }
+  }
+
+  function planeBlob() {
+    planeDatei('grafik', canvas, () => grafikDateiname({ ...modell, titel }),
+      shareBtn, downloadBtn, metaEl, (d) => { letzteDatei = d; });
   }
 
   // Logos einmal laden und merken; die Vorschau startet sofort ohne sie und wird danach
@@ -293,6 +399,159 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
       img.onerror = () => fertig();
       img.src = t.logo;
     }))).then(() => { if (lebt) zeichne(); });
+  }
+
+  // ── Spieler-Reiter ─────────────────────────────────────────────────────────
+  // Die Auswahlliste (neu) befüllen. Getrennt vom Zeichnen, weil sie sich nur beim ↻ ändert
+  // (ein nachgetragener Name, ein neuer Durchgang) — und weil ein Neuaufbau des <select>
+  // mitten im Zeichnen die Auswahl des Nutzers verlöre.
+  function fuelleSpielerWahl() {
+    const quellen = spielerQuellen(roh);
+    const leerHinweis = spielerPane.querySelector('[data-sp-leer]');
+    const body = spielerPane.querySelector('.gfx-body');
+    const aktionen = spielerPane.querySelector('.gfx-actions');
+    const wahlBox = spielerPane.querySelector('.gfx-sp-wahl');
+    const hatSpieler = quellen.length > 0;
+    if (leerHinweis) leerHinweis.hidden = hatSpieler;
+    if (body) body.hidden = !hatSpieler;
+    if (aktionen) aktionen.hidden = !hatSpieler;
+    // Bei nur einem Spieler (Training) ist die Auswahl überflüssig.
+    if (wahlBox) wahlBox.hidden = quellen.length < 2;
+    if (!hatSpieler) { spKey = ''; return; }
+    if (!quellen.some((q) => q.key === spKey)) waehleSpieler(quellen[0].key);
+
+    // Im Wettkampf nach Mannschaften gruppieren — bei zwölf Namen ist das der Unterschied
+    // zwischen Suchen und Finden.
+    const eintrag = (q) => {
+      const pos = q.teamPos ? q.teamPos + '. ' : '';
+      const bahn = q.startBahn == null ? '' : ' · Bahn ' + q.startBahn;
+      return `<option value="${esc(q.key)}"${q.key === spKey ? ' selected' : ''}>${esc(pos + q.name + bahn)}</option>`;
+    };
+    const gruppen = [];
+    quellen.forEach((q) => {
+      const name = q.mannschaft || '';
+      const letzte = gruppen[gruppen.length - 1];
+      if (letzte && letzte.name === name) letzte.eintraege.push(q);
+      else gruppen.push({ name, eintraege: [q] });
+    });
+    spWahlEl.innerHTML = gruppen.map((g) => (g.name
+      ? `<optgroup label="${esc(g.name)}">${g.eintraege.map(eintrag).join('')}</optgroup>`
+      : g.eintraege.map(eintrag).join(''))).join('');
+  }
+
+  // Auf einen anderen Spieler umschalten. Die Überschrift gehört zum SPIELER, nicht zum
+  // Panel: beim Wechsel wird erst das Getippte des bisherigen gesichert, dann die gemerkte
+  // Überschrift des neuen geladen.
+  function waehleSpieler(key) {
+    if (spKey && spKey !== key) merkeSpielerTitel();
+    spKey = key;
+    // Der Topf hält je Eintrag ein Paar {titel, untertitel}; hier sind das Name und
+    // Überschrift dieses Spielers.
+    const gemerkt = grafikTexte(getSettings(), spielerTextId(spKey));
+    spTitel = gemerkt ? gemerkt.titel : '';
+    spUeber = gemerkt ? gemerkt.untertitel : '';
+    if (spTitelEl) spTitelEl.value = spTitel;
+    if (spUeberEl) spUeberEl.value = spUeber;
+  }
+
+  // Name und Überschrift je Spieler merken — derselbe Topf und dieselbe Deckelung wie bei
+  // Titel/Untertitel der Ergebnis-Grafik (siehe merkeGrafikTexte), nur unter eigenem Schlüssel.
+  function merkeSpielerTitel() {
+    const id = spielerTextId(spKey);
+    if (!id) return;
+    // Wer nichts eingegeben hat, soll auch keinen Platz im (gedeckelten) Topf belegen —
+    // sonst verdrängte schon das bloße Öffnen des Reiters die Titel anderer Spiele.
+    const leer = !String(spTitel).trim() && !String(spUeber).trim();
+    if (leer && !grafikTexte(getSettings(), id)) return;
+    saveSettings({
+      grafikTexte: merkeGrafikTexte(getSettings(), id, { titel: spTitel, untertitel: spUeber }),
+    });
+  }
+
+  function planeSpielerTitelMerken() {
+    clearTimeout(spTextTimer);
+    spTextTimer = setTimeout(() => { if (lebt) merkeSpielerTitel(); }, 400);
+  }
+
+  // Das Spieler-Bild neu zeichnen. Holt die Rohdaten NICHT selbst — wie die Ergebnis-Grafik
+  // ist es ein Schnappschuss von `roh`, damit sich die Zahlen beim Einstellen nicht bewegen.
+  function zeichneSpieler() {
+    if (!lebt || !spKey) { spMetaEl.textContent = ''; return; }
+    // Titel/Untertitel des ersten Reiters als Kontextzeile: das Bild soll sagen, aus welchem
+    // Spiel diese Würfe stammen, ohne dass es dafür ein zweites Textfeld braucht.
+    spModell = spielerGrafikModell(roh, spKey, {
+      ueberschrift: spUeber,
+      titel: spTitel,
+      untertitel: [titel, untertitel].filter(Boolean).join(' · '),
+    });
+    // Der Platzhalter zeigt, was ohne eigene Überschrift dastünde.
+    if (spTitelEl) spTitelEl.placeholder = spModell.name || 'Name des Spielers';
+    spOpts = normalisiereSpielerOptionen(spWunsch, spModell);
+    let layout = null;
+    try {
+      layout = zeichneSpielerGrafik(spCanvas, spModell, spOpts, bilder);
+    } catch (e) {
+      spMetaEl.textContent = 'Das Bild konnte nicht gezeichnet werden.';
+      return;
+    }
+    spGezeichnet = true;
+    ladeSpielerLogo();
+    syncSpielerUi();
+    const fmt = FORMATE[spOpts.format];
+    const eng = layout.skala < 0.8 ? ' · viele Würfe — die Tabelle wird verkleinert' : '';
+    const ohne = spModell.hatWuerfe ? '' : ' · keine Einzelwürfe erfasst, nur die Ergebnisse';
+    spMetaEl.textContent = `${fmt.masse} · PNG mit Transparenz${eng}${ohne}`;
+    spCanvas.setAttribute('aria-label',
+      `Wurfbild von ${spModell.name || 'Spieler'}, Gesamt ${spModell.gesamt} Holz`);
+    planeDatei('spieler', spCanvas, () => spielerGrafikDateiname(spModell),
+      spShareBtn, spDownloadBtn, spMetaEl, (d) => { spDatei = d; });
+  }
+
+  // Das Logo der Mannschaft dieses Spielers nachladen. Teilt sich den Bild-Cache `bilder`
+  // mit der Ergebnis-Grafik (Schlüssel ist dort wie hier die Mannschafts-ID), lädt also im
+  // Duell meist gar nichts nach. Nach dem Laden einmal neu zeichnen — die Vorschau startet
+  // ohne Logo, statt auf das Bild zu warten.
+  function ladeSpielerLogo() {
+    const id = spModell && spModell.mannschaftId;
+    if (!id || !spModell.logo || bilder[id]) return;
+    const img = new Image();
+    img.onload = () => {
+      bilder[id] = img;
+      if (lebt && reiter === 'spieler') zeichneSpieler();
+    };
+    img.onerror = () => { /* ohne Logo weiterzeichnen */ };
+    img.src = spModell.logo;
+  }
+
+  // Schalterstellung im Spieler-Reiter spiegeln. Streng auf `spielerPane` beschränkt: die
+  // Zeilen tragen dieselben data-row/data-hint-Namen wie die der Ergebnis-Grafik.
+  function syncSpielerUi() {
+    spielerPane.querySelectorAll('.erf-seg-btn[data-sgfx]').forEach((b) => {
+      const an = spOpts[b.dataset.sgfx] === b.dataset.wert;
+      b.classList.toggle('is-on', an);
+      b.setAttribute('aria-pressed', String(an));
+    });
+    SCHALTER_SP.forEach(([id, , hinweis, bedingung, gesperrtText]) => {
+      const btn = spielerPane.querySelector(`.erf-switch[data-sgfx="${id}"]`);
+      if (!btn) return;
+      const moeglich = !bedingung || !!(spModell && spModell[bedingung]);
+      btn.classList.toggle('is-on', !!spOpts[id]);
+      btn.setAttribute('aria-checked', String(!!spOpts[id]));
+      btn.disabled = !moeglich;
+      const row = btn.closest('.erf-setting-row');
+      if (row) row.classList.toggle('is-gesperrt', !moeglich);
+      const hint = row && row.querySelector(`[data-hint="${id}"]`);
+      if (hint) hint.textContent = moeglich ? hinweis : gesperrtText;
+    });
+  }
+
+  // Eine Option des Spieler-Bildes setzen. Gemerkt wird der WUNSCH (spWunsch), nicht die
+  // gegen das Modell gekürzte Fassung — sonst wäre „Kegelbilder" nach einem Spiel ohne
+  // erfasste Kegel dauerhaft aus.
+  function setSpielerOption(id, wert) {
+    spWunsch = { ...spWunsch, [id]: wert };
+    saveSettings({ spielerGrafik: { ...spWunsch } });
+    zeichneSpieler();
   }
 
   // ── Livestream-Reiter ──────────────────────────────────────────────────────
@@ -445,7 +704,7 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   }
 
   function setzeReiter(id) {
-    reiter = (id === 'stream' || id === 'beamer') ? id : 'grafik';
+    reiter = (id === 'stream' || id === 'beamer' || id === 'spieler') ? id : 'grafik';
     backdrop.querySelectorAll('[data-gfx-tab]').forEach((b) => {
       const an = b.dataset.gfxTab === reiter;
       b.classList.toggle('is-on', an);
@@ -456,7 +715,12 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     });
     if (reiter === 'stream') baueStream();
     else if (reiter === 'beamer') baueBeamer();
-    vorschauTakt(reiter !== 'grafik');
+    // Das Spieler-Bild erst beim ersten Öffnen zeichnen — es kostet ein paar hundert
+    // Textausgaben, die niemand braucht, der nur die Ergebnis-Grafik teilen will.
+    else if (reiter === 'spieler' && !spGezeichnet) zeichneSpieler();
+    // Nur Livestream und Beamer laufen mit; das Spieler-Bild ist wie die Ergebnis-Grafik
+    // ein Schnappschuss und wird über das ↻ aktualisiert.
+    vorschauTakt(reiter === 'stream' || reiter === 'beamer');
   }
 
   // ── Bedienelemente ─────────────────────────────────────────────────────────
@@ -514,8 +778,10 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     ladeBilder();
     syncUi();
     zeichne();
+    fuelleSpielerWahl();
     if (reiter === 'stream') baueStream();
     else if (reiter === 'beamer') baueBeamer();
+    else if (reiter === 'spieler') zeichneSpieler();
   }
 
   // ── Ausgabe ────────────────────────────────────────────────────────────────
@@ -532,12 +798,11 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
   }
 
-  async function teilen() {
-    const datei = letzteDatei;
+  async function teilen(datei, name) {
     if (!datei) return;
     if (navigator.share && navigator.canShare && navigator.canShare({ files: [datei] })) {
       try {
-        await navigator.share({ files: [datei], title: titel || 'Ergebnis' });
+        await navigator.share({ files: [datei], title: name || 'Ergebnis' });
         return;
       } catch (e) {
         if (e && e.name === 'AbortError') return; // Nutzer hat abgebrochen
@@ -552,6 +817,8 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     // Noch nicht gesichertes Getipptes festhalten, bevor alles abgeräumt wird.
     clearTimeout(textTimer);
     merkeTexte();
+    clearTimeout(spTextTimer);
+    merkeSpielerTitel();
     lebt = false;
     offen = null;
     vorschauTakt(false);
@@ -566,8 +833,11 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     document.removeEventListener('webkitfullscreenchange', aufVollbild);
     document.removeEventListener('keydown', aufTaste);
     letzteDatei = null;
+    spDatei = null;
     canvas.width = 0;
     canvas.height = 0;
+    spCanvas.width = 0;
+    spCanvas.height = 0;
     backdrop.remove();
     if (historyEintrag) { historyEintrag = false; history.back(); }
   }
@@ -588,20 +858,51 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
     if (e.target === backdrop) { schliessen(); return; }
     const tab = e.target.closest('[data-gfx-tab]');
     if (tab) { setzeReiter(tab.dataset.gfxTab); return; }
+    // Der Spieler-Reiter führt seinen eigenen Satz Optionen (data-sgfx) — sonst schaltete
+    // ein Klick dort die Ergebnis-Grafik mit um.
+    const sp = e.target.closest('[data-sgfx]');
+    if (sp) {
+      if (sp.disabled) return;
+      const sid = sp.dataset.sgfx;
+      if (sid === 'share') teilen(spDatei, (spModell && spModell.name) || 'Ergebnis');
+      else if (sid === 'download') { if (spDatei) herunterladen(spDatei); }
+      else if (sp.dataset.wert !== undefined) setSpielerOption(sid, sp.dataset.wert);
+      else setSpielerOption(sid, !spOpts[sid]);
+      return;
+    }
     const el = e.target.closest('[data-gfx]');
     if (!el || el.disabled) return;
     const id = el.dataset.gfx;
     if (id === 'close') schliessen();
     else if (id === 'refresh') aktualisieren();
-    else if (id === 'share') teilen();
+    else if (id === 'share') teilen(letzteDatei, titel || 'Ergebnis');
     else if (id === 'download') { if (letzteDatei) herunterladen(letzteDatei); }
     else if (id === 'beamer-voll') vollbild();
     else if (el.dataset.wert !== undefined) setOption(id, el.dataset.wert);
     else setOption(id, !opts[id]);
   });
 
-  titelEl.addEventListener('input', () => { titel = titelEl.value; planeTextMerken(); zeichne(); });
-  untertitelEl.addEventListener('input', () => { untertitel = untertitelEl.value; planeTextMerken(); zeichne(); });
+  // Titel und Untertitel stehen auch unter dem Namen im Spieler-Bild — aber nur neu zeichnen,
+  // wenn dieser Reiter gerade offen ist (sonst je Tastendruck ein ganzes Wurfraster).
+  titelEl.addEventListener('input', () => {
+    titel = titelEl.value; planeTextMerken(); zeichne();
+    if (reiter === 'spieler') zeichneSpieler();
+  });
+  untertitelEl.addEventListener('input', () => {
+    untertitel = untertitelEl.value; planeTextMerken(); zeichne();
+    if (reiter === 'spieler') zeichneSpieler();
+  });
+  spWahlEl.addEventListener('change', () => { waehleSpieler(spWahlEl.value); zeichneSpieler(); });
+  spTitelEl.addEventListener('input', () => {
+    spTitel = spTitelEl.value;
+    planeSpielerTitelMerken();
+    zeichneSpieler();
+  });
+  spUeberEl.addEventListener('input', () => {
+    spUeber = spUeberEl.value;
+    planeSpielerTitelMerken();
+    zeichneSpieler();
+  });
 
   window.addEventListener(UNMOUNT_EVENT, schliessen);
   window.addEventListener('popstate', aufPopstate);
@@ -616,8 +917,14 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   syncUi();
   zeichne();
   ladeBilder();
+  fuelleSpielerWahl();
+  syncSpielerUi();
   // Erst mit geladenen Schriften stimmt die Textmessung (und damit die Namenskürzung).
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (lebt) zeichne(); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => {
+    if (!lebt) return;
+    zeichne();
+    if (reiter === 'spieler') zeichneSpieler();
+  });
 
   offen = { schliessen };
   return { schliessen };
