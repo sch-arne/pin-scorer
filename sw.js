@@ -3,7 +3,7 @@
 // Verbindungsaussetzern. Cache-first für die App-Shell, Netzwerk-Fallback.
 // Bei Änderungen an den App-Dateien CACHE hochzählen (v1 -> v2 ...).
 
-const CACHE = 'pin-scorer-v60';
+const CACHE = 'pin-scorer-v61';
 
 // Relative Pfade -> funktionieren auch unter GitHub-Pages-Unterpfad /<repo>/
 const SHELL = [
@@ -42,6 +42,8 @@ const SHELL = [
   './js/logic/wettkampf-wertung.js',
   './js/logic/ergebnis-grafik.js',
   './js/logic/grafik-zeichnen.js',
+  './js/logic/spieler-grafik.js',
+  './js/logic/spieler-zeichnen.js',
   './js/logic/roster-import.js',
   './js/logic/sw-web-import.js',
   './js/logic/sportwinner-ergebnis.js',
