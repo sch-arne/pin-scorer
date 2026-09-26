@@ -138,6 +138,16 @@ test('parseSpielerInfo: nur Gesamtsummen -> saetze null und eine Warnung', () =>
   assert.match(b.warnungen[0], /nur Gesamtsummen/);
 });
 
+test('parseSpielerInfo: eine LEERE Antwort wird als leer gemeldet, nicht als krumme Form', () => {
+  // Der Ergebnisdienst antwortet auch bei einer ABGELEHNTEN Anfrage mit HTTP 200 und leerem
+  // Koerper (so am 26.09.2026 passiert, als er den bis dahin gesendeten leeren `thumbmark`
+  // sperrte). Frueher lief das in dieselbe Meldung wie ein geaendertes Zeilenformat — und die
+  // schickte bei der Fehlersuche in die falsche Richtung.
+  for (const leer of [[], null, undefined, [[1, 'Meier']]]) {
+    assert.throws(() => parseSpielerInfo(leer), /keine Zeile geliefert/);
+  }
+});
+
 test('parseSpielerInfo: Zeilen, deren Summen unter keinem Layout aufgehen, werden abgelehnt', () => {
   // Volle+Abraeumen ergeben 151, die Holzspalte sagt 150 — unter keinem der drei Layouts
   // geht das auf. Statt still falsche Zahlen zu importieren, bricht der Import ab.

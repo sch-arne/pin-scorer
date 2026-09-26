@@ -67,6 +67,14 @@ meldet, ist bereits die Diagnose:
 | „Die Serverfunktion … antwortet nicht" | nicht deployt, oder der Name weicht ab |
 | „Konto nötig — bitte unter Spieler anmelden" | Funktion läuft, es fehlt die Anmeldung |
 | „Zu viele Abfragen" | Rate-Limit der Funktion (30/Minute) |
+| „Der Ergebnisdienst hat zu dieser Partie keine Zeile geliefert" | Liga, Spieltag und Partien kommen an, nur `GetSpielerInfo` bleibt leer. Heisst: der Dienst lehnt den `thumbmark` ab. Am 26.09.2026 sperrte er den bis dahin gesendeten LEEREN Hash; seither steht in `THUMBMARK` der Name der App. Wird auch der gesperrt, beim Verband nachfragen — nicht einen neuen Wert raten. |
+
+Zum Nachprüfen, ob es am `thumbmark` liegt, braucht es die Function gar nicht: der Ergebnisdienst
+antwortet auf diese Anfrage direkt (leerer Körper = abgelehnt, sonst der Spielbericht).
+
+```bash
+curl -s -X POST "https://kvn.sportwinner.de/php/kvn/service.php" -H "Content-Type: application/x-www-form-urlencoded" -H "Referer: https://kvn.sportwinner.de/" -H "Origin: https://kvn.sportwinner.de" --data-urlencode "command=GetSpielerInfo" --data-urlencode "id_saison=12" --data-urlencode "id_sektion=2" --data-urlencode "id_spiel=347918" --data-urlencode "wertung=0" --data-urlencode 'thumbmark={"thumbmark":"pins-scorer","webdriver":false}'
+```
 
 Gegenprobe, dass die Allowlist greift — muss mit `400 Kommando nicht erlaubt` antworten:
 

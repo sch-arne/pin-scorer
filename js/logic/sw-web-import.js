@@ -249,6 +249,17 @@ export function erkenneLayout(rows) {
 //          { name, kegel, saetze:null, gesamt:{volle,abr,fehler} }  (nur Gesamtsummen)
 export function parseSpielerInfo(rows, { saetze = 4 } = {}) {
   const alle = (Array.isArray(rows) ? rows : []).filter((r) => Array.isArray(r) && r.length >= 6);
+  // GAR KEINE Zeilen ist etwas anderes als „Zeilen in unbekannter Form" und braucht eine eigene
+  // Meldung: der Ergebnisdienst antwortet auf GetSpielerInfo auch dann mit HTTP 200 und einem
+  // LEEREN Koerper, wenn er die Anfrage ablehnt (am 26.09.2026 fing er an, den bis dahin
+  // gesendeten leeren `thumbmark` zu sperren — siehe supabase/functions/sportwinner-proxy).
+  // Die alte Meldung schickte in genau diesem Fall auf die falsche Fahndung: sie las sich wie
+  // eine geaenderte Tabellenform, obwohl ueberhaupt nichts angekommen war.
+  if (!alle.length) {
+    throw new Error('Der Ergebnisdienst hat zu dieser Partie keine Zeile geliefert. '
+      + 'Entweder ist der Spielbericht dort noch nicht veröffentlicht — oder der Dienst hat die '
+      + 'Anfrage abgelehnt (dann hilft nur ein Blick in die Serverfunktion, nicht ein neuer Versuch).');
+  }
   const layout = erkenneLayout(alle);
   if (!layout) throw new Error('Spielbericht nicht lesbar — unbekanntes Zeilenformat.');
   const def = LAYOUTS[layout];
