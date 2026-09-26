@@ -79,7 +79,7 @@ export function importSwWebView() {
     // Auswahlkette
     saisons: [], saison: '',
     sektion: 2,
-    ligen: [], liga: '', ligenLaden: false,
+    ligen: [], liga: '', ligenLaden: false, ligenUnvollstaendig: false,
     spieltage: [], spieltag: '',
     partien: [], partie: null, partienLaden: false,
     // Spielbericht + daraus abgeleitetes Spec
@@ -147,8 +147,12 @@ export function importSwWebView() {
     state.spieltage = []; state.spieltag = ''; state.partien = []; state.partie = null;
     state.spec = null;
     render();
+    state.ligenUnvollstaendig = false;
     try {
       state.ligen = await swWeb.alleLigen(state.saison, state.sektion);
+      // Ein Teil der Abfragen ist ausgefallen: die Liste steht, aber es koennen Ligen fehlen.
+      // Das MUSS dastehen — sonst sieht eine fehlende Liga aus wie „gibt es nicht".
+      state.ligenUnvollstaendig = !!state.ligen.unvollstaendig;
     } catch (e) {
       state.fehler = e.message || 'Ligen konnten nicht geladen werden.';
     }
@@ -452,6 +456,9 @@ export function importSwWebView() {
           <option value="">${s.ligenLaden ? 'Lade Ligen …' : 'Bitte wählen'}</option>
           ${s.ligen.map((x) => opt(x.id, x.name, s.liga)).join('')}
         </select>
+        ${s.ligenUnvollstaendig && !s.ligenLaden ? `
+        <p class="stats-sub">Ein Teil der Abfragen kam nicht durch — es können Ligen fehlen.
+          <button type="button" class="anl-inline-link" id="swb-ligen-neu">Nochmal laden</button></p>` : ''}
       </section>
       ${s.liga ? `
       <section class="field">
@@ -775,6 +782,9 @@ export function importSwWebView() {
     }
     const ich = ev.target.closest('[data-ich]');
     if (ich) { state.ichKey = ich.dataset.ich; render(); return; }
+    // Unvollstaendige Ligen-Liste nachladen. Kein Neuaufbau der ganzen Ansicht: Saison und
+    // Disziplin stehen ja schon, es fehlen nur die ausgefallenen Teilabfragen.
+    if (ev.target.closest('#swb-ligen-neu')) { ladeLigen(); return; }
     if (ev.target.closest('[data-action="erneut"]')) {
       state.phase = 'laden'; state.fehler = '';
       render();

@@ -39,6 +39,11 @@ export const NICHT_BEREITGESTELLT = 'Die Serverfunktion „sportwinner-proxy" an
   + 'Sie muss einmalig bereitgestellt werden (supabase/functions/README.md) — erst danach kann '
   + 'die App den Ergebnisdienst abfragen.';
 
+// Keine einzige Teilabfrage kam durch. Eigene Meldung, weil der Nutzer hier nichts falsch
+// gemacht hat und ein zweiter Versuch meist hilft (die Ausfälle kommen in Wellen).
+export const NICHTS_GELADEN = 'Der Ergebnisdienst hat keine Liga geliefert — '
+  + 'die Verbindung zu ihm fällt derzeit phasenweise aus. Bitte gleich noch einmal versuchen.';
+
 function klartext(error, body) {
   if (body) return body;                                   // Meldung der Function selbst
   const roh = (error && error.message) || '';
@@ -82,20 +87,44 @@ export function ligen(idSaison, sektion, idBezirk, art, opt) {
 }
 
 // Alle Ligen einer Saison: Bundes- und Landesligen plus die Bezirksligen jedes Bezirks.
-// Bewusst sequenziell mit Abbruch, sobald `filter` genug getroffen hat — der Ergebnisdienst
-// soll nicht in Serie durchgeblättert werden (siehe Rate-Limit im Relay).
+// Bewusst sequenziell — der Ergebnisdienst soll nicht in Serie durchgeblättert werden
+// (siehe Rate-Limit im Relay).
+//
+// Das sind ein halbes Dutzend Abfragen, und die Verbindung zum Ergebnisdienst fällt phasenweise
+// aus (siehe supabase/functions/sportwinner-proxy: aus dem Rechenzentnum bleibt zeitweise jede
+// Anfrage stumm). Früher riss EINE ausgefallene davon die ganze Liste mit: die Funktion warf,
+// und die Auswahl blieb leer — obwohl die Bundes- und Landesligen längst da waren. Genau die
+// braucht aber, wer ein Bundesliga-Spiel importieren will.
+//
+// Deshalb zählt jetzt, was ANKOMMT. Jede Teilabfrage darf einzeln scheitern; geworfen wird nur,
+// wenn ÜBERHAUPT nichts zusammenkam. `unvollstaendig` sagt der Ansicht, dass sie zum Nachladen
+// auffordern soll — eine kurze Liste ohne Hinweis wäre schlimmer als ein Fehler, weil die
+// fehlende Liga dann wie „gibt es nicht" aussieht.
 export async function alleLigen(idSaison, sektion, opt = {}) {
   const { nurBezirke = false } = opt;
   const out = [];
+  let fehlend = 0;
   const merke = (liste) => liste.forEach((l) => {
     if (!out.some((x) => x.id === l.id)) out.push(l);
   });
+  const versuche = async (fn) => {
+    try { merke(await fn()); } catch { fehlend += 1; }
+  };
   if (!nurBezirke) {
-    for (const a of LIGA_ARTEN) merke(await ligen(idSaison, sektion, a.bezirk, a.art, opt));
+    for (const a of LIGA_ARTEN) await versuche(() => ligen(idSaison, sektion, a.bezirk, a.art, opt));
   }
-  for (const bz of await bezirke(idSaison, sektion, opt)) {
-    merke(await ligen(idSaison, sektion, bz.id, 2, opt));
+  let bezirksliste = [];
+  try {
+    bezirksliste = await bezirke(idSaison, sektion, opt);
+  } catch (e) {
+    fehlend += 1;
+    if (!out.length) throw e;            // nichts da UND die Bezirke fehlen -> echter Fehler
   }
+  for (const bz of bezirksliste) {
+    await versuche(() => ligen(idSaison, sektion, bz.id, 2, opt));
+  }
+  if (!out.length) throw new Error(NICHTS_GELADEN);
+  out.unvollstaendig = fehlend > 0;
   return out;
 }
 

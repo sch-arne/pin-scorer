@@ -163,10 +163,13 @@ Deno.serve(async (req: Request) => {
         signal: AbortSignal.timeout(VERSUCH_MS),
       });
       break;
-    } catch {
-      // Bewusst ohne Details: die Fehlermeldung könnte Teile der Anfrage enthalten.
-      // Geloggt wird nur, DASS ein Versuch haengen blieb — nie Inhalte.
-      console.error(`[sw-proxy] ${command} -> Versuch ${versuch}/${VERSUCHE} ohne Antwort`);
+    } catch (e) {
+      // Bewusst ohne Meldungstext: der koennte Teile der Anfrage enthalten. Die ART des
+      // Fehlers steht dagegen fuer sich und ist bei der Suche das Entscheidende —
+      // `TimeoutError` heisst: verbunden, aber keine Antwort (so sieht eine absichtliche
+      // Bremse aus), ein `TypeError` dagegen: die Verbindung kam gar nicht zustande.
+      const art = (e && typeof e === 'object' && 'name' in e) ? String(e.name) : 'unbekannt';
+      console.error(`[sw-proxy] ${command} -> Versuch ${versuch}/${VERSUCHE} ohne Antwort (${art})`);
       if (versuch < VERSUCHE) await new Promise((r) => setTimeout(r, PAUSE_MS));
     }
   }
