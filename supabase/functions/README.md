@@ -67,6 +67,7 @@ meldet, ist bereits die Diagnose:
 | „Die Serverfunktion … antwortet nicht" | nicht deployt, oder der Name weicht ab |
 | „Konto nötig — bitte unter Spieler anmelden" | Funktion läuft, es fehlt die Anmeldung |
 | „Zu viele Abfragen" | Rate-Limit der Funktion (30/Minute) |
+| „Der Ergebnisdienst hat auf mehrere Anfragen nicht geantwortet" | Die Verbindung aus der Edge-Runtime zu `sportwinner.de` bleibt haengen, bis sie ablaeuft — am 26.09.2026 gemessen etwa jede zweite, bei JEDEM Kommando, waehrend dieselben Abfragen vom Rechner eines Nutzers 8 von 8 Mal und in unter 3,5 s durchgingen. Es ist also der Weg aus dem Rechenzentrum, nicht die App. Die Funktion setzt deshalb bis zu dreimal neu an; kommt trotzdem nichts, hilft nur ein neuer Versuch. Haeuft es sich, beim Verband nachfragen, ob Rechenzentrums-Adressen gebremst werden. |
 | „Der Ergebnisdienst hat zu dieser Partie keine Zeile geliefert" | Liga, Spieltag und Partien kommen an, nur `GetSpielerInfo` bleibt leer. Heisst: der Dienst lehnt den `thumbmark` ab. Am 26.09.2026 sperrte er den bis dahin gesendeten LEEREN Hash; seither steht in `THUMBMARK` der Name der App. Wird auch der gesperrt, beim Verband nachfragen — nicht einen neuen Wert raten. |
 
 Zum Nachprüfen, ob es am `thumbmark` liegt, braucht es die Function gar nicht: der Ergebnisdienst
