@@ -16,10 +16,16 @@
 //  • Der Ergebnisdienst erwartet an `GetSpielerInfo` einen Browser-Fingerprint (thumbmarkjs).
 //    Den geben wir nicht weiter — statt dessen setzt das Relay den Konstantwert THUMBMARK.
 //    Am echten Dienst ausprobiert: geprueft wird nur, dass das Feld ein JSON-Objekt mit den
-//    Schluesseln `thumbmark` und `webdriver: false` ist. Der Hash selbst ist beliebig (auch
-//    leer), die `components` duerfen ganz fehlen — `webdriver: true` blockt (Bot-Erkennung).
-//    Der Konstantwert erfuellt die Pruefung und traegt null Information ueber den Nutzer.
-//    Wird das Feld weggelassen oder auf einen blossen String gesetzt, kommen 0 Zeilen zurueck.
+//    Schluesseln `thumbmark` und `webdriver: false` ist; die `components` duerfen ganz fehlen.
+//    Blockt (0 Zeilen, HTTP 200 mit LEEREM Koerper): `webdriver: true`, ein fehlendes
+//    `webdriver`-Feld, ein fehlendes `thumbmark`-Feld — und seit dem 26.09.2026 auch der
+//    LEERE Hash `""` sowie 32 Nullen. Der Dienst hat also offenbar genau die Platzhalter
+//    gesperrt, die nach Automat aussehen. Der Wert selbst wird nicht geprueft (jede andere
+//    Zeichenkette liefert den Bericht, auch mehrfach hintereinander — kein Kontingent je Wert).
+//    Deshalb steht hier jetzt nicht der leere Hash, sondern der NAME der App: sie gibt sich
+//    damit zu erkennen, statt einen Browser-Fingerprint vorzutaeuschen, und traegt weiterhin
+//    null Information ueber den Nutzer. Wird auch dieser Wert gesperrt, ist das die Antwort
+//    des Betreibers — dann beim Verband nachfragen und nicht etwa raten oder wuerfeln.
 //  • Die IP des Nutzers erreicht Sportwinner nicht — nur die des Relays.
 //  • Kein offener Proxy: nur angemeldete Konten, nur Hosts *.sportwinner.de, nur die
 //    Kommandos aus KOMMANDOS, und ein Limit je Konto gegen massenhaftes Abziehen
@@ -39,9 +45,9 @@ const KOMMANDOS = new Set([
 const HOST_RE = /^[a-z0-9-]+\.sportwinner\.de$/;
 const KONTAKT = 'pins-scorer (Verein Osnabrücker Kegler e.V.)';
 
-// Der einzige Wert, den wir je als `thumbmark` senden: erfuellt die Formpruefung des Dienstes
-// und enthaelt keinerlei Angaben ueber Geraet oder Nutzer (siehe Kopf).
-const THUMBMARK = JSON.stringify({ thumbmark: '', webdriver: false });
+// Der einzige Wert, den wir je als `thumbmark` senden: erfuellt die Formpruefung des Dienstes,
+// benennt die App und enthaelt keinerlei Angaben ueber Geraet oder Nutzer (siehe Kopf).
+const THUMBMARK = JSON.stringify({ thumbmark: 'pins-scorer', webdriver: false });
 
 // Limit je Konto: der Import braucht pro Spiel eine Handvoll Aufrufe. 30/Minute lässt das
 // bequem zu und stoppt jeden Versuch, ganze Ligen durchzublättern. In-memory und damit je
