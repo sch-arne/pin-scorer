@@ -54,6 +54,24 @@ const THUMBMARK = JSON.stringify({ thumbmark: 'pins-scorer', webdriver: false })
 // Instanz — als Bremse ausreichend, als Sicherheitsgrenze nicht gedacht.
 const LIMIT = 30;
 const FENSTER_MS = 60_000;
+
+// Haengende Verbindungen zum Ergebnisdienst: vom Rechner eines Nutzers aus antwortet er
+// zuverlaessig (8 von 8 Abfragen, 0,19-3,4 s), aus der Edge-Runtime von Supabase dagegen bleibt
+// etwa jede zweite Verbindung stumm stehen, bis sie ablaeuft — bei JEDEM Kommando, auch ohne
+// `thumbmark` (am 26.09.2026 gemessen: 3 von 8 GetSaisonArray, 4 von 8 GetSpielerInfo). Es ist
+// also weder der Parameter noch das Kommando, sondern der Weg aus dem Rechenzentrum dorthin.
+//
+// Ein einzelner Versuch mit langem Timeout ist dafuer die schlechteste Wahl: der Nutzer wartet
+// 20 Sekunden und bekommt dann einen Fehler, obwohl der naechste Versuch meist sofort
+// durchgeht. Deshalb kurz warten und wenige Male neu ansetzen. GEANTWORTET hat der Dienst
+// bisher immer binnen 5,2 Sekunden — was laenger braucht, kommt auch nicht mehr. Drei Versuche
+// à 8 Sekunden bleiben im schlechtesten Fall unter der Geduld eines Nutzers und machen aus
+// „jede zweite Abfrage scheitert" ein „selten". Wiederholt wird NUR eine ausgebliebene
+// Antwort, nie eine inhaltliche Ablehnung des Dienstes (die ist eine Antwort und wird
+// durchgereicht) — und das Konto-Limit oben bleibt die Obergrenze fuer alles.
+const VERSUCHE = 3;
+const VERSUCH_MS = 8_000;
+const PAUSE_MS = 400;
 const zaehler = new Map<string, { n: number; bis: number }>();
 
 function limitUeberschritten(konto: string): boolean {
@@ -128,24 +146,33 @@ Deno.serve(async (req: Request) => {
   }
   if (command === 'GetSpielerInfo') body.set('thumbmark', THUMBMARK);
 
-  let antwort: Response;
-  try {
-    antwort = await fetch(`${basis}/php/${verband}/service.php`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'X-Requested-With': 'XMLHttpRequest',
-        Referer: `${basis}/`,
-        Origin: basis,
-        Accept: '*/*',
-        'User-Agent': `Mozilla/5.0 ${KONTAKT}`,
-      },
-      body,
-      signal: AbortSignal.timeout(20_000),
-    });
-  } catch {
-    // Bewusst ohne Details: die Fehlermeldung könnte Teile der Anfrage enthalten.
-    return fehler(origin, 502, 'Ergebnisdienst nicht erreichbar.');
+  let antwort: Response | null = null;
+  for (let versuch = 1; versuch <= VERSUCHE; versuch++) {
+    try {
+      antwort = await fetch(`${basis}/php/${verband}/service.php`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Requested-With': 'XMLHttpRequest',
+          Referer: `${basis}/`,
+          Origin: basis,
+          Accept: '*/*',
+          'User-Agent': `Mozilla/5.0 ${KONTAKT}`,
+        },
+        body,
+        signal: AbortSignal.timeout(VERSUCH_MS),
+      });
+      break;
+    } catch {
+      // Bewusst ohne Details: die Fehlermeldung könnte Teile der Anfrage enthalten.
+      // Geloggt wird nur, DASS ein Versuch haengen blieb — nie Inhalte.
+      console.error(`[sw-proxy] ${command} -> Versuch ${versuch}/${VERSUCHE} ohne Antwort`);
+      if (versuch < VERSUCHE) await new Promise((r) => setTimeout(r, PAUSE_MS));
+    }
+  }
+  if (!antwort) {
+    return fehler(origin, 502, 'Der Ergebnisdienst hat auf mehrere Anfragen nicht geantwortet. '
+      + 'Das liegt nicht an dieser App — bitte gleich noch einmal versuchen.');
   }
 
   if (!antwort.ok) {
