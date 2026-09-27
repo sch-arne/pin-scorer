@@ -22,10 +22,13 @@
 //    LEERE Hash `""` sowie 32 Nullen. Der Dienst hat also offenbar genau die Platzhalter
 //    gesperrt, die nach Automat aussehen. Der Wert selbst wird nicht geprueft (jede andere
 //    Zeichenkette liefert den Bericht, auch mehrfach hintereinander — kein Kontingent je Wert).
-//    Deshalb steht hier jetzt nicht der leere Hash, sondern der NAME der App: sie gibt sich
-//    damit zu erkennen, statt einen Browser-Fingerprint vorzutaeuschen, und traegt weiterhin
-//    null Information ueber den Nutzer. Wird auch dieser Wert gesperrt, ist das die Antwort
-//    des Betreibers — dann beim Verband nachfragen und nicht etwa raten oder wuerfeln.
+//    Deshalb steht dort nicht der leere Hash, sondern ein fester, neutraler Wert
+//    (`ohne-fingerprint`): er erfuellt die Form und sagt zugleich, was er ist — es wird kein
+//    Fingerprint erhoben. Bis zum 27.09.2026 stand dort der Name der App und im `User-Agent`
+//    zusaetzlich der Verein; auf Wunsch des Nutzers geht beides nicht mehr mit dem thumbmark
+//    hinaus (den App-Namen traegt weiter nur der `User-Agent`, siehe KONTAKT). Wird auch dieser
+//    Wert gesperrt, ist das die Antwort des Betreibers — dann beim Verband nachfragen und
+//    nicht etwa raten oder wuerfeln.
 //  • Die IP des Nutzers erreicht Sportwinner nicht — nur die des Relays.
 //  • Kein offener Proxy: nur angemeldete Konten, nur Hosts *.sportwinner.de, nur die
 //    Kommandos aus KOMMANDOS, und ein Limit je Konto gegen massenhaftes Abziehen
@@ -43,11 +46,27 @@ const KOMMANDOS = new Set([
 ]);
 
 const HOST_RE = /^[a-z0-9-]+\.sportwinner\.de$/;
-const KONTAKT = 'pins-scorer (Verein Osnabrücker Kegler e.V.)';
 
-// Der einzige Wert, den wir je als `thumbmark` senden: erfuellt die Formpruefung des Dienstes,
-// benennt die App und enthaelt keinerlei Angaben ueber Geraet oder Nutzer (siehe Kopf).
-const THUMBMARK = JSON.stringify({ thumbmark: 'pins-scorer', webdriver: false });
+// Was im `User-Agent` steht: der NAME DER APP und sonst nichts.
+//
+// Hier stand bis zum 27.09.2026 auch der Verein des Nutzers. Das war gut gemeint — wer eine
+// fremde Schnittstelle anspricht, soll sagen, wer er ist — aber falsch adressiert: die App
+// spricht diesen Dienst fuer JEDEN ihrer Nutzer an, und der Verein eines von ihnen hat in
+// dessen Protokollen nichts zu suchen. Ein Vereinsname ist in diesem Sport zudem eine kleine,
+// namentlich bekannte Gruppe; er benennt also mittelbar Personen.
+//
+// Was bleibt, ist der Zweck der Angabe: die App gibt sich zu erkennen, statt einen Browser
+// vorzutaeuschen. Wer beim Verband nachfragen will, findet unter diesem Namen das Projekt.
+const KONTAKT = 'pins-scorer';
+
+// Der einzige Wert, den wir je als `thumbmark` senden.
+//
+// Das Feld MUSS mitgehen — ohne es antwortet der Dienst mit 0 Zeilen (am 27.09.2026 nachgemessen:
+// mit Wert 781 Zeichen Bericht, ohne Feld 0). Geprueft wird nur die Form, nicht der Inhalt.
+// Also steht hier das, was das Feld bei uns tatsaechlich bedeutet: es wird keiner erhoben. Kein
+// Geraetemerkmal, kein Nutzer, kein Verein — und auch kein wechselnder Wert, der Automatisierung
+// verschleiern wuerde. Derselbe Wert geht bei jeder Anfrage jedes Nutzers hinaus.
+const THUMBMARK = JSON.stringify({ thumbmark: 'ohne-fingerprint', webdriver: false });
 
 // Limit je Konto: der Import braucht pro Spiel eine Handvoll Aufrufe. 30/Minute lässt das
 // bequem zu und stoppt jeden Versuch, ganze Ligen durchzublättern. In-memory und damit je
@@ -61,16 +80,26 @@ const FENSTER_MS = 60_000;
 // `thumbmark` (am 26.09.2026 gemessen: 3 von 8 GetSaisonArray, 4 von 8 GetSpielerInfo). Es ist
 // also weder der Parameter noch das Kommando, sondern der Weg aus dem Rechenzentrum dorthin.
 //
-// Ein einzelner Versuch mit langem Timeout ist dafuer die schlechteste Wahl: der Nutzer wartet
-// 20 Sekunden und bekommt dann einen Fehler, obwohl der naechste Versuch meist sofort
-// durchgeht. Deshalb kurz warten und wenige Male neu ansetzen. GEANTWORTET hat der Dienst
-// bisher immer binnen 5,2 Sekunden — was laenger braucht, kommt auch nicht mehr. Drei Versuche
-// à 8 Sekunden bleiben im schlechtesten Fall unter der Geduld eines Nutzers und machen aus
-// „jede zweite Abfrage scheitert" ein „selten". Wiederholt wird NUR eine ausgebliebene
-// Antwort, nie eine inhaltliche Ablehnung des Dienstes (die ist eine Antwort und wird
-// durchgereicht) — und das Konto-Limit oben bleibt die Obergrenze fuer alles.
-const VERSUCHE = 3;
-const VERSUCH_MS = 8_000;
+// Wiederholt wird HIER NICHTS MEHR — und das ist eine Messung, keine Meinung.
+//
+// Am 27.09.2026 zehnmal dasselbe Kommando abgefragt: fuenf Aufrufe blieben stumm, und zwar jeder
+// volle 25 Sekunden. Das sind genau die drei Versuche, die hier drin standen: waren sie einmal
+// stumm, blieben sie es alle drei. Ein NEUER Aufruf der Function war dagegen in 3 von 5 Faellen
+// sofort da, in rund 0,3 Sekunden. Die Stille klebt also am einzelnen Aufruf — an der Instanz
+// bzw. ihrer Verbindung dorthin — und nicht am Zeitpunkt. Damit ist eine Wiederholung INNERHALB
+// dieser Funktion wertlos: sie zieht nur dieselbe taube Leitung noch zweimal und laesst den
+// Nutzer 25 statt 8 Sekunden warten.
+//
+// Die Wiederholung liegt deshalb jetzt in der App (js/backend/sw-web.js, ANLAEUFE): dort ist
+// jeder Anlauf ein neuer Aufruf und damit ein echter neuer Versuch. Hier bleibt EIN Versuch mit
+// kurzem Timeout, der schnell scheitert, damit der naechste Anlauf schnell kommt. GEANTWORTET
+// hat der Dienst bisher immer binnen 5,2 Sekunden — was laenger braucht, kommt auch nicht mehr.
+//
+// Die Zahl der Anfragen an den Ergebnisdienst aendert sich dadurch nicht (vorher ein Aufruf mit
+// drei Versuchen, jetzt bis zu drei Aufrufe mit je einem). Das Konto-Limit oben bleibt die
+// Obergrenze fuer alles.
+const VERSUCHE = 1;
+const VERSUCH_MS = 6_000;
 const PAUSE_MS = 400;
 const zaehler = new Map<string, { n: number; bis: number }>();
 
@@ -163,16 +192,20 @@ Deno.serve(async (req: Request) => {
         signal: AbortSignal.timeout(VERSUCH_MS),
       });
       break;
-    } catch {
-      // Bewusst ohne Details: die Fehlermeldung könnte Teile der Anfrage enthalten.
-      // Geloggt wird nur, DASS ein Versuch haengen blieb — nie Inhalte.
-      console.error(`[sw-proxy] ${command} -> Versuch ${versuch}/${VERSUCHE} ohne Antwort`);
+    } catch (e) {
+      // Bewusst ohne Meldungstext: der koennte Teile der Anfrage enthalten. Die ART des
+      // Fehlers steht dagegen fuer sich und ist bei der Suche das Entscheidende —
+      // `TimeoutError` heisst: verbunden, aber keine Antwort (so sieht eine absichtliche
+      // Bremse aus), ein `TypeError` dagegen: die Verbindung kam gar nicht zustande.
+      const art = (e && typeof e === 'object' && 'name' in e) ? String(e.name) : 'unbekannt';
+      console.error(`[sw-proxy] ${command} -> Versuch ${versuch}/${VERSUCHE} ohne Antwort (${art})`);
       if (versuch < VERSUCHE) await new Promise((r) => setTimeout(r, PAUSE_MS));
     }
   }
   if (!antwort) {
-    return fehler(origin, 502, 'Der Ergebnisdienst hat auf mehrere Anfragen nicht geantwortet. '
-      + 'Das liegt nicht an dieser App — bitte gleich noch einmal versuchen.');
+    // Der Wortlaut zaehlt: die App erkennt daran, dass sie es noch einmal versuchen darf
+    // (js/backend/sw-web.js, STUMM_RE) — im Unterschied zu einer inhaltlichen Ablehnung.
+    return fehler(origin, 502, 'Der Ergebnisdienst hat nicht geantwortet.');
   }
 
   if (!antwort.ok) {

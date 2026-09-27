@@ -92,6 +92,13 @@ const klarText = (v) => txt(v).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').tri
 //   [0]id_spiel [1]Datum [2]Uhrzeit [3]Gastgeber [4]MP GG [5]MP G [6]Gast [7]SP GG [8]SP G
 //   [9]Status ("offen"/"beendet") [10]Bemerkung [11]wertung [12]"Liga / Spieltag" [13]leer
 //
+// ABER: die Spaltenzahl haengt am Dienst. `dskb` (nur Bundesligen) schickt 13 Spalten und
+// KEINE wertung — dort steht an [11] schon die "Liga / Spieltag"-Zeile. Mit festen Indizes
+// wurde daraus eine Wertung "2" (aus "2. Bundesliga Nord" gelesen) und eine leere Liga.
+// Deshalb werden beide Felder am INHALT erkannt: die Wertung ist eine reine Zahl, die
+// Liga-Zeile traegt Schraegstriche. Fehlt die Wertung, ist das kein Mangel — spielbericht()
+// sendet dann 0, und genau das erwartet der Dienst fuer die Schere.
+//
 // Der Status steht in [9] und ist die EINZIGE verlässliche Auskunft darüber, ob gespielt wurde:
 // [4]/[5] sind auch bei einer offenen Partie mit "0" belegt, eine Prüfung auf "ist eine Zahl"
 // würde also jede angesetzte Partie als gespielt ausgeben.
@@ -118,9 +125,16 @@ export function parseSpielListe(rows) {
       const m = datumZelle.match(DATUM_RE);
       const uhrzeit = /^\d{1,2}:\d{2}$/.test(txt(r[2])) ? txt(r[2]) : '';
       const status = klarText(r[9]);
+      // Reine Zahl an [11] -> Wertung; steht dort Text, kennt dieser Dienst die Spalte nicht.
+      const wertungZelle = txt(r[11]);
+      // "Liga / Spieltag": die letzte Zelle mit Schraegstrich und Buchstaben.
+      const ligaZelle = [...r].reverse().find((z) => {
+        const t = klarText(z);
+        return t.includes('/') && /\p{L}/u.test(t);
+      });
       return {
         idSpiel: txt(r[0]),
-        wertung: num(r[11]),
+        wertung: /^\d+$/.test(wertungZelle) ? Number(wertungZelle) : null,
         heim: klarText(r[3]),
         gast: klarText(r[6]),
         heimWert: num(r[4]),
@@ -129,7 +143,7 @@ export function parseSpielListe(rows) {
         termin: [datumZelle, uhrzeit].filter(Boolean).join(' · '),
         datum: m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : '',
         bemerkung: klarText(r[10]),
-        liga: klarText(r[12]),
+        liga: klarText(ligaZelle),
         gespielt: STATUS_FERTIG.test(status),
         laufend: !STATUS_FERTIG.test(status) && STATUS_LAUFEND.test(status),
         importierbar: STATUS_FERTIG.test(status) || STATUS_LAUFEND.test(status),
