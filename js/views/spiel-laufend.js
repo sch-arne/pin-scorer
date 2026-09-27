@@ -198,12 +198,20 @@ function raeumTempoRows(vert, skala) {
   return rows;
 }
 
+// Läufe, die am Teilsatz-Ende nicht mehr geräumt wurden, zählen wie ein Räumer mit ihren
+// bisherigen Würfen (sonst fielen diese Würfe ganz aus dem Tempo). Der Zusatz sagt, wie viele
+// der gezählten Läufe so entstanden sind.
+function offeneNote(k) {
+  const n = k && k.raeumOffen ? k.raeumOffen : 0;
+  return n ? ` · davon ${n} am Ende offen` : '';
+}
+
 // Der ganze Block inkl. Überschrift — leer, solange kein Lauf abgeräumt wurde.
 function raeumTempoBlock(stats, skala) {
   const rows = raeumTempoRows(stats.raeumVert, skala);
   if (!rows) return '';
   return `
-    <p class="mba-sub">Räumer-Tempo<small>${stats.raeumer} Räumer · Ø ${stats.raeumSchnitt.toFixed(1)} Würfe bis zum vollen Bild</small></p>
+    <p class="mba-sub">Räumer-Tempo<small>${stats.raeumer} Räumer · Ø ${stats.raeumSchnitt.toFixed(1)} Würfe bis zum vollen Bild${offeneNote(stats)}</small></p>
     <div class="ueber-dist">${rows}</div>`;
 }
 

@@ -63,7 +63,7 @@ function satzAlsTeilsatz(satz) {
     soll: 0,
     holz: satz.holz || 0,
     wurfCount: satz.wurfCount || 0,
-    neuner: 0, fehl: 0, kranz: 0, raeumer: 0, raeumWuerfe: 0, raeumVert: [], vollChance: 0,
+    neuner: 0, fehl: 0, kranz: 0, raeumer: 0, raeumOffen: 0, raeumWuerfe: 0, raeumVert: [], vollChance: 0,
   };
 }
 
@@ -101,7 +101,7 @@ function verdichte(list) {
   const raeumVert = [];
   let holz = 0; let wurfCount = 0; let erfasst = 0; let erfasstVoll = 0;
   let neuner = 0; let fehl = 0; let kranz = 0;
-  let raeumer = 0; let raeumWuerfe = 0; let vollChance = 0;
+  let raeumer = 0; let raeumOffen = 0; let raeumWuerfe = 0; let vollChance = 0;
   list.forEach(({ p, satz, ts }) => {
     if (ts.wurfCount > 0) { starts.add(startKey(p)); satzSet.add(satzKey(p, satz)); }
     holz += ts.holz || 0;
@@ -110,6 +110,7 @@ function verdichte(list) {
     fehl += ts.fehl || 0;
     kranz += ts.kranz || 0;
     raeumer += ts.raeumer || 0;
+    raeumOffen += ts.raeumOffen || 0;
     raeumWuerfe += ts.raeumWuerfe || 0;
     vollChance += ts.vollChance || 0;
     addRaeumVert(raeumVert, ts.raeumVert);
@@ -136,7 +137,8 @@ function verdichte(list) {
     vollChance,
     fehl,
     kranz,
-    raeumer,
+    raeumer,                                          // gewertete Läufe (inkl. offener am Teilsatz-Ende)
+    raeumOffen,                                       // davon am Teilsatz-Ende nicht mehr geräumt
     raeumSchnitt: raeumer ? raeumWuerfe / raeumer : 0,
     raeumVert,                                        // Index = Würfe je Räumer, Wert = Häufigkeit
   };
