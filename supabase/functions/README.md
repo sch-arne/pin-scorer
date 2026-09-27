@@ -59,6 +59,23 @@ User-Agent, kein vorgetäuschter Fingerprint). Wird der Weg dauerhaft zugemacht,
 Antwort des Betreibers. Dann fragt man beim Verband oder bei `support@sportwinner.de` nach einer
 Genehmigung — und baut sie nicht weg.
 
+
+### Was mit einer Anfrage hinausgeht
+
+Vollstaendig — mehr steht in keiner Anfrage an `sportwinner.de`:
+
+| | Inhalt |
+|---|---|
+| `Referer` / `Origin` | der Ergebnisdienst selbst (verlangt er so, sonst 404) |
+| `User-Agent` | `Mozilla/5.0 pins-scorer` — der Name der App, damit sie sich zu erkennen gibt |
+| `thumbmark` | `{"thumbmark":"ohne-fingerprint","webdriver":false}`, fest und fuer alle gleich |
+| Parameter | nur Ids aus der Auswahl des Nutzers (Saison, Sektion, Liga, Spieltag, Spiel) |
+
+Kein Verein, kein Name, keine E-Mail, keine Geraetemerkmale, keine Konto-Kennung — und die
+IP-Adresse des Nutzers erreicht den Dienst ohnehin nicht, nur die des Relays. Bis zum 27.09.2026
+trug der `User-Agent` zusaetzlich den Verein des Nutzers und der `thumbmark` den App-Namen; beides
+ist auf seinen Wunsch heraus. Wer hier etwas HINZUFUEGT, prueft vorher, ob es dort hingehoert.
+
 ### Wohin
 
 | Umgebung | Project-Ref | steht in |
@@ -120,14 +137,14 @@ meldet, ist bereits die Diagnose:
 | „Konto nötig — bitte unter Spieler anmelden" | Funktion läuft, es fehlt die Anmeldung |
 | „Zu viele Abfragen" | Rate-Limit der Funktion (30/Minute) |
 | „Der Ergebnisdienst hat nicht geantwortet" | Die Verbindung aus der Edge-Runtime zu `sportwinner.de` bleibt haengen, bis sie ablaeuft. Am 27.09.2026 an 10 Abfragen desselben Kommandos gemessen: 5 blieben stumm, jede volle 25 s — das waren die damals drei Versuche IM Relay, die zusammen stumm blieben. Ein NEUER Aufruf der Function war dagegen in 3 von 5 Faellen sofort da (~0,3 s). Die Stille klebt also am einzelnen Aufruf, nicht am Zeitpunkt. Daraus folgte die Aufteilung: Relay = 1 Versuch / 6 s, App = bis zu 3 Anlaeufe (`ANLAEUFE`) — gleich viele Anfragen, aber jede ein echter neuer Versuch. Vom Rechner eines Nutzers gehen dieselben Abfragen 8 von 8 Mal durch; es ist der Weg aus dem Rechenzentrum, nicht die App. Haeuft es sich, beim Verband nachfragen. |
-| „Der Ergebnisdienst hat zu dieser Partie keine Zeile geliefert" | Liga, Spieltag und Partien kommen an, nur `GetSpielerInfo` bleibt leer. Heisst: der Dienst lehnt den `thumbmark` ab. Am 26.09.2026 sperrte er den bis dahin gesendeten LEEREN Hash; seither steht in `THUMBMARK` der Name der App. Wird auch der gesperrt, beim Verband nachfragen — nicht einen neuen Wert raten. |
+| „Der Ergebnisdienst hat zu dieser Partie keine Zeile geliefert" | Liga, Spieltag und Partien kommen an, nur `GetSpielerInfo` bleibt leer. Heisst: der Dienst lehnt den `thumbmark` ab. Am 26.09.2026 sperrte er den bis dahin gesendeten LEEREN Hash. In `THUMBMARK` steht seither ein fester, neutraler Wert (`ohne-fingerprint`) — das Feld muss mitgehen, sein Inhalt wird nicht geprueft (am 27.09.2026 gemessen: mit Wert 781 Zeichen Bericht, ohne das Feld 0). Wird auch dieser Wert gesperrt, beim Verband nachfragen — nicht einen neuen raten und schon gar nicht je Anfrage wuerfeln. |
 | „Die Listen stehen hier aus dem Zwischenspeicher" | Eine Listen-Abfrage fiel aus, und die App hat die letzte gute Antwort genommen (siehe `js/backend/sw-web.js`). Der Import läuft damit weiter; nur ein gerade nachgetragener Spieltag kann fehlen. „Frisch laden“ verwirft den Zwischenspeicher. |
 
 Zum Nachprüfen, ob es am `thumbmark` liegt, braucht es die Function gar nicht: der Ergebnisdienst
 antwortet auf diese Anfrage direkt (leerer Körper = abgelehnt, sonst der Spielbericht).
 
 ```bash
-curl -s -X POST "https://kvn.sportwinner.de/php/kvn/service.php" -H "Content-Type: application/x-www-form-urlencoded" -H "Referer: https://kvn.sportwinner.de/" -H "Origin: https://kvn.sportwinner.de" --data-urlencode "command=GetSpielerInfo" --data-urlencode "id_saison=12" --data-urlencode "id_sektion=2" --data-urlencode "id_spiel=347918" --data-urlencode "wertung=0" --data-urlencode 'thumbmark={"thumbmark":"pins-scorer","webdriver":false}'
+curl -s -X POST "https://kvn.sportwinner.de/php/kvn/service.php" -H "Content-Type: application/x-www-form-urlencoded" -H "Referer: https://kvn.sportwinner.de/" -H "Origin: https://kvn.sportwinner.de" --data-urlencode "command=GetSpielerInfo" --data-urlencode "id_saison=12" --data-urlencode "id_sektion=2" --data-urlencode "id_spiel=347918" --data-urlencode "wertung=0" --data-urlencode 'thumbmark={"thumbmark":"ohne-fingerprint","webdriver":false}'
 ```
 
 Gegenprobe, dass die Allowlist greift — muss mit `400 Kommando nicht erlaubt` antworten:

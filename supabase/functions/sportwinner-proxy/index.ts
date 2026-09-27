@@ -22,10 +22,13 @@
 //    LEERE Hash `""` sowie 32 Nullen. Der Dienst hat also offenbar genau die Platzhalter
 //    gesperrt, die nach Automat aussehen. Der Wert selbst wird nicht geprueft (jede andere
 //    Zeichenkette liefert den Bericht, auch mehrfach hintereinander — kein Kontingent je Wert).
-//    Deshalb steht hier jetzt nicht der leere Hash, sondern der NAME der App: sie gibt sich
-//    damit zu erkennen, statt einen Browser-Fingerprint vorzutaeuschen, und traegt weiterhin
-//    null Information ueber den Nutzer. Wird auch dieser Wert gesperrt, ist das die Antwort
-//    des Betreibers — dann beim Verband nachfragen und nicht etwa raten oder wuerfeln.
+//    Deshalb steht dort nicht der leere Hash, sondern ein fester, neutraler Wert
+//    (`ohne-fingerprint`): er erfuellt die Form und sagt zugleich, was er ist — es wird kein
+//    Fingerprint erhoben. Bis zum 27.09.2026 stand dort der Name der App und im `User-Agent`
+//    zusaetzlich der Verein; auf Wunsch des Nutzers geht beides nicht mehr mit dem thumbmark
+//    hinaus (den App-Namen traegt weiter nur der `User-Agent`, siehe KONTAKT). Wird auch dieser
+//    Wert gesperrt, ist das die Antwort des Betreibers — dann beim Verband nachfragen und
+//    nicht etwa raten oder wuerfeln.
 //  • Die IP des Nutzers erreicht Sportwinner nicht — nur die des Relays.
 //  • Kein offener Proxy: nur angemeldete Konten, nur Hosts *.sportwinner.de, nur die
 //    Kommandos aus KOMMANDOS, und ein Limit je Konto gegen massenhaftes Abziehen
@@ -43,11 +46,27 @@ const KOMMANDOS = new Set([
 ]);
 
 const HOST_RE = /^[a-z0-9-]+\.sportwinner\.de$/;
-const KONTAKT = 'pins-scorer (Verein Osnabrücker Kegler e.V.)';
 
-// Der einzige Wert, den wir je als `thumbmark` senden: erfuellt die Formpruefung des Dienstes,
-// benennt die App und enthaelt keinerlei Angaben ueber Geraet oder Nutzer (siehe Kopf).
-const THUMBMARK = JSON.stringify({ thumbmark: 'pins-scorer', webdriver: false });
+// Was im `User-Agent` steht: der NAME DER APP und sonst nichts.
+//
+// Hier stand bis zum 27.09.2026 auch der Verein des Nutzers. Das war gut gemeint — wer eine
+// fremde Schnittstelle anspricht, soll sagen, wer er ist — aber falsch adressiert: die App
+// spricht diesen Dienst fuer JEDEN ihrer Nutzer an, und der Verein eines von ihnen hat in
+// dessen Protokollen nichts zu suchen. Ein Vereinsname ist in diesem Sport zudem eine kleine,
+// namentlich bekannte Gruppe; er benennt also mittelbar Personen.
+//
+// Was bleibt, ist der Zweck der Angabe: die App gibt sich zu erkennen, statt einen Browser
+// vorzutaeuschen. Wer beim Verband nachfragen will, findet unter diesem Namen das Projekt.
+const KONTAKT = 'pins-scorer';
+
+// Der einzige Wert, den wir je als `thumbmark` senden.
+//
+// Das Feld MUSS mitgehen — ohne es antwortet der Dienst mit 0 Zeilen (am 27.09.2026 nachgemessen:
+// mit Wert 781 Zeichen Bericht, ohne Feld 0). Geprueft wird nur die Form, nicht der Inhalt.
+// Also steht hier das, was das Feld bei uns tatsaechlich bedeutet: es wird keiner erhoben. Kein
+// Geraetemerkmal, kein Nutzer, kein Verein — und auch kein wechselnder Wert, der Automatisierung
+// verschleiern wuerde. Derselbe Wert geht bei jeder Anfrage jedes Nutzers hinaus.
+const THUMBMARK = JSON.stringify({ thumbmark: 'ohne-fingerprint', webdriver: false });
 
 // Limit je Konto: der Import braucht pro Spiel eine Handvoll Aufrufe. 30/Minute lässt das
 // bequem zu und stoppt jeden Versuch, ganze Ligen durchzublättern. In-memory und damit je
