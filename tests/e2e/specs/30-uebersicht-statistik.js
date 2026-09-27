@@ -184,6 +184,25 @@ suite('Übersicht & Statistik', () => {
     app.assertClean();
   });
 
+  test('Räumer-Tempo: das am Teilsatz-Ende offene Bild zählt mit', async (app) => {
+    // 4 Würfe je Satz, Teilsätze Volle (2) / Abräumen (2). Im Abräumen: eine 9 (Lauf in einem
+    // Wurf geräumt), dann eine 6 — danach ist der Teilsatz zu Ende, das Bild wurde nicht mehr
+    // voll. Dieser Lauf zählt trotzdem, sonst verschwände sein Wurf aus dem Tempo.
+    const alle = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+    const g = spielMitStand({
+      teilsaetze: ['volle', 'abraeumen'],
+      wuerfe: [[[9, 8, 9, 6], []], [[4, 4, 4, 4], []]],
+    });
+    g.erfassung.bloecke[0][0].kegel = [null, null, alle.slice(), [1, 2, 3, 4, 5, 6]];
+    await starte(app, g);
+    await app.click('.ueber-tabs [data-uebertab="statistik"]');
+    const t = app.txt('.mba-sub');
+    includes(t, '2 Räumer', 'der offene Lauf fehlt in der Zahl');
+    includes(t, 'Ø 1.0 Würfe', 'Schnitt aus beiden Läufen');
+    includes(t, 'davon 1 am Ende offen', 'Hinweis auf den offenen Lauf fehlt');
+    app.assertClean();
+  });
+
   test('Wurf-Bild zeigt die Häufigkeitsverteilung und lässt sich nach Satz filtern', async (app) => {
     await starte(app, spielMitStand());
     await app.click('.ueber-tabs [data-uebertab="verteilung"]');

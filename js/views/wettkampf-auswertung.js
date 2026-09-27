@@ -89,7 +89,7 @@ function raeumTempo(k, skala) {
     rows.push(barRow(n, n === 1 ? 'Wurf' : 'Würfe', skala ? (anz / skala) * 100 : 0, anz, `${pct}%`, ` is-tempo${n === 1 ? ' is-neuner' : ''}`));
   }
   return `
-    <p class="mba-sub">Räumer-Tempo<small>${k.raeumer} Räumer · Ø ${k.raeumSchnitt.toFixed(1)} Würfe bis zum vollen Bild</small></p>
+    <p class="mba-sub">Räumer-Tempo<small>${k.raeumer} Räumer · Ø ${k.raeumSchnitt.toFixed(1)} Würfe bis zum vollen Bild${k.raeumOffen ? ` · davon ${k.raeumOffen} am Ende offen` : ''}</small></p>
     <div class="ueber-dist">${rows.join('')}</div>`;
 }
 

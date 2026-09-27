@@ -208,3 +208,48 @@ test('Räumer-Verteilung: ohne Abräumen leer', () => {
   // In der Volle kam jeder Wurf aus dem vollen Bild.
   assert.deepEqual(players[0].saetze[0].teilsaetze[0].wuerfeVoll, [true, true, true]);
 });
+
+test('Offener Lauf am Teilsatz-Ende zählt mit seinen Würfen', () => {
+  // Ein Teilsatz Abräumen à 4 Würfe. Lauf 1: 9 -> geräumt in 1 Wurf. Lauf 2: 6, 1, 1 -> am
+  // Teilsatz-Ende steht die 9 noch, das Bild wurde nicht mehr voll. Früher fielen diese drei
+  // Würfe komplett aus dem Tempo; jetzt zählt der Lauf wie ein Räumer mit 3 Würfen.
+  const cfg = {
+    spielerListe: [{ name: 'R' }], saetze: 1, ersteBahn: 1, wuerfeProSatz: 4,
+    teilsaetze: [{ modus: 'abraeumen', wuerfe: 4 }],
+  };
+  const r = teilsatzRanges(cfg);
+  const bloecke = [[
+    {
+      wuerfe: [9, 6, 1, 1],
+      kegel: [[1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 5, 6], [7], [8]],
+      koenig: [false, false, false, false], overrides: [null], done: true,
+    },
+  ]];
+  const p = computeGameStats(cfg, bloecke, r).players[0];
+  assert.equal(p.raeumer, 2);                      // der geräumte Lauf und der offene
+  assert.equal(p.raeumOffen, 1);                   // davon einer am Ende nicht mehr geräumt
+  assert.equal(p.raeumSchnitt, 2);                 // (1 + 3) / 2
+  assert.deepEqual(p.raeumVert, [0, 1, 0, 1]);     // einmal 1 Wurf, einmal 3 Würfe
+});
+
+test('Offener Lauf zählt erst, wenn der Teilsatz voll erfasst ist', () => {
+  // Derselbe Teilsatz, aber der Spieler wirft noch: nur 2 der 4 Würfe stehen. Der laufende
+  // Versuch (6) ist kein beendeter Lauf — sonst sprünge die Live-Kennzahl bei jedem Wurf.
+  const cfg = {
+    spielerListe: [{ name: 'R' }], saetze: 1, ersteBahn: 1, wuerfeProSatz: 4,
+    teilsaetze: [{ modus: 'abraeumen', wuerfe: 4 }],
+  };
+  const r = teilsatzRanges(cfg);
+  const bloecke = [[
+    {
+      wuerfe: [9, 6],
+      kegel: [[1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 5, 6]],
+      koenig: [false, false], overrides: [null], done: false,
+    },
+  ]];
+  const p = computeGameStats(cfg, bloecke, r).players[0];
+  assert.equal(p.raeumer, 1);
+  assert.equal(p.raeumOffen, 0);
+  assert.equal(p.raeumSchnitt, 1);
+  assert.deepEqual(p.raeumVert, [0, 1]);
+});

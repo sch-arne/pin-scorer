@@ -40,7 +40,8 @@ function teilsatzMetrik(blk, r, ov) {
   // Abräum-Lauf einmal scannen: liefert Kranz-Treffer und den Bild-Zustand vor jedem Wurf.
   const scan = abraeum ? abraeumScan(blk, r) : null;
   let kranz = 0;
-  let raeumer = 0;      // vollständig abgeräumte Läufe
+  let raeumer = 0;      // gewertete Läufe (abgeräumt + am Teilsatz-Ende abgebrochen)
+  let raeumOffen = 0;   // davon: am Teilsatz-Ende nicht mehr geräumt
   let raeumWuerfe = 0;  // dafür benötigte Würfe (Ø Würfe/Räumer = Tempo)
   let vollChance = 0;   // Würfe aus vollem Bild (Nenner der 9er-Quote)
   const raeumVert = []; // Verteilung: wie oft brauchte ein Lauf wie viele Würfe?
@@ -60,6 +61,14 @@ function teilsatzMetrik(blk, r, ov) {
       raeumer += 1; raeumWuerfe += runLen; zaehleRaeumer(raeumVert, runLen); runLen = 0;
     }
   }
+  // Ein Teilsatz kann mitten im Lauf enden: das letzte Bild wird nicht mehr geräumt. Diese
+  // Würfe fielen früher ganz aus der Tempo-Rechnung heraus. Jetzt gilt der Lauf als beendet
+  // und zählt wie ein Räumer — in Zahl, Schnitt und Verteilung; `raeumOffen` merkt sich, wie
+  // viele davon nicht wirklich geräumt wurden. Voraussetzung ist ein vollständig erfasster
+  // Teilsatz, sonst wäre live der gerade laufende Versuch dauernd ein „Räumer".
+  if (scan && runLen > 0 && bw.length >= r.end) {
+    raeumer += 1; raeumOffen += 1; raeumWuerfe += runLen; zaehleRaeumer(raeumVert, runLen);
+  }
   // In der Volle steht vor JEDEM Wurf das volle Bild.
   if (r.modus === 'volle') vollChance = Math.max(0, end - r.start);
   return {
@@ -76,6 +85,7 @@ function teilsatzMetrik(blk, r, ov) {
     fehl: wuerfe.filter((w) => w === 0).length,    // Fehlwürfe (kein Kegel getroffen)
     kranz,                                          // nur König 5 blieb stehen
     raeumer,
+    raeumOffen,                                     // davon am Teilsatz-Ende nicht mehr geräumt
     raeumWuerfe,
     raeumVert,                                      // Index = Würfe je Räumer, Wert = Häufigkeit
     vollChance,
@@ -142,7 +152,8 @@ export function computeGameStats(config, bloecke, ranges) {
       neunerQuote: vollChance ? neuner / vollChance : 0, // Anteil 9er an Würfen aus vollem Bild
       fehl: sumTs(alleTs, 'fehl'),                    // Fehlwürfe (kein Kegel getroffen)
       kranz: sumTs(alleTs, 'kranz'),                  // Kränze (nur König 5 blieb stehen)
-      raeumer,                                        // vollständig abgeräumte Läufe
+      raeumer,                                        // gewertete Läufe (inkl. offener am Teilsatz-Ende)
+      raeumOffen: sumTs(alleTs, 'raeumOffen'),        // davon am Teilsatz-Ende nicht mehr geräumt
       raeumSchnitt: raeumer ? raeumWuerfe / raeumer : 0, // Ø Würfe je Räumer (Tempo)
       raeumVert,                                      // Verteilung: wie oft wie viele Würfe je Räumer
       vollChance,                                     // Würfe aus vollem Bild (Nenner der Quote)

@@ -160,8 +160,11 @@ test('Räumer-Verteilung und Wurf-Bild am vollen Bild je Mannschaft', () => {
     { mannschaften: TEAMS, durchgaenge: [{ nr: 1, gameId: 'g1' }] }, [g]);
 
   const a = mannschaftAuswertung(einzel, 'mA', leererFilter());
-  assert.equal(a.raeumer, 1);
-  assert.deepEqual(a.raeumVert, [0, 1]);            // ein Räumer mit einem Wurf
+  // Der zweite Lauf (6) wurde bis zum Teilsatz-Ende nicht mehr geräumt — er zählt trotzdem
+  // mit seinem einen Wurf, sonst fiele dieser Wurf ganz aus dem Tempo heraus.
+  assert.equal(a.raeumer, 2);
+  assert.equal(a.raeumOffen, 1);                    // davon einer am Ende offen
+  assert.deepEqual(a.raeumVert, [0, 2]);            // beide Läufe mit je einem Wurf
   // Am vollen Bild: beide Volle-Würfe (9, 7) und beide Abräum-Lauf-Starts (9, 6).
   assert.equal(a.erfasst, 4);
   assert.equal(a.erfasstVoll, 4);
@@ -171,6 +174,7 @@ test('Räumer-Verteilung und Wurf-Bild am vollen Bild je Mannschaft', () => {
 
   const b = mannschaftAuswertung(einzel, 'mB', leererFilter());
   assert.equal(b.raeumer, 1);
+  assert.equal(b.raeumOffen, 0);                   // der Lauf wurde geräumt — nichts offen
   assert.deepEqual(b.raeumVert, [0, 0, 1]);         // ein Räumer mit zwei Würfen
   // Der 5er kam aus dem Restbild -> zählt nicht zum vollen Bild.
   assert.equal(b.erfasst, 4);
