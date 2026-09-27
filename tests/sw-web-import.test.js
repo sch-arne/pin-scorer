@@ -6,7 +6,7 @@ import {
   spielerName,
 } from '../js/logic/sw-web-import.js';
 import {
-  ligenName, ligenWertung, verbandGueltig, cacheLeeren, VERBAENDE, VERBAND_STANDARD, VERBAND_FREI,
+  ligenName, ligenWertung, verbandGueltig, VERBAENDE, VERBAND_STANDARD, VERBAND_FREI,
 } from '../js/backend/sw-web.js';
 import { MODUS_GESAMT } from '../js/logic/sportkegeln-presets.js';
 import { istLizenzWettkampf } from '../js/logic/spieler-identitaet.js';
@@ -181,13 +181,6 @@ test('VERBAENDE: die angebotenen Dienste sind selbst gueltige Kuerzel', () => {
   }
   assert.ok(VERBAENDE.some((v) => v.id === VERBAND_STANDARD), 'die Voreinstellung muss dabei sein');
   assert.equal(verbandGueltig(VERBAND_FREI), false, 'die Frei-Kennung darf kein Host-Label sein');
-});
-
-test('cacheLeeren: ohne localStorage passiert nichts — und schon gar kein Fehler', () => {
-  // Der Zwischenspeicher beschleunigt, er ist keine Bedingung. Im Testlauf (und in einem
-  // Browser mit gesperrtem Speicher) gibt es ihn nicht, und das darf den Import nicht anhalten.
-  assert.doesNotThrow(() => cacheLeeren('kvn'));
-  assert.doesNotThrow(() => cacheLeeren());
 });
 
 test('parseSpielListe: dskb schickt 13 Spalten OHNE wertung — Liga trotzdem richtig', () => {

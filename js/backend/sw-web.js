@@ -208,17 +208,6 @@ function cacheSchreib(name, wert) {
   } catch { /* voll oder abgeschaltet: der Cache beschleunigt, er ist keine Bedingung */ }
 }
 
-// Alles vergessen, was zu einem Dienst gespeichert ist — für den Fall, dass der Ergebnisdienst
-// etwas nachträgt und der Nutzer es sehen will, bevor die Frist abgelaufen ist.
-export function cacheLeeren(verband) {
-  const praefix = CACHE_PRAEFIX + (verband ? `${verband}:` : '');
-  try {
-    Object.keys(localStorage)
-      .filter((k) => k.startsWith(praefix))
-      .forEach((k) => localStorage.removeItem(k));
-  } catch { /* kein localStorage: dann gab es auch nichts zu leeren */ }
-}
-
 // Holt `fn()`, aber nur wenn nötig — und behält die Antwort.
 //
 // Fällt die Abfrage aus und liegt eine ältere Antwort vor, gewinnt die alte mit dem Vermerk

@@ -258,20 +258,6 @@ export function importSwWebView() {
     ladeSaisons();
   }
 
-  // Alles noch einmal frisch holen: der Zwischenspeicher dieses Dienstes wird verworfen und die
-  // Kette laeuft von der Saison an neu. Der Weg fuer den Fall, dass der Ergebnisdienst gerade
-  // etwas nachgetragen hat.
-  function ladeAllesNeu() {
-    swWeb.cacheLeeren(state.verband);
-    state.ausCache = 0; state.bereicheUnvollstaendig = false;
-    state.saisons = []; state.saison = ''; state.bereiche = [];
-    setzeLigenZurueck();
-    state.fehler = '';
-    state.phase = 'laden';
-    render();
-    ladeSaisons();
-  }
-
   async function ladeSpieltageUndPartien() {
     state.partienLaden = true; state.partien = []; state.partie = null; state.spec = null;
     render();
@@ -607,7 +593,7 @@ export function importSwWebView() {
           Ligen nur bereichsweise — und jede Abfrage weniger ist eine, die nicht ausfallen kann.</p>
         ${s.bereicheUnvollstaendig && !s.bereicheLaden ? `
         <p class="stats-sub">Die Liste der Bezirke kam nicht durch — hier steht nur die
-          Landesebene. Für eine Bezirksliga unten „Listen frisch laden".</p>` : ''}
+          Landesebene. Für eine Bezirksliga die Ansicht noch einmal öffnen.</p>` : ''}
       </section>
       <section class="field">
         <label class="field-label" for="swb-liga">Liga</label>
@@ -617,12 +603,8 @@ export function importSwWebView() {
         </select>
       </section>
       ${s.ausCache ? `
-      <p class="stats-sub">Der Ergebnisdienst antwortet gerade nicht auf jede Abfrage — die
-        Listen stehen hier aus dem Zwischenspeicher (${esc(wann(s.ausCache))}).
-        <button type="button" class="anl-inline-link" id="swb-neu">Frisch laden</button></p>` : `
-      <p class="stats-sub"><button type="button" class="anl-inline-link" id="swb-neu">Listen frisch
-        laden</button> — nötig, wenn der Ergebnisdienst gerade eine Liga oder einen Spieltag
-        nachgetragen hat.</p>`}
+      <p class="stats-sub">Der Ergebnisdienst antwortet gerade nicht auf jede Abfrage — die Listen
+        stehen hier aus dem Zwischenspeicher (${esc(wann(s.ausCache))}).</p>` : ''}
       ${s.liga ? `
       <section class="field">
         <label class="field-label" for="swb-spieltag">Spieltag</label>
@@ -962,7 +944,6 @@ export function importSwWebView() {
     if (ich) { state.ichKey = ich.dataset.ich; render(); return; }
     // Unvollstaendige Ligen-Liste nachladen. Kein Neuaufbau der ganzen Ansicht: Saison und
     // Disziplin stehen ja schon, es fehlen nur die ausgefallenen Teilabfragen.
-    if (ev.target.closest('#swb-neu')) { ladeAllesNeu(); return; }
     if (ev.target.closest('[data-action="erneut"]')) {
       state.phase = 'laden'; state.fehler = '';
       render();
