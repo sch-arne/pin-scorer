@@ -5,6 +5,9 @@ import {
   istWebImport, buildImportWettkampf, teilsatzPlan, bloeckeNachBahn, trageErgebnisseEin, blockLeer,
   spielerName,
 } from '../js/logic/sw-web-import.js';
+import {
+  ligenName, ligenWertung, verbandGueltig, cacheLeeren, VERBAENDE, VERBAND_STANDARD, VERBAND_FREI,
+} from '../js/backend/sw-web.js';
 import { MODUS_GESAMT } from '../js/logic/sportkegeln-presets.js';
 import { istLizenzWettkampf } from '../js/logic/spieler-identitaet.js';
 import { computeGameStats } from '../js/logic/statistik.js';
@@ -136,6 +139,83 @@ test('parseSpielerInfo: nur Gesamtsummen -> saetze null und eine Warnung', () =>
   assert.equal(b.paare[0].gg.saetze, null);
   assert.deepEqual(b.paare[0].gg.gesamt, { volle: 420, abr: 190, fehler: 3 });
   assert.match(b.warnungen[0], /nur Gesamtsummen/);
+});
+
+test('ligenName: der Liga-Name steht je Dienst in einer anderen Spalte', () => {
+  // kvn: [id, "0", Name, ...] — dskb: [id, Name, "0", ...]. Eine feste Spalte ergab auf dskb
+  // den Namen "0" und damit eine Liga-Auswahl voller Nullen.
+  assert.equal(ligenName(['4328', '0', 'Herren - 2. Bundesliga Nord', '0']),
+    'Herren - 2. Bundesliga Nord');
+  assert.equal(ligenName(['4328', 'Herren - 2. Bundesliga Nord', '0', 'Dreier, Uwe']),
+    'Herren - 2. Bundesliga Nord');
+  assert.equal(ligenName(['4328', '0', '0']), '');   // nirgends Buchstaben -> kein Name
+});
+
+test('ligenWertung: die Wertung der Liga steht vor dem Namen — oder gar nicht da', () => {
+  // Sie entscheidet, in welcher Form GetSpielerInfo den Bericht schickt. kvn und dkbc liefern
+  // sie mit, dskb laesst die Spalte weg; dann muss null herauskommen und nicht der Anfang des
+  // Namens. (0 = Kegel/Holz, 1 = Punkte — Globals.Art des Dienst-Clients.)
+  assert.equal(ligenWertung(['4328', '0', 'Herren - 2. Bundesliga Nord', '0']), 0);
+  assert.equal(ligenWertung(['4317', '1', 'Männer - 1. Bundesliga', '0']), 1);
+  assert.equal(ligenWertung(['4328', 'Herren - 2. Bundesliga Nord', '0']), null);
+  assert.equal(ligenWertung(['4328']), null);
+});
+
+test('verbandGueltig: nur das Kuerzel selbst, kein Hostname und kein Pfad', () => {
+  // Der Wert wandert in `https://<verband>.sportwinner.de/php/<verband>/service.php`. Alles,
+  // was mehr ist als ein Host-Label, wuerde die Anfrage woanders hinlenken.
+  for (const v of ['kvn', 'dskb', 'dkbc', 'kv-nord', 'a1']) assert.equal(verbandGueltig(v), true);
+  for (const v of ['', '-kvn', 'kvn.sportwinner.de', 'kvn/x', 'kv n', '../etc', 'a'.repeat(31)]) {
+    assert.equal(verbandGueltig(v), false, `sollte abgelehnt werden: ${JSON.stringify(v)}`);
+  }
+  // Leerzeichen und Grossschreibung sind Tippfehler, keine Ablehnung wert — die Pruefung
+  // normalisiert vorher, und genau so macht es die Ansicht mit dem eingetippten Wert auch.
+  assert.equal(verbandGueltig(' KVN '), true);
+});
+
+test('VERBAENDE: die angebotenen Dienste sind selbst gueltige Kuerzel', () => {
+  assert.ok(VERBAENDE.length >= 2);
+  for (const v of VERBAENDE) {
+    assert.equal(verbandGueltig(v.id), true, v.id);
+    assert.ok(v.label && v.hinweis, `Beschriftung fehlt: ${v.id}`);
+  }
+  assert.ok(VERBAENDE.some((v) => v.id === VERBAND_STANDARD), 'die Voreinstellung muss dabei sein');
+  assert.equal(verbandGueltig(VERBAND_FREI), false, 'die Frei-Kennung darf kein Host-Label sein');
+});
+
+test('cacheLeeren: ohne localStorage passiert nichts — und schon gar kein Fehler', () => {
+  // Der Zwischenspeicher beschleunigt, er ist keine Bedingung. Im Testlauf (und in einem
+  // Browser mit gesperrtem Speicher) gibt es ihn nicht, und das darf den Import nicht anhalten.
+  assert.doesNotThrow(() => cacheLeeren('kvn'));
+  assert.doesNotThrow(() => cacheLeeren());
+});
+
+test('parseSpielListe: dskb schickt 13 Spalten OHNE wertung — Liga trotzdem richtig', () => {
+  // Zwei echte Zeilen derselben Partie, einmal von kvn (14 Spalten, wertung an [11]) und einmal
+  // von dskb (13 Spalten, an [11] steht schon die Liga-Zeile). Mit festen Indizes las dskb aus
+  // "2. Bundesliga Nord" eine Wertung 2 und liess die Liga leer.
+  const kvn = ['328222', '26.09.2026', '13:00', 'KV Gelsenkirchen 1', '3', '0', 'VOK Osnabrück 1',
+    '1', '0', 'beendet', '', '0', 'Herren / 2. Bundesliga Nord / 5. Spieltag', ''];
+  const dskb = ['328222', '26.09.2026', '13:00', 'KV Gelsenkirchen 1', '3', '0', 'VOK Osnabrück 1',
+    '1', '0', 'beendet', '', 'Herren / 2. Bundesliga Nord / 5. Spieltag', ''];
+
+  const a = parseSpielListe([kvn])[0];
+  assert.equal(a.wertung, 0);
+  assert.equal(a.liga, 'Herren / 2. Bundesliga Nord / 5. Spieltag');
+
+  const b = parseSpielListe([dskb])[0];
+  assert.equal(b.wertung, null);            // kennt die Spalte nicht -> spielbericht() sendet 0
+  assert.equal(b.liga, 'Herren / 2. Bundesliga Nord / 5. Spieltag');
+
+  // Alles Uebrige muss bei beiden gleich herauskommen.
+  for (const p of [a, b]) {
+    assert.equal(p.idSpiel, '328222');
+    assert.equal(p.heim, 'KV Gelsenkirchen 1');
+    assert.equal(p.gast, 'VOK Osnabrück 1');
+    assert.equal(p.datum, '2026-09-26');
+    assert.equal(p.gespielt, true);
+    assert.equal(p.importierbar, true);
+  }
 });
 
 test('parseSpielerInfo: eine LEERE Antwort wird als leer gemeldet, nicht als krumme Form', () => {

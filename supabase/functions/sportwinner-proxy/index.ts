@@ -61,16 +61,26 @@ const FENSTER_MS = 60_000;
 // `thumbmark` (am 26.09.2026 gemessen: 3 von 8 GetSaisonArray, 4 von 8 GetSpielerInfo). Es ist
 // also weder der Parameter noch das Kommando, sondern der Weg aus dem Rechenzentrum dorthin.
 //
-// Ein einzelner Versuch mit langem Timeout ist dafuer die schlechteste Wahl: der Nutzer wartet
-// 20 Sekunden und bekommt dann einen Fehler, obwohl der naechste Versuch meist sofort
-// durchgeht. Deshalb kurz warten und wenige Male neu ansetzen. GEANTWORTET hat der Dienst
-// bisher immer binnen 5,2 Sekunden — was laenger braucht, kommt auch nicht mehr. Drei Versuche
-// à 8 Sekunden bleiben im schlechtesten Fall unter der Geduld eines Nutzers und machen aus
-// „jede zweite Abfrage scheitert" ein „selten". Wiederholt wird NUR eine ausgebliebene
-// Antwort, nie eine inhaltliche Ablehnung des Dienstes (die ist eine Antwort und wird
-// durchgereicht) — und das Konto-Limit oben bleibt die Obergrenze fuer alles.
-const VERSUCHE = 3;
-const VERSUCH_MS = 8_000;
+// Wiederholt wird HIER NICHTS MEHR — und das ist eine Messung, keine Meinung.
+//
+// Am 27.09.2026 zehnmal dasselbe Kommando abgefragt: fuenf Aufrufe blieben stumm, und zwar jeder
+// volle 25 Sekunden. Das sind genau die drei Versuche, die hier drin standen: waren sie einmal
+// stumm, blieben sie es alle drei. Ein NEUER Aufruf der Function war dagegen in 3 von 5 Faellen
+// sofort da, in rund 0,3 Sekunden. Die Stille klebt also am einzelnen Aufruf — an der Instanz
+// bzw. ihrer Verbindung dorthin — und nicht am Zeitpunkt. Damit ist eine Wiederholung INNERHALB
+// dieser Funktion wertlos: sie zieht nur dieselbe taube Leitung noch zweimal und laesst den
+// Nutzer 25 statt 8 Sekunden warten.
+//
+// Die Wiederholung liegt deshalb jetzt in der App (js/backend/sw-web.js, ANLAEUFE): dort ist
+// jeder Anlauf ein neuer Aufruf und damit ein echter neuer Versuch. Hier bleibt EIN Versuch mit
+// kurzem Timeout, der schnell scheitert, damit der naechste Anlauf schnell kommt. GEANTWORTET
+// hat der Dienst bisher immer binnen 5,2 Sekunden — was laenger braucht, kommt auch nicht mehr.
+//
+// Die Zahl der Anfragen an den Ergebnisdienst aendert sich dadurch nicht (vorher ein Aufruf mit
+// drei Versuchen, jetzt bis zu drei Aufrufe mit je einem). Das Konto-Limit oben bleibt die
+// Obergrenze fuer alles.
+const VERSUCHE = 1;
+const VERSUCH_MS = 6_000;
 const PAUSE_MS = 400;
 const zaehler = new Map<string, { n: number; bis: number }>();
 
@@ -174,8 +184,9 @@ Deno.serve(async (req: Request) => {
     }
   }
   if (!antwort) {
-    return fehler(origin, 502, 'Der Ergebnisdienst hat auf mehrere Anfragen nicht geantwortet. '
-      + 'Das liegt nicht an dieser App — bitte gleich noch einmal versuchen.');
+    // Der Wortlaut zaehlt: die App erkennt daran, dass sie es noch einmal versuchen darf
+    // (js/backend/sw-web.js, STUMM_RE) — im Unterschied zu einer inhaltlichen Ablehnung.
+    return fehler(origin, 502, 'Der Ergebnisdienst hat nicht geantwortet.');
   }
 
   if (!antwort.ok) {

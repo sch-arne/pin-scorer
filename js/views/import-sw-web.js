@@ -63,6 +63,20 @@ import * as swWeb from '../backend/sw-web.js';
 
 const norm = (s) => (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
+// Der zuletzt benutzte Ergebnisdienst. Wer in der Bundesliga spielt, waehlt sonst bei jedem
+// Import wieder um — und der Dienst ist eine Eigenschaft des Vereins, nicht des Vorgangs.
+const VERBAND_KEY = 'sw-web-verband';
+function gemerkterVerband() {
+  try {
+    const v = String(localStorage.getItem(VERBAND_KEY) || '').trim().toLowerCase();
+    if (v && swWeb.verbandGueltig(v)) return v;
+  } catch { /* kein localStorage: dann eben die Voreinstellung */ }
+  return swWeb.VERBAND_STANDARD;
+}
+function merkeVerband(v) {
+  try { localStorage.setItem(VERBAND_KEY, v); } catch { /* nicht wichtig genug fuer einen Fehler */ }
+}
+
 // Teilsatz-Modus -> Klartext (nur fuer den Hinweistext; die Erfassung hat ihre eigene Tabelle).
 const TEIL_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen' };
 
@@ -77,9 +91,21 @@ export function importSwWebView() {
     // Konto + Profil: ohne beides laeuft hier gar nichts (siehe Kopf, Punkt 3)
     profil: null, angemeldet: false, sperrGrund: '', fehlend: [],
     // Auswahlkette
+    // Der Ergebnisdienst, der gefragt wird — `kvn` fuehrt die niedersaechsischen Ligen samt der
+    // Schere-Bundesligen, `dskb` nur die Bundesligen, `dkbc` die Classic-Bundesligen. Jeder
+    // andere `<name>.sportwinner.de` laesst sich eintippen (swWeb.VERBAENDE, VERBAND_FREI).
+    verband: gemerkterVerband(),
+    verbandWahl: '',       // Wert des Auswahlfeldes: bekannte Id oder VERBAND_FREI
+    verbandHinweis: '',    // Meldung zur freien Eingabe
     saisons: [], saison: '',
     sektion: 2,
-    ligen: [], liga: '', ligenLaden: false, ligenUnvollstaendig: false,
+    // Der Bereich ist die Ebene, auf der gesucht wird: Bundesligen, Landesligen oder ein Bezirk.
+    // Genau dieses Dropdown hat der Ergebnisdienst selbst — und genau deshalb braucht die
+    // Liga-Liste nur EINE Abfrage statt eines Dutzends (siehe backend/sw-web.js).
+    bereiche: [], bereich: `${swWeb.ART_BUND}:0`, bereicheLaden: false,
+    bereicheUnvollstaendig: false,
+    ligen: [], liga: '', ligenLaden: false,
+    ausCache: 0,           // Zeitpunkt, falls eine Liste aus dem Zwischenspeicher kam
     spieltage: [], spieltag: '',
     partien: [], partie: null, partienLaden: false,
     // Spielbericht + daraus abgeleitetes Spec
@@ -91,6 +117,21 @@ export function importSwWebView() {
     inDb: false,           // eigenes Ergebnis ins Konto uebernehmen? (sonst rein lokal)
     nachimport: null,      // { id, name, offen, ichSlot, remote, geteilt } — schon importiert
     warnungen: [],
+  };
+
+  // Jeder Relay-Aufruf muss denselben Verband treffen — eine Liga-ID aus dem einen Dienst
+  // nuetzt beim anderen nichts.
+  const relayOpt = () => ({ verband: state.verband });
+
+  // Steht der gemerkte Dienst nicht in der Liste, war er von Hand eingetippt.
+  state.verbandWahl = swWeb.VERBAENDE.some((v) => v.id === state.verband)
+    ? state.verband : swWeb.VERBAND_FREI;
+
+  // Kam eine Liste aus dem Zwischenspeicher, weil die Abfrage ausfiel? Dann MUSS das dastehen:
+  // eine Liste, die aussieht wie frisch geladen, aber von heute Morgen ist, wuerde einen
+  // nachgetragenen Spieltag wie „gibt es nicht" erscheinen lassen.
+  const merkeCache = (liste) => {
+    if (liste && liste.ausCache) state.ausCache = liste.ausCache;
   };
 
   // --- Laden ----------------------------------------------------------------
@@ -130,11 +171,14 @@ export function importSwWebView() {
 
   async function ladeSaisons() {
     try {
-      state.saisons = await swWeb.saisons();
+      state.saisons = await swWeb.saisons(relayOpt());
+      merkeCache(state.saisons);
+      // Die neueste Saison zuerst — das dritte Feld der Antwort ist NICHT „aktuell"
+      // (siehe backend/sw-web.js, saisons()).
       state.saison = state.saisons.length ? String(state.saisons[0].id) : '';
       state.phase = 'auswahl';
       render();
-      if (state.saison) ladeLigen();
+      if (state.saison) ladeBereiche();
     } catch (e) {
       state.phase = 'fehler';
       state.fehler = e.message || 'Ergebnisdienst nicht erreichbar.';
@@ -142,17 +186,53 @@ export function importSwWebView() {
     }
   }
 
-  async function ladeLigen() {
-    state.ligenLaden = true; state.ligen = []; state.liga = '';
+  // Bereiche (Bundes-/Landesebene oder Bezirk) und danach die Ligen des gewaehlten Bereichs.
+  //
+  // Zusammen sind das ZWEI Abfragen. Frueher holte die Ansicht hier alle Ligen aller Bezirke
+  // auf einmal — ein Dutzend Abfragen, von denen auf dem wackligen Weg zum Ergebnisdienst
+  // regelmaessig welche ausfielen. Der Dienst selbst macht es genauso wie die Ansicht jetzt.
+  async function ladeBereiche() {
+    state.bereicheLaden = true; state.bereiche = [];
+    setzeLigenZurueck();
+    render();
+    try {
+      state.bereiche = await swWeb.bereiche(state.saison, state.sektion, relayOpt());
+      merkeCache(state.bereiche);
+      // Die Bezirksliste ist stumm geblieben: Bundes- und Landesebene stehen, die Bezirke nicht.
+      // Das muss dastehen, sonst sieht es aus, als hätte dieser Dienst gar keine.
+      state.bereicheUnvollstaendig = !!state.bereiche.unvollstaendig;
+      // Der gemerkte Bereich kann es in diesem Dienst nicht geben (ein Bezirk von kvn existiert
+      // bei dskb nicht) — dann zurueck auf die Bundesligen.
+      if (!state.bereiche.some((b) => b.id === state.bereich)) {
+        state.bereich = state.bereiche.length ? state.bereiche[0].id : '';
+      }
+      state.fehler = '';
+    } catch (e) {
+      state.fehler = e.message || 'Bereiche konnten nicht geladen werden.';
+    }
+    state.bereicheLaden = false;
+    render();
+    if (state.bereich) ladeLigen();
+  }
+
+  function setzeLigenZurueck() {
+    state.ligen = []; state.liga = '';
     state.spieltage = []; state.spieltag = ''; state.partien = []; state.partie = null;
     state.spec = null;
+  }
+
+  async function ladeLigen() {
+    const bereich = state.bereiche.find((b) => b.id === state.bereich);
+    if (!bereich) return;
+    state.ligenLaden = true;
+    setzeLigenZurueck();
     render();
-    state.ligenUnvollstaendig = false;
     try {
-      state.ligen = await swWeb.alleLigen(state.saison, state.sektion);
-      // Ein Teil der Abfragen ist ausgefallen: die Liste steht, aber es koennen Ligen fehlen.
-      // Das MUSS dastehen — sonst sieht eine fehlende Liga aus wie „gibt es nicht".
-      state.ligenUnvollstaendig = !!state.ligen.unvollstaendig;
+      state.ligen = await swWeb.ligen(state.saison, state.sektion, bereich.bezirk, bereich.art,
+        relayOpt());
+      merkeCache(state.ligen);
+      state.fehler = state.ligen.length ? ''
+        : `Dieser Ergebnisdienst führt in „${bereich.name}" keine Liga dieser Disziplin.`;
     } catch (e) {
       state.fehler = e.message || 'Ligen konnten nicht geladen werden.';
     }
@@ -160,15 +240,49 @@ export function importSwWebView() {
     render();
   }
 
+  // Der Dienst wechselt: Saisons, Bereiche, Ligen und alles darunter gehoeren zum alten und sind
+  // hier wertlos — eine Liga-Id des einen Dienstes bedeutet beim anderen nichts. Also die Kette
+  // von vorn, inklusive der Saison-Liste.
+  function wechsleVerband(v) {
+    state.verband = v;
+    state.verbandHinweis = '';
+    merkeVerband(v);
+    state.saisons = []; state.saison = '';
+    state.bereiche = []; state.bereich = `${swWeb.ART_BUND}:0`;
+    state.bereicheUnvollstaendig = false;
+    state.ausCache = 0;
+    setzeLigenZurueck();
+    state.fehler = '';
+    state.phase = 'laden';
+    render();
+    ladeSaisons();
+  }
+
+  // Alles noch einmal frisch holen: der Zwischenspeicher dieses Dienstes wird verworfen und die
+  // Kette laeuft von der Saison an neu. Der Weg fuer den Fall, dass der Ergebnisdienst gerade
+  // etwas nachgetragen hat.
+  function ladeAllesNeu() {
+    swWeb.cacheLeeren(state.verband);
+    state.ausCache = 0; state.bereicheUnvollstaendig = false;
+    state.saisons = []; state.saison = ''; state.bereiche = [];
+    setzeLigenZurueck();
+    state.fehler = '';
+    state.phase = 'laden';
+    render();
+    ladeSaisons();
+  }
+
   async function ladeSpieltageUndPartien() {
     state.partienLaden = true; state.partien = []; state.partie = null; state.spec = null;
     render();
     try {
       // Spieltage sind nur die Filterliste — die Partien kommen unabhängig davon.
-      state.spieltage = await swWeb.spieltage(state.saison, state.sektion, state.liga);
+      state.spieltage = await swWeb.spieltage(state.saison, state.sektion, state.liga, relayOpt());
+      merkeCache(state.spieltage);
     } catch (e) { state.spieltage = []; }
     try {
-      const rows = await swWeb.spiele(state.saison, state.sektion, state.liga, state.spieltag);
+      const rows = await swWeb.spiele(state.saison, state.sektion, state.liga, state.spieltag,
+        relayOpt());
       // Auch die laufende und die abnahmebereite Partie: sie liefert einen Zwischenstand,
       // und der laesst sich spaeter durch einen zweiten Import vervollstaendigen.
       state.partien = parseSpielListe(rows).filter((p) => p.importierbar);
@@ -190,8 +304,14 @@ export function importSwWebView() {
     render();
     try {
       const preset = sektionToBahnart(state.sektion) || 'schere';
+      // Die Wertung entscheidet, in welcher Form der Dienst den Bericht schickt. Die
+      // Partie-Zeile fuehrt sie — aber nicht bei jedem Dienst (dskb laesst die Spalte weg).
+      // Dann gilt die der LIGA, die GetLigaArray mitgeliefert hat; erst wenn auch die fehlt,
+      // wird 0 geschickt (so erwartet es der Dienst fuer die Schere).
+      const ligaWertung = (state.ligen.find((l) => String(l.id) === String(state.liga)) || {}).wertung;
+      const wertung = partie.wertung != null ? partie.wertung : ligaWertung;
       const rows = await swWeb.spielbericht(
-        state.saison, state.sektion, partie.idSpiel, partie.wertung,
+        state.saison, state.sektion, partie.idSpiel, wertung, relayOpt(),
       );
       const bericht = parseSpielerInfo(rows, { saetze: PRESETS[preset].saetze });
       const spec = buildImportSpec(partie, bericht);
@@ -246,7 +366,7 @@ export function importSwWebView() {
     const heim = spec.mannschaften[0].name;
     let ort = null;
     try {
-      const anlagen = await swWeb.bahnanlagen(state.saison, state.sektion, state.liga);
+      const anlagen = await swWeb.bahnanlagen(state.saison, state.sektion, state.liga, relayOpt());
       ort = anlagen.find((a) => norm(a.mannschaft) === norm(heim)) || null;
     } catch (e) { /* ohne Spielort weiter — Bahnen lassen sich von Hand setzen */ }
 
@@ -435,13 +555,39 @@ export function importSwWebView() {
   const opt = (v, label, sel) =>
     `<option value="${esc(String(v))}"${String(v) === String(sel) ? ' selected' : ''}>${esc(label)}</option>`;
 
+  // Zeitpunkt -> „von heute, 9:12 Uhr" / „vom 26.09., 20:04 Uhr"
+  function wann(ms) {
+    const d = new Date(ms);
+    const uhr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    const heute = new Date().toDateString() === d.toDateString();
+    return heute ? `von heute, ${uhr} Uhr`
+      : `vom ${d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}, ${uhr} Uhr`;
+  }
+
   function auswahlSection() {
     const s = state;
+    const dienst = swWeb.VERBAENDE.find((v) => v.id === s.verband);
+    const frei = s.verbandWahl === swWeb.VERBAND_FREI;
     return `
+      <section class="field">
+        <label class="field-label" for="swb-verband">Ergebnisdienst</label>
+        <select class="join-input select-full" id="swb-verband" data-field="verbandWahl">
+          ${swWeb.VERBAENDE.map((v) => opt(v.id, v.label, s.verbandWahl)).join('')}
+          ${opt(swWeb.VERBAND_FREI, 'anderer Verband — selbst eintragen', s.verbandWahl)}
+        </select>
+        ${frei ? `
+        <input class="join-input select-full" id="swb-verband-frei" data-field="verbandFrei"
+          type="text" inputmode="url" autocapitalize="none" spellcheck="false"
+          value="${esc(dienst ? '' : s.verband)}" placeholder="z. B. dkbc" />
+        <p class="field-hint">Das Kürzel vor <code>.sportwinner.de</code> — steht in der Adresse
+          des Ergebnisdienstes, den der Verband veröffentlicht.</p>` : ''}
+        <p class="stats-sub">${esc(s.verbandHinweis || (dienst ? dienst.hinweis
+          : `Abgefragt wird ${s.verband}.sportwinner.de`))}</p>
+      </section>
       <section class="field">
         <label class="field-label" for="swb-saison">Saison</label>
         <select class="join-input select-full" id="swb-saison" data-field="saison">
-          ${s.saisons.map((x) => opt(x.id, `${x.jahr}${x.aktiv ? ' (aktuell)' : ''}`, s.saison)).join('')}
+          ${s.saisons.map((x) => opt(x.id, x.jahr, s.saison)).join('')}
         </select>
       </section>
       <section class="field">
@@ -451,22 +597,40 @@ export function importSwWebView() {
         </select>
       </section>
       <section class="field">
+        <label class="field-label" for="swb-bereich">Bereich</label>
+        <select class="join-input select-full" id="swb-bereich" data-field="bereich"
+          ${s.bereicheLaden ? 'disabled' : ''}>
+          ${s.bereicheLaden ? '<option value="">Lade Bereiche …</option>' : ''}
+          ${s.bereiche.map((x) => opt(x.id, x.name, s.bereich)).join('')}
+        </select>
+        <p class="field-hint">Die Ebene, auf der gesucht wird. Der Ergebnisdienst liefert die
+          Ligen nur bereichsweise — und jede Abfrage weniger ist eine, die nicht ausfallen kann.</p>
+        ${s.bereicheUnvollstaendig && !s.bereicheLaden ? `
+        <p class="stats-sub">Die Liste der Bezirke kam nicht durch — hier steht nur die
+          Landesebene. Für eine Bezirksliga unten „Listen frisch laden".</p>` : ''}
+      </section>
+      <section class="field">
         <label class="field-label" for="swb-liga">Liga</label>
         <select class="join-input select-full" id="swb-liga" data-field="liga" ${s.ligenLaden ? 'disabled' : ''}>
           <option value="">${s.ligenLaden ? 'Lade Ligen …' : 'Bitte wählen'}</option>
           ${s.ligen.map((x) => opt(x.id, x.name, s.liga)).join('')}
         </select>
-        ${s.ligenUnvollstaendig && !s.ligenLaden ? `
-        <p class="stats-sub">Ein Teil der Abfragen kam nicht durch — es können Ligen fehlen.
-          <button type="button" class="anl-inline-link" id="swb-ligen-neu">Nochmal laden</button></p>` : ''}
       </section>
+      ${s.ausCache ? `
+      <p class="stats-sub">Der Ergebnisdienst antwortet gerade nicht auf jede Abfrage — die
+        Listen stehen hier aus dem Zwischenspeicher (${esc(wann(s.ausCache))}).
+        <button type="button" class="anl-inline-link" id="swb-neu">Frisch laden</button></p>` : `
+      <p class="stats-sub"><button type="button" class="anl-inline-link" id="swb-neu">Listen frisch
+        laden</button> — nötig, wenn der Ergebnisdienst gerade eine Liga oder einen Spieltag
+        nachgetragen hat.</p>`}
       ${s.liga ? `
       <section class="field">
         <label class="field-label" for="swb-spieltag">Spieltag</label>
         <select class="join-input select-full" id="swb-spieltag" data-field="spieltag">
-          <option value="">Alle Spieltage</option>
-          ${s.spieltage.map((x) => opt(x.id, x.name, s.spieltag)).join('')}
+          <option value="">Aktueller Spieltag</option>
+          ${s.spieltage.map((x) => opt(x.id, `${x.name}${x.beendet ? ' ✓' : ''}`, s.spieltag)).join('')}
         </select>
+        <p class="field-hint">✓ heißt: der Spieltag ist abgeschlossen.</p>
       </section>` : ''}
       ${partienSection()}`;
   }
@@ -757,7 +921,21 @@ export function importSwWebView() {
     if (!feld) return;
     if (feld === 'inDb') { state.inDb = ev.target.checked; render(); return; }
     state[feld] = feld === 'sektion' ? Number(ev.target.value) : ev.target.value;
-    if (feld === 'saison' || feld === 'sektion') ladeLigen();
+    if (feld === 'verbandWahl') {
+      // Auf „selbst eintragen" wird noch nichts geladen — erst das Feld darunter sagt, wohin.
+      if (state.verbandWahl === swWeb.VERBAND_FREI) { state.verbandHinweis = ''; render(); return; }
+      wechsleVerband(state.verbandWahl);
+    } else if (feld === 'verbandFrei') {
+      const v = String(ev.target.value || '').trim().toLowerCase();
+      if (!v) { state.verbandHinweis = ''; render(); return; }
+      if (!swWeb.verbandGueltig(v)) {
+        state.verbandHinweis = 'Nur das Kürzel selbst — Buchstaben, Ziffern und Bindestrich.';
+        render();
+        return;
+      }
+      wechsleVerband(v);
+    } else if (feld === 'saison' || feld === 'sektion') ladeBereiche();
+    else if (feld === 'bereich') ladeLigen();
     else if (feld === 'liga') { state.spieltag = ''; ladeSpieltageUndPartien(); }
     else if (feld === 'spieltag') ladeSpieltageUndPartien();
     else if (feld === 'bahnenText') {
@@ -784,7 +962,7 @@ export function importSwWebView() {
     if (ich) { state.ichKey = ich.dataset.ich; render(); return; }
     // Unvollstaendige Ligen-Liste nachladen. Kein Neuaufbau der ganzen Ansicht: Saison und
     // Disziplin stehen ja schon, es fehlen nur die ausgefallenen Teilabfragen.
-    if (ev.target.closest('#swb-ligen-neu')) { ladeLigen(); return; }
+    if (ev.target.closest('#swb-neu')) { ladeAllesNeu(); return; }
     if (ev.target.closest('[data-action="erneut"]')) {
       state.phase = 'laden'; state.fehler = '';
       render();
