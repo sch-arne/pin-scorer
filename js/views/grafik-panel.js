@@ -559,11 +559,15 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   // Reiters, beim ↻ und nach jeder Logo-/Farb-Änderung — nicht beim Poll-Takt, sonst verlöre
   // der Farbwähler bei jedem Tick den Fokus.
   function baueStream() {
-    const bearbeitbar = !!(livestream && roh && roh.wettkampf);
-    streamPane.innerHTML = streamHtml(roh, bearbeitbar);
+    // Wie im Beamer-Reiter: den FRISCHEN Wettkampf verdrahten (holeRoh), nicht das beim
+    // Öffnen geholte `roh` — sonst schreibt der erste Klick nach einem Render der
+    // aufrufenden Ansicht in eine veraltete Kopie und speichert sie über den frischen Stand.
+    const daten = holeRoh() || roh;
+    const bearbeitbar = !!(livestream && daten && daten.wettkampf);
+    streamPane.innerHTML = streamHtml(daten, bearbeitbar);
     streamHtmlStand = '';
     if (bearbeitbar) {
-      wireLivestreamFelder(streamPane, roh.wettkampf, {
+      wireLivestreamFelder(streamPane, daten.wettkampf, {
         onChange: () => {
           if (livestream.onChange) livestream.onChange();
           // Die Logos stecken auch in der Ergebnis-Grafik -> Modell und Bild-Cache erneuern.
@@ -595,23 +599,35 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   // ── Beamer-Reiter ──────────────────────────────────────────────────────────
   // Gerüst (Vorschau-Rahmen, Vollbild-Knopf, URL) aufbauen und verdrahten.
   function baueBeamer() {
+    // IMMER den FRISCHEN Wettkampf verdrahten, nicht das beim Öffnen geholte `roh`: die
+    // aufrufende Ansicht baut ihr Datenobjekt bei jedem Render neu aus dem Speicher, und bei
+    // einem geteilten Wettkampf rendert der Hub mitten im Spiel (jeder Realtime-Reload). Ein
+    // Schalter, der danach noch in die alte Kopie schreibt, springt zwar um — die Tafel malt
+    // aber aus holeRoh() und bliebe dunkel; das Speichern würde zusätzlich den frischen
+    // Server-Stand mit der alten Kopie überschreiben.
+    const daten = holeRoh() || roh;
     // Die Tafel-Einstellungen stehen am Wettkampf — ändern darf sie, wer auch Logos/Farben
     // ändern darf (also nicht der Zuschauer). Danach: Gerüst neu (Schalter und Vorschau
     // zeigen die Wahl) und die Config spiegeln, damit die Leinwand nachzieht.
-    const bearbeitbar = !!(livestream && roh && roh.wettkampf);
-    beamerPane.innerHTML = beamerHtml(roh, bearbeitbar);
+    const bearbeitbar = !!(livestream && daten && daten.wettkampf);
+    beamerPane.innerHTML = beamerHtml(daten, bearbeitbar);
     beamerHtmlStand = '';
     if (bearbeitbar) {
-      // Kein livestream.onChange: die Wahl ändert nur die Tafel, nicht die aufrufende Ansicht.
-      wireBeamerFelder(beamerPane, roh.wettkampf, {
-        onChange: baueBeamer,
+      wireBeamerFelder(beamerPane, daten.wettkampf, {
+        onChange: () => {
+          // Die aufrufende Ansicht neu rendern, BEVOR wir neu aufbauen: sie liefert unsere
+          // Daten (datenFn) und liest sie frisch aus dem Speicher — nur so sieht der nächste
+          // Aufbau die eben gespeicherte Wahl und nicht den Stand von vor dem Klick.
+          if (livestream.onChange) livestream.onChange();
+          baueBeamer();
+        },
         onVorschau: malBeamer, // Tippen in der Überschrift: nur die Tafel neu malen (Fokus!)
         onPush: livestream.onPush || (() => {}),
       });
     }
     const copy = beamerPane.querySelector('[data-action="copy-beamer"]');
     if (copy) copy.addEventListener('click', async () => {
-      const url = beamerUrl(roh.wettkampf);
+      const url = beamerUrl((holeRoh() || roh).wettkampf);
       try { await navigator.clipboard.writeText(url); beamerMsg('URL kopiert.'); }
       catch (e) {
         const inp = beamerPane.querySelector('[data-beamer-url]');
@@ -631,8 +647,13 @@ export function oeffneGrafikMenue({ datenFn, livestream }) {
   function malBeamer() {
     const stage = beamerPane.querySelector('[data-stage]');
     if (!stage) return;
+    const daten = holeRoh() || {};
+    // Hell/Dunkel aus derselben (frischen) Quelle wie die Tafel — so zieht der Rahmen auch
+    // mit, wenn die Umstellung von einem anderen Gerät kommt (wie unter #/beamer).
+    const frame = beamerPane.querySelector('.gfx-bm-frame');
+    if (frame) frame.classList.toggle('is-hell', beamerOptionen(daten.wettkampf).thema === 'hell');
     let html = '';
-    try { html = buildBeamerHtml(holeRoh() || {}); }
+    try { html = buildBeamerHtml(daten); }
     catch (e) { html = '<div class="bm-wait">Vorschau nicht möglich.</div>'; }
     if (html !== beamerHtmlStand) {
       beamerHtmlStand = html;

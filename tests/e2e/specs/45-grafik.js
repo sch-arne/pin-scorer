@@ -386,6 +386,34 @@ suite('Ergebnis-Grafik', () => {
     app.assertClean();
   });
 
+  // Regression: Der Hub baut sein Datenobjekt bei JEDEM Render neu aus dem Speicher. Bei einem
+  // geteilten Wettkampf passiert das mitten im Spiel (jeder Realtime-Reload rendert neu) —
+  // danach zeigten die Beamer-Schalter in eine veraltete Kopie: der Schalter sprang um, die
+  // Tafel blieb dunkel, und das Speichern haette den frischen Stand ueberschrieben.
+  test('Beamer-Einstellung greift auch nach einem Neuaufbau der Hub-Daten', async (app) => {
+    const wk = baueWettkampf();
+    fuelleErgebnisse(wk.games);
+    await starteHub(app, wk, DESKTOP);
+    await oeffneGrafik(app);
+    await app.click('[data-gfx-tab="beamer"]');
+    const pane = () => app.need('.gfx-pane[data-pane="beamer"]');
+    // Breitenwechsel Desktop -> Handy: der Hub rendert neu (kzMedia) und legt dabei ein neues
+    // Datenobjekt an — derselbe Effekt wie ein Realtime-Reload.
+    app.frame.style.width = '800px';
+    await app.settle();
+    await app.waitFor(() => !app.need('.view-wettkampf, #app > div')
+      .classList.contains('view-kontrollzentrum'), 'Hub hat nicht neu gerendert');
+
+    await app.click('[data-bm="thema"][data-wert="hell"]');
+    ok(app.need('[data-bm="thema"][data-wert="hell"]').classList.contains('is-on'),
+      'Schalter ist nicht umgesprungen');
+    ok(pane().querySelector('.bm-page').classList.contains('is-hell'), 'Tafel bleibt dunkel');
+    ok(pane().querySelector('.gfx-bm-frame').classList.contains('is-hell'), 'Rahmen bleibt dunkel');
+    eq((app.activeWettkampf() || {}).beamer.thema, 'hell', 'Darstellung nicht am Wettkampf');
+    await app.click('[data-gfx="close"]');
+    app.assertClean();
+  });
+
   test('Trainingsspiel ohne Wettkampf: Livestream- und Beamer-Reiter erklären sich', async (app) => {
     const game = makeGame({
       preset: 'schere', saetze: 2, wuerfeProSatz: 4,
