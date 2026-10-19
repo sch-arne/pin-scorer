@@ -16,6 +16,7 @@ import { spielerView } from './views/login.js';
 import { anlagenView } from './views/anlagen.js';
 import { importSportwinnerView } from './views/import-sportwinner.js';
 import { importSwWebView } from './views/import-sw-web.js';
+import { importWurfdatenView } from './views/import-wurfdaten.js';
 import { overlayView } from './views/overlay.js';
 import { beamerView } from './views/beamer.js';
 
@@ -38,6 +39,9 @@ register('/import/sportwinner', importSportwinnerView);
 // Zweiter Import-Weg: ein GESPIELTES Spiel aus dem oeffentlichen Ergebnisdienst holen
 // (ohne Bruecke, rein per Webabfrage ueber das Relay).
 register('/import/sportwinner-web', importSwWebView);
+// Wurfdaten-CSV der Bahnanlage (eine Datei je Spieler, Spalten je Bahn) in ein offenes
+// Spiel einlesen: #/import/wurfdaten (optional ?game=<id>, sonst das aktive Spiel).
+register('/import/wurfdaten', importWurfdatenView);
 // OBS-Livestream-Overlay (transparent, per Beitritts-Code): #/overlay?code=XXXX
 register('/overlay', overlayView);
 // Beamer-Ergebnistafel fuer die Leinwand im Saal: #/beamer?code=XXXX (zweites Geraet am
