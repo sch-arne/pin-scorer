@@ -12,7 +12,7 @@
 //   - Satz-Status pending/live/done, Bahn je Satz aus bahnplan
 
 import { getActiveGame, getGame, saveGame, saveErfassung, setGameStatus, getStandardbilder, saveStandardbilder, getSettings, saveSettings, getWettkampf, getWettkampfGames, saveWettkampf } from '../store.js';
-import { UNMOUNT_EVENT } from '../router.js';
+import { UNMOUNT_EVENT, navigate } from '../router.js';
 import { esc, fehlerText } from '../util.js';
 import { revealCodeHtml, wireRevealCodes } from '../reveal-code.js';
 import { teilsatzRanges } from '../logic/teilsaetze.js';
@@ -1763,6 +1763,13 @@ export function spielLaufendView() {
               </div>
               <button type="button" class="erf-btn" data-act="export-csv-current">⤓ CSV</button>
             </div>
+            <div class="erf-setting-row">
+              <div class="erf-setting-text">
+                <span class="erf-setting-label">Wurfdaten einlesen</span>
+                <span class="erf-setting-hint">Die CSV-Dateien der Bahnanlage (eine je Spieler, Spalten je Bahn) in dieses Spiel übernehmen. Zuordnung über Dateiname und Bahnplan; das Warmwerfen bleibt draußen.</span>
+              </div>
+              <button type="button" class="erf-btn" data-act="import-wurfdaten">⤒ Einlesen</button>
+            </div>
             <h3 class="erf-settings-sub">Standard-Kegelbilder</h3>
             ${standardbilderEditor()}
             <h3 class="erf-settings-sub" style="margin-top:20px;">Spiel-Details</h3>
@@ -2645,6 +2652,9 @@ export function spielLaufendView() {
       exportCsv(root.querySelector('[data-wp-player]') ? sel : state.bloecke.map((_, i) => i));
     });
     act('export-csv-current', () => { settingsOpen = false; render(); exportCsv([state.aktiverSpieler]); });
+    // Gegenstück zum CSV-Export: die Wurfdaten-Dateien der Anlage einlesen. Eigene Ansicht,
+    // weil die Zuordnung (Datei -> Spieler, Bahn -> Satz) gezeigt und bestätigt werden muss.
+    act('import-wurfdaten', () => { settingsOpen = false; navigate('/import/wurfdaten?game=' + encodeURIComponent(gameId)); });
     // Export-Knöpfe je Spieler in der Statistik-Ansicht (Desktop-Spalten / mobile Statistik).
     root.querySelectorAll('[data-export-pdf]').forEach((b) =>
       b.addEventListener('click', () => printProtokoll([parseInt(b.dataset.exportPdf, 10)])));
