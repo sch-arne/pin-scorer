@@ -35,8 +35,9 @@
 // echten Ergebnisdienst geprüft (Referenzpartie 328202, siehe tests/fixtures/):
 //
 //   schere  — Sektion ≠ Classic (Schere/Bohle), 18 Spalten:
-//      [0]leer [1]Name GG [2..5]Satz 1-4 GG [6]EWP GG [7]Holz GG
-//      [8]Holz G [9]EWP G [10..13]Satz 4-1 G (RÜCKWÄRTS) [14]Name G [15]leer
+//      [0]Vermerk GG [1]Name GG [2..5]Satz 1-4 GG [6]EWP GG [7]Holz GG
+//      [8]Holz G [9]EWP G [10..13]Satz 4-1 G (RÜCKWÄRTS) [14]Name G [15]Vermerk G
+//      [16]geteilt GG [17]geteilt G
 //
 //   classic — Classic mit Punktwertung, 16 Spalten:
 //      [0]Name GG [1..4]Satz 1-4 GG [5]Kegel GG [6]SP [7]MP
@@ -56,6 +57,39 @@
 // gestauchte Liste haette sein erstes Ergebnis auf Bahn 5 dem Satz zugeordnet, der auf Bahn 8
 // gespielt wird. Ein zweiter Import derselben Partie ergaenzt dann nur, was noch fehlt
 // (trageErgebnisseEin mit `nurLeere`).
+//
+// GETEILTE POSITIONEN (Auswechslung, vorzeitiges Ende)
+// ---------------------------------------------------
+// Eine Position muss nicht einem Spieler gehören. Wird gewechselt, bespielen zwei Leute je
+// einen Teil der vier Bahnen — und der Bericht sagt das auf DREI verschiedene Weisen, je
+// Sektion. Alle drei sind an echten Partien abgelesen (siehe tests/fixtures/):
+//
+//   1. classic — der Eingewechselte bekommt eine EIGENE ZEILE, die nur auf SEINER Seite einen
+//      Namen trägt; die Gegenseite der Zeile ist komplett leer. Seine Bahnen ergänzen die des
+//      Ausgewechselten lückenlos, das Positionsholz ist die Summe beider Zeilen.
+//      (1. Bundesliga Classic, Spieltag 1+2: 6 von 10 Partien — das ist der Normalfall.)
+//
+//   2. schere mit Doppel-Flag — [16] (Gastgeber) bzw. [17] (Gast) trägt eine „1". Das ist keine
+//      Zierde, sondern die Angabe des Dienstes selbst: sein eigener Client verbindet dann die
+//      Holz- und EWP-Zelle dieser Zeile per `rowspan: 2` über ZWEI Zeilen (`teamDoppeltGG`/
+//      `teamDoppeltG` in sportwinner.js). Heißt: diese Zeile und die nächste sind EINE Position,
+//      und die Holz-Zelle der ERSTEN Zeile ist schon die Summe beider.
+//
+//   3. schere ohne Doppel-Flag — der Dienst schreibt alle vier Bahnen unter den Namen dessen,
+//      der angefangen hat, und hängt den Eingewechselten als ergebnislose VERMERKZEILE an das
+//      Ende des Berichts. Wer wirklich welche Bahn gespielt hat, steht dann nicht im Bericht;
+//      der einzige Hinweis sind die Buchstaben in [0]/[15] und die Bemerkung der Partie.
+//
+// Die Buchstaben in [0]/[15] stehen auf der Seite des betroffenen Spielers — aus den Daten
+// abgelesen und von der Bemerkung der Partie gestützt: `a` beim Ausgewechselten, `e` beim
+// Eingewechselten, `b` bei einem Abbruch. Eine Position mit `a` oder `b` trägt deshalb Holz,
+// das nicht einer Person allein gehört (Fall 3) — `eindeutig: false`. Genau daran hängt, ob
+// sich die Zeile in die eigene Konto-Statistik übernehmen lässt: ein `spiel_ergebnis` ist ein
+// Spiel EINER Person, und fremde Bahnen haben darin nichts zu suchen.
+//
+// Erfunden wird auch hier nichts: in Fall 1 und 2 sind die Bahnen je Spieler bekannt und werden
+// zusammengelegt (`teiler`), in Fall 3 sind sie es nicht — dann bleibt das Holz, wie der Dienst
+// es meldet, und der Nutzer bekommt es gesagt.
 //
 // WICHTIG: `schere` und `classic` liefern nur das SATZ-HOLZ — keine Volle/Abräum-Trennung und
 // keine Fehlwürfe. Nur `holz` trennt Volle/Abräumen, dafür ohne Satz-Detail.
@@ -160,6 +194,9 @@ export const LAYOUTS = {
     typ: 'satz',
     gg: { name: 1, saetze: [2, 3, 4, 5], kegel: 7 },
     g: { name: 14, saetze: [13, 12, 11, 10], kegel: 8 },
+    // Die Randspalten, die der Dienst-Client selbst auswertet — siehe Kopf, GETEILTE POSITIONEN.
+    vermerk: { gg: 0, g: 15 },
+    doppelt: { gg: 16, g: 17 },
   },
   classic: {
     typ: 'satz',
@@ -176,6 +213,22 @@ export const LAYOUTS = {
 // Sieht die Zelle nach einem Namen aus? Ein Satzergebnis tut das nie — der Unterschied trägt
 // die Layout-Erkennung, weil sich die Layouts vor allem in der Namensspalte unterscheiden.
 const istName = (v) => /\p{L}/u.test(klarText(v));
+
+// Die Vermerk-Buchstaben aus [0]/[15], siehe Kopf. Erkannt wird GENAU ein Buchstabe — bei den
+// meisten Partien ist die Spalte leer, und alles Längere ist kein Vermerk, sondern etwas, das
+// wir nicht kennen (und dann auch nicht deuten).
+export const VERMERK_TEXT = {
+  a: 'ausgewechselt',
+  e: 'eingewechselt',
+  b: 'abgebrochen',
+};
+const vermerkVon = (v) => {
+  const s = klarText(v).toLowerCase();
+  return /^[a-z]$/.test(s) ? s : '';
+};
+
+// Das Doppel-Flag aus [16]/[17]: „diese Zeile und die nächste sind eine Position".
+const doppeltVon = (v) => klarText(v) === '1';
 
 // „Nachname, Vorname" -> „Vorname Nachname".
 //
@@ -228,7 +281,7 @@ function leseSeite(zeile, map, typ) {
 export function pruefeSeite(seite, typ) {
   if (seite.kegel == null) return true;            // keine Summenspalte -> nichts zu prüfen
   const summe = typ === 'satz'
-    ? seite.saetze.reduce((s, x) => s + ((x && x.holz) || 0), 0)
+    ? (seite.saetze || []).reduce((s, x) => s + ((x && x.holz) || 0), 0)
     : (seite.volle || 0) + (seite.abr || 0);
   if (!summe && !seite.kegel) return true;
   return summe === seite.kegel;
@@ -256,11 +309,153 @@ export function erkenneLayout(rows) {
   return bestes;
 }
 
-// GetSpielerInfo-Antwort -> Paarungen mit Ergebnissen je Seite.
-// Rückgabe: { layout, proSatz, paare:[{ gg, g }], warnungen }
-//   gg/g = { name, kegel, saetze:[{holz}] }                         (Satz-Layout)
-//          { name, kegel, saetze:[{volle,abr,fehler,holz}] }        (Summen-Layout, je Satz eine Zeile)
-//          { name, kegel, saetze:null, gesamt:{volle,abr,fehler} }  (nur Gesamtsummen)
+// --- Zeilen -> Positionen ----------------------------------------------------
+
+// Eine Rohzeile mit beiden Seiten UND den Randsignalen des Dienstes.
+function leseZeile(zeile, def) {
+  return {
+    gg: leseSeite(zeile, def.gg, def.typ),
+    g: leseSeite(zeile, def.g, def.typ),
+    vermerk: {
+      gg: def.vermerk ? vermerkVon(zeile[def.vermerk.gg]) : '',
+      g: def.vermerk ? vermerkVon(zeile[def.vermerk.g]) : '',
+    },
+    doppelt: {
+      gg: def.doppelt ? doppeltVon(zeile[def.doppelt.gg]) : false,
+      g: def.doppelt ? doppeltVon(zeile[def.doppelt.g]) : false,
+    },
+  };
+}
+
+// Trägt die Zeile überhaupt Ergebniswerte? Zeilen ohne Namen sind entweder FOLGEZEILEN einer
+// Position (beim `holz`-Layout steht je Bahn eine Zeile und der Name nur oben) oder
+// Zusatzzeilen — vor allem die Mannschaftssumme am Ende. Unterschieden werden sie hier am
+// Zahlenanteil, nicht am Namen: nach dem Namen zu filtern würde die Satzzeilen wegwerfen.
+const hatWerte = (p, typ) => ['gg', 'g'].some((s) => (typ === 'satz'
+  ? (p[s].saetze || []).some((x) => x != null)
+  : p[s].kegel != null || p[s].volle || p[s].abr));
+
+// Eine Position, die noch gar nicht angetreten ist, trägt zwei NAMEN und keine Werte. Sie muss
+// stehen bleiben: die Reihenfolge der Positionen IST die Team-Position (buildImportSpec), eine
+// übersprungene Zeile würde alle folgenden verschieben. Verlangt sind beide Namen — die
+// Mannschaftssumme trägt keinen, eine Vermerkzeile höchstens einen.
+const paarung = (p) => istName(p.gg.name) && istName(p.g.name);
+
+// Gehört diese Zeile noch zur laufenden Position — nach ihrer FORM?
+//
+// Das Doppel-Flag des Dienstes wird hier nicht geprüft: es ist die verlässlichere Angabe und
+// entscheidet deshalb schon in bildeBloecke, bevor überhaupt geraten werden muss. Bleiben drei
+// Formen:
+//
+//   halb     — genau eine Seite benannt, die andere Seite ganz leer: Fall 1 im Kopf (classic).
+//   namenlos — keine Seite benannt, aber Werte: Satz-je-Zeile beim `holz`-Layout.
+//   gleich   — derselbe Name wie im Blockkopf. NUR beim `summe`-Layout, wo mehrere Zeilen je
+//              Position die Regel sind; bei `satz` wäre es ein Fehlgriff — dort sitzt derselbe
+//              Spieler auch auf einer ZWEITEN, eigenen Position (Damen-Bundesliga: Sonnhalter
+//              teilt Position 3 und 4 mit zwei verschiedenen Leuten). Genau daran verschwand
+//              vorher eine Spielerin samt ihrem Holz.
+function gehoertDazu(p, block, def, saetze) {
+  if (!block || block.zeilen.length >= saetze) return false;
+  const nurEine = istName(p.gg.name) !== istName(p.g.name);
+  const leer = (s) => !istName(p[s].name) && !(p[s].saetze || []).some((x) => x != null);
+  if (nurEine && (leer('gg') || leer('g'))) return true;
+  if (!istName(p.gg.name) && !istName(p.g.name)) return true;
+  if (def.typ === 'summe') {
+    return ['gg', 'g'].some((s) => p[s].name && p[s].name === block.zeilen[0][s].name);
+  }
+  return false;
+}
+
+// Die Positionen eines Berichts. Rückgabe: [{ zeilen:[...], doppelt:boolean }].
+function bildeBloecke(zeilen, def, saetze) {
+  const bloecke = [];
+  // Der Umschalter des Dienst-Clients: die erste geflaggte Zeile ÖFFNET die Verbindung, die
+  // zweite schließt sie wieder (siehe Kopf). Je Seite eigenständig — geflaggt ist in der Praxis
+  // beides zugleich, aber verlassen muss man sich darauf nicht.
+  let offenGG = false;
+  let offenG = false;
+  zeilen.forEach((p) => {
+    const letzte = bloecke[bloecke.length - 1];
+    const offen = offenGG || offenG;
+    if (p.doppelt.gg) offenGG = !offenGG;
+    if (p.doppelt.g) offenG = !offenG;
+    if (letzte && offen) { letzte.zeilen.push(p); letzte.doppelt = true; return; }
+    if (gehoertDazu(p, letzte, def, saetze)) { letzte.zeilen.push(p); return; }
+    bloecke.push({ zeilen: [p], doppelt: false });
+  });
+  return bloecke;
+}
+
+// Eine Seite EINER Position zusammenlegen (nur `satz`-Layouts — beim `summe`-Layout ist eine
+// Folgezeile ein Satz, keine zweite Person, und das macht seiteSumme weiter unten).
+//
+// Die Bahnen der Beteiligten ergänzen sich lückenlos: wer die ersten zwei gespielt hat, hat die
+// letzten zwei nicht. Zusammengelegt wird deshalb POSITIONSTREU — Bahn k bleibt Bahn k, egal in
+// welcher Zeile ihr Wert stand. Beansprucht doch einmal eine zweite Zeile dieselbe Bahn, gewinnt
+// die erste und die Kollision wird gemeldet, statt stillschweigend überschrieben.
+//
+// Das Positionsholz: beim Doppel-Flag steht es schon in der Kopfzeile (der Dienst verbindet die
+// Zelle über beide Zeilen), sonst ist es die Summe der Zeilen. Beides am echten Bericht geprüft.
+function seiteSatz(block, s, kollisionen) {
+  const spalten = block.zeilen[0][s].saetze.length;
+  const werte = Array.from({ length: spalten }, () => null);
+  const beitraege = [];
+  let kegelKopf = null;
+  let kegelSumme = null;
+  block.zeilen.forEach((p, zi) => {
+    const seite = p[s];
+    if (zi === 0) kegelKopf = seite.kegel;
+    if (seite.kegel != null) kegelSumme = (kegelSumme || 0) + seite.kegel;
+    const bahnen = [];
+    (seite.saetze || []).forEach((w, bi) => {
+      if (!w || bi >= spalten) return;
+      if (werte[bi] == null) { werte[bi] = w; bahnen.push(bi); } else kollisionen.push(bi + 1);
+    });
+    // Ein Name ohne eigene Bahn zählt nur in der Kopfzeile — dort ist es die noch nicht
+    // angetretene Position. In einer Folgezeile ist es die leere Gegenseite einer
+    // Wechselzeile, und die ist keine Person dieser Position.
+    if (istName(seite.name) && (zi === 0 || bahnen.length)) {
+      beitraege.push({ name: seite.name, bahnen });
+    }
+  });
+  const namen = beitraege.map((b) => b.name);
+  const vermerke = [...new Set(block.zeilen.map((p) => p.vermerk[s]).filter(Boolean))];
+  return {
+    name: namen.join(' / '),
+    namen,
+    // `teiler` nur, wenn es wirklich mehrere sind — der Normalfall bleibt schlank.
+    teiler: namen.length > 1 ? beitraege : null,
+    vermerke,
+    // Gehört dieses Holz genau EINER Person? Fall 3 aus dem Kopf sagt nein, obwohl nur ein Name
+    // dasteht — daran hängt die Übernahme in die Konto-Statistik.
+    //
+    // Nur `a` (ausgewechselt) macht die Zeile uneindeutig: dort kam jemand für ihn, und dessen
+    // Bahnen stecken im selben Holz. Ein `b` (abgebrochen) dagegen bleibt eindeutig — wer
+    // abbricht, wird nicht ersetzt, sein Holz ist sein eigenes, nur eben kurz.
+    eindeutig: namen.length <= 1 && !vermerke.includes('a'),
+    kegel: block.doppelt ? kegelKopf : kegelSumme,
+    saetze: werte,
+  };
+}
+
+// GetSpielerInfo-Antwort -> POSITIONEN mit Ergebnissen je Seite.
+//
+// Eine Position, nicht eine Zeile: bei einem Wechsel stehen zwei Zeilen für eine Position, und
+// zusammengelegt werden sie hier (siehe Kopf, GETEILTE POSITIONEN). Die Reihenfolge der
+// Positionen IST die Team-Position — eine Zeile zu viel verschiebt alle folgenden Spieler.
+//
+// Rückgabe: { layout, typ, proSatz, paare:[{ gg, g }], warnungen, hinweise }
+//   gg/g = { name, namen, teiler, vermerke, eindeutig, kegel, saetze }
+//     name      — alle Beteiligten, mit „ / " verbunden (meist genau einer)
+//     namen     — dieselben einzeln, in Spielreihenfolge
+//     teiler    — [{ name, bahnen:[Index] }], nur bei MEHR als einem Beteiligten
+//     vermerke  — die Buchstaben aus [0]/[15], siehe Kopf
+//     eindeutig — gehört dieses Holz genau EINER Person? Daran hängt die Konto-Statistik.
+//     saetze    — [{holz}] je Bahn, LÜCKENTREU (null = nicht bespielt)   (Satz-Layout)
+//                 [{volle,abr,fehler,holz}] je Satz          (Summen-Layout, Satz je Zeile)
+//                 null, dazu gesamt:{volle,abr,fehler}       (nur Gesamtsummen)
+//   warnungen — der Bericht passt nicht zu sich selbst (Spaltenzuordnung prüfen)
+//   hinweise  — Wechsel/Abbruch; hinweisTexte() macht Sätze daraus
 export function parseSpielerInfo(rows, { saetze = 4 } = {}) {
   const alle = (Array.isArray(rows) ? rows : []).filter((r) => Array.isArray(r) && r.length >= 6);
   // GAR KEINE Zeilen ist etwas anderes als „Zeilen in unbekannter Form" und braucht eine eigene
@@ -279,77 +474,100 @@ export function parseSpielerInfo(rows, { saetze = 4 } = {}) {
   const def = LAYOUTS[layout];
   const typ = def.typ;
   const warnungen = [];
+  const hinweise = [];
 
-  // Zeilen ohne Namen sind entweder FOLGEZEILEN einer Paarung (bei manchen Partien steht je
-  // Bahn eine Zeile und der Name nur oben) oder Zusatzzeilen — vor allem die Mannschaftssumme
-  // am Ende. Unterschieden werden sie am Zahlenanteil: eine reine Bemerkungszeile trägt keine
-  // Ergebniswerte. Deshalb hier NICHT nach dem Namen filtern, das würde die Satzzeilen
-  // wegwerfen; die Summenzeile fällt stattdessen unten bei der Gruppierung heraus.
-  const hatWerte = (p) => ['gg', 'g'].some((s) => (typ === 'satz'
-    ? p[s].saetze.some((x) => x != null)
-    : p[s].kegel != null || p[s].volle || p[s].abr));
-  // Eine Paarung, die noch gar nicht angetreten ist, traegt zwei NAMEN und keine Werte. Sie muss
-  // stehen bleiben: die Reihenfolge der Paarungen IST die Team-Position (buildImportSpec), eine
-  // uebersprungene Zeile wuerde alle folgenden Spieler um eine Position verschieben. Verlangt
-  // sind beide Namen — die Mannschaftssumme traegt keinen, eine Zwischenzeile hoechstens einen.
-  const paarung = (p) => istName(p.gg.name) && istName(p.g.name);
-  const zeilen = alle
-    .map((z) => ({ gg: leseSeite(z, def.gg, typ), g: leseSeite(z, def.g, typ) }))
-    .filter((p) => hatWerte(p) || paarung(p));
+  // Zeilen, die KEINE Position sind, fallen hier heraus: die Mannschaftssumme (kein Name) und
+  // die Vermerkzeilen des Dienstes (ein Name, kein Ergebnis — Fall 3 im Kopf). Weggeworfen wird
+  // dabei nur die Summe; der Vermerk wird festgehalten, denn er ist die einzige Auskunft über
+  // einen Wechsel, den der Bericht sonst verschweigt.
+  const zeilen = [];
+  alle.map((z) => leseZeile(z, def)).forEach((p) => {
+    if (hatWerte(p, typ) || paarung(p)) { zeilen.push(p); return; }
+    ['gg', 'g'].forEach((s) => {
+      if (istName(p[s].name)) {
+        hinweise.push({ art: 'vermerk', seite: s, name: p[s].name, vermerk: p.vermerk[s] });
+      }
+    });
+  });
   if (!zeilen.length) throw new Error('Spielbericht enthält keine Spielerzeilen.');
 
-  // Gruppieren: eine neue Paarung beginnt mit einem neuen Namen, namenlose Zeilen hängen an
-  // der laufenden. Eine namenlose Zeile OHNE laufende Paarung (oder wenn die schon voll ist)
-  // wird verworfen — so verschwindet die Mannschaftssumme, ohne sie kennen zu müssen.
-  const gruppen = [];
-  zeilen.forEach((p) => {
-    const letzte = gruppen[gruppen.length - 1];
-    const hatName = istName(p.gg.name) || istName(p.g.name);
-    const gleich = letzte && hatName
-      && ((p.gg.name && p.gg.name === letzte.gg.name) || (p.g.name && p.g.name === letzte.g.name));
-    if (letzte && (!hatName || gleich) && letzte.zeilen.length < saetze) {
-      letzte.zeilen.push(p);
-      return;
-    }
-    if (!hatName) return;
-    gruppen.push({ gg: p.gg, g: p.g, zeilen: [p] });
-  });
-  if (!gruppen.length) throw new Error('Spielbericht enthält keine Spielerzeilen.');
+  const bloecke = bildeBloecke(zeilen, def, saetze);
+  if (!bloecke.length) throw new Error('Spielbericht enthält keine Spielerzeilen.');
 
-  // Erst JETZT die Gegenprobe, und nur auf den Zeilen, die wirklich zu einer Paarung gehören —
-  // sonst meldete die Mannschaftssumme jedes Mal einen Fehlalarm.
-  gruppen.forEach((gr, gi) => gr.zeilen.forEach((p, zi) => ['gg', 'g'].forEach((s) => {
-    if (!pruefeSeite(p[s], typ)) {
-      warnungen.push(`Paarung ${gi + 1}${gr.zeilen.length > 1 ? `, Zeile ${zi + 1}` : ''}`
-        + `${gr[s].name ? ` (${gr[s].name})` : ''}: Summe passt nicht zur Holzzahl des `
-        + 'Ergebnisdienstes — Spaltenzuordnung prüfen.');
-    }
-  })));
+  const proSatz = typ === 'summe' && bloecke.some((b) => b.zeilen.length > 1);
 
-  const proSatz = typ === 'summe' && gruppen.some((gr) => gr.zeilen.length > 1);
-
-  const paare = gruppen.map((gr) => {
-    const seite = (s) => {
-      const kopf = gr[s];
-      if (typ === 'satz') return { name: kopf.name, kegel: kopf.kegel, saetze: kopf.saetze };
-      if (proSatz) {
-        return {
-          name: kopf.name,
-          kegel: gr.zeilen.reduce((n, z) => n + (z[s].volle || 0) + (z[s].abr || 0), 0),
-          saetze: gr.zeilen.map((z) => ({
-            volle: z[s].volle, abr: z[s].abr, fehler: z[s].fehler,
-            holz: (z[s].volle || 0) + (z[s].abr || 0),
-          })),
-        };
-      }
-      // Nur Gesamtsummen: KEIN Satz-Detail. Bewusst nicht auf vier Sätze verteilt — das wäre
-      // erfunden. Der Aufrufer entscheidet, was er damit macht (import-sw-web.js lehnt ab).
+  // Beim `summe`-Layout ist eine Folgezeile ein SATZ, keine zweite Person — dort bleibt die
+  // alte Auswertung. Nur `satz`-Layouts legen geteilte Positionen zusammen (seiteSatz).
+  function seiteSumme(block, s) {
+    const kopf = block.zeilen[0][s];
+    if (proSatz) {
       return {
         name: kopf.name,
-        kegel: kopf.kegel,
-        saetze: null,
-        gesamt: { volle: kopf.volle, abr: kopf.abr, fehler: kopf.fehler },
+        namen: istName(kopf.name) ? [kopf.name] : [],
+        teiler: null,
+        vermerke: [],
+        eindeutig: true,
+        kegel: block.zeilen.reduce((n, z) => n + (z[s].volle || 0) + (z[s].abr || 0), 0),
+        saetze: block.zeilen.map((z) => ({
+          volle: z[s].volle, abr: z[s].abr, fehler: z[s].fehler,
+          holz: (z[s].volle || 0) + (z[s].abr || 0),
+        })),
       };
+    }
+    // Nur Gesamtsummen: KEIN Satz-Detail. Bewusst nicht auf vier Sätze verteilt — das wäre
+    // erfunden. Der Aufrufer entscheidet, was er damit macht (import-sw-web.js lehnt ab).
+    return {
+      name: kopf.name,
+      namen: istName(kopf.name) ? [kopf.name] : [],
+      teiler: null,
+      vermerke: [],
+      eindeutig: true,
+      kegel: kopf.kegel,
+      saetze: null,
+      gesamt: { volle: kopf.volle, abr: kopf.abr, fehler: kopf.fehler },
+    };
+  }
+
+  const paare = bloecke.map((block, bi) => {
+    const seite = (s) => {
+      const kollisionen = [];
+      const out = typ === 'satz' ? seiteSatz(block, s, kollisionen) : seiteSumme(block, s);
+      const pos = `Position ${bi + 1}`;
+      const wer = out.name ? ` (${out.name})` : '';
+      // Die Gegenprobe gegen die mitgelieferte Holzzahl.
+      //
+      // Bei `satz`-Layouts auf der ZUSAMMENGELEGTEN Position: zeilenweise geprüft meldete eine
+      // geteilte Position jedes Mal Fehlalarm, weil in der Kopfzeile die Summe beider Spieler
+      // steht und in den Bahnspalten nur die Hälfte davon.
+      //
+      // Beim `summe`-Layout dagegen weiter ZEILENWEISE: dort ist eine Folgezeile ein Satz, und
+      // jede Zeile trägt ihre eigene Volle/Abräum-Summenspalte. Auf dem Aggregat gäbe es die
+      // Felder gar nicht, die die Probe braucht.
+      if (typ === 'satz') {
+        if (!pruefeSeite(out, typ)) {
+          warnungen.push(`${pos}${wer}: Summe passt nicht zur Holzzahl des Ergebnisdienstes `
+            + '— Spaltenzuordnung prüfen.');
+        }
+      } else {
+        block.zeilen.forEach((p, zi) => {
+          if (pruefeSeite(p[s], typ)) return;
+          warnungen.push(`${pos}${block.zeilen.length > 1 ? `, Zeile ${zi + 1}` : ''}${wer}: `
+            + 'Summe passt nicht zur Holzzahl des Ergebnisdienstes — Spaltenzuordnung prüfen.');
+        });
+      }
+      if (kollisionen.length) {
+        warnungen.push(`${pos}${wer}: zwei Zeilen nennen ein Ergebnis für Bahn `
+          + `${[...new Set(kollisionen)].join(', ')} — die erste gilt.`);
+      }
+      if (out.teiler) {
+        hinweise.push({
+          art: 'geteilt', seite: s, position: bi + 1, name: out.name, teiler: out.teiler,
+        });
+      }
+      out.vermerke.forEach((v) => hinweise.push({
+        art: 'markiert', seite: s, position: bi + 1, name: out.name, vermerk: v,
+      }));
+      return out;
     };
     return { gg: seite('gg'), g: seite('g') };
   });
@@ -358,7 +576,43 @@ export function parseSpielerInfo(rows, { saetze = 4 } = {}) {
     warnungen.push('Der Ergebnisdienst liefert für diese Partie nur Gesamtsummen je Spieler, '
       + 'keine Satzergebnisse.');
   }
-  return { layout, typ, proSatz, paare, warnungen };
+  return { layout, typ, proSatz, paare, warnungen, hinweise };
+}
+
+// Die Hinweise aus parseSpielerInfo als lesbare Sätze — bewusst getrennt von `warnungen`:
+// ein Wechsel ist kein Fehler im Bericht, sondern ein Vorgang im Spiel, den der Nutzer kennen
+// muss. Die Namen der Mannschaften kommen von der Partie, damit „Gastgeber"/„Gast" nicht
+// geraten werden müssen.
+export function hinweisTexte(hinweise, { heim = 'Gastgeber', gast = 'Gast' } = {}) {
+  const team = (s) => (s === 'gg' ? heim : gast);
+  return (hinweise || []).map((h) => {
+    if (h.art === 'geteilt') {
+      const wer = h.teiler
+        .map((t) => `${t.name} (Bahn ${t.bahnen.map((b) => b + 1).join('+') || '—'})`)
+        .join(', ');
+      return `🔄 ${team(h.seite)}, Position ${h.position}: zwei Spieler geteilt — ${wer}. `
+        + 'Das Positionsholz stimmt exakt; in die eigene Konto-Statistik lässt sich eine '
+        + 'geteilte Position nicht übernehmen.';
+    }
+    if (h.art === 'markiert') {
+      const was = VERMERK_TEXT[h.vermerk] || `Vermerk „${h.vermerk}"`;
+      if (h.vermerk === 'a') {
+        return `🔄 ${team(h.seite)}, Position ${h.position}: ${h.name} ist dort als ${was} `
+          + 'vermerkt, der Bericht nennt aber nur EINEN Satz Ergebnisse. In diesem Holz steckt '
+          + 'dann auch das des Ersatzspielers — wer welche Bahn gespielt hat, sagt der '
+          + 'Ergebnisdienst nicht. Deshalb keine Übernahme in die Konto-Statistik.';
+      }
+      if (h.vermerk === 'b') {
+        return `🔄 ${team(h.seite)}, Position ${h.position}: ${h.name} hat das Spiel `
+          + 'abgebrochen. Die nicht bespielten Bahnen bleiben leer — das Holz der gespielten '
+          + 'stimmt exakt.';
+      }
+      return `🔄 ${team(h.seite)}, Position ${h.position}: ${h.name} — ${was}.`;
+    }
+    const was = VERMERK_TEXT[h.vermerk] || (h.vermerk ? `Vermerk „${h.vermerk}"` : 'ohne Ergebnis');
+    return `🔄 ${team(h.seite)}: ${h.name} steht als ${was} im Bericht, ohne eigenes Ergebnis. `
+      + 'Die dort gespielten Bahnen zählen beim Spieler, der angefangen hat.';
+  });
 }
 
 // --- Satz-Werte -> Satz-Block ------------------------------------------------
@@ -457,9 +711,25 @@ export function buildImportSpec(partie, bericht) {
       const s = paar[seite];
       if (!s || !s.name) return;
       const m = mannschaften[mi];
-      m.spieler.push({ teamPos, name: s.name, pass: null, extId: null, slot: i });
+      // `namen`/`teiler`/`eindeutig` reisen bis in die View mit: eine geteilte Position zeigt
+      // beide Namen, und nur eine EINDEUTIGE laesst sich als eigene Zeile ins Konto uebernehmen
+      // (siehe Kopf, GETEILTE POSITIONEN).
+      m.spieler.push({
+        teamPos,
+        name: s.name,
+        namen: s.namen && s.namen.length ? s.namen : [s.name],
+        teiler: s.teiler || null,
+        eindeutig: s.eindeutig !== false,
+        pass: null,
+        extId: null,
+        slot: i,
+      });
       ergebnisse[`${m.id}|${teamPos}`] = {
-        saetze: s.saetze, gesamt: s.gesamt || null, kegel: s.kegel,
+        saetze: s.saetze,
+        gesamt: s.gesamt || null,
+        kegel: s.kegel,
+        teiler: s.teiler || null,
+        eindeutig: s.eindeutig !== false,
       };
     });
   });
@@ -483,7 +753,31 @@ export function buildImportSpec(partie, bericht) {
     nurHolz: bericht.typ === 'satz',
     idSpiel: (partie && partie.idSpiel) || null,
     warnungen: [...bericht.warnungen],
+    // Wechsel und Abbrueche als lesbare Saetze, plus die Bemerkung der Partie — sie ist oft die
+    // einzige Stelle, an der steht, WANN gewechselt wurde („nach 60 Wurf").
+    hinweise: hinweisTexte(bericht.hinweise, {
+      heim: mannschaften[0].name, gast: mannschaften[1].name,
+    }),
+    bemerkung: txt(partie && partie.bemerkung),
+    // Laut Ergebnisdienst fertig gespielt. Das entscheidet, ob leer gebliebene Saetze als
+    // BEENDET gelten (buildImportWettkampf) — wer aufgibt oder ausgewechselt wird, hinterlaesst
+    // leere Saetze, und die duerfen den Wettkampf nicht fuer immer auf „laufend" halten.
+    gespielt: !!(partie && partie.gespielt),
   };
+}
+
+// Das Holz einer Position aus einem Spec-Eintrag (spec.ergebnisse[key]).
+//
+// Steht hier und nicht in der View, weil `saetze` LÜCKEN hat: eine nicht bespielte Bahn ist
+// `null` — bei einem Zwischenstand, bei einer Aufgabe, bei einem Abbruch und in jeder geteilten
+// Position. Die View hatte die Summe selbst gebildet und dabei die Lücke nicht bedacht; der
+// TypeError flog mitten im Aufbau von root.innerHTML, und die Ansicht blieb ohne jede Meldung
+// auf „Lade Spielbericht …" stehen. Eine Funktion, ein Test, kein zweiter Anlauf.
+export function positionsHolz(erg) {
+  if (!erg) return 0;
+  if (erg.saetze) return erg.saetze.reduce((n, x) => n + ((x && x.holz) || 0), 0);
+  const g = erg.gesamt;
+  return g ? (g.volle || 0) + (g.abr || 0) : 0;
 }
 
 // Stammt dieser Wettkampf aus dem Web-Import?
@@ -591,11 +885,21 @@ function uebersetzteErgebnisse(spec, ziele) {
 //   mannschaften — die Mannschaften des VORHANDENEN Wettkampfs ({id,name}). Pflicht beim
 //                  Nachimport: buildImportSpec vergibt bei jedem Abruf neue Mannschafts-IDs,
 //                  die Durchgaenge tragen aber die des ersten Imports (siehe teamKarte).
+//   abschliessen — die Partie ist laut Ergebnisdienst FERTIG: was dann leer geblieben ist,
+//                  bleibt es auch. Solche Saetze bekommen den `done`-Haken, damit der Status
+//                  abgeleitet 'beendet' wird (gameBaseStatus). Ohne das blieb jede Partie mit
+//                  Aufgabe, Abbruch oder Wechsel fuer immer 'laufend' — und beim Teilen gaebe
+//                  es dann keine Ergebnis-Snapshots (sync.linkGame prueft genau diesen Status).
+//                  Bei einer noch LAUFENDEN Partie darf das nicht passieren: dort sind die
+//                  leeren Saetze wirklich nur noch nicht gespielt.
 //
-// Rueckgabe: { gefuellt, geaendert:[games], nurSatzHolz }.
-export function trageErgebnisseEin(games, spec, { nurLeere = false, probe = false, mannschaften = null } = {}) {
+// Rueckgabe: { gefuellt, geaendert:[games], nurSatzHolz, abgeschlossen }.
+export function trageErgebnisseEin(games, spec, {
+  nurLeere = false, probe = false, mannschaften = null, abschliessen = false,
+} = {}) {
   let nurSatzHolz = false;
   let gefuellt = 0;
+  let abgeschlossen = 0;
   const geaendert = [];
   const ergebnisse = uebersetzteErgebnisse(spec, mannschaften);
   (games || []).forEach((g) => {
@@ -627,10 +931,22 @@ export function trageErgebnisseEin(games, spec, { nurLeere = false, probe = fals
         dieses += 1;
       }
     });
+    // Fertige Partie: die Luecken sind endgueltig. Sie zaehlen NICHT als `gefuellt` — dort steht
+    // kein Ergebnis, und „X Ergebnisse kommen dazu" darf nicht luegen. Das Spiel gilt trotzdem
+    // als geaendert, damit der Haken gespeichert und uebertragen wird.
+    let zu = 0;
+    if (abschliessen) {
+      bloecke.forEach((satzArr) => (satzArr || []).forEach((b) => {
+        if (!b || b.done) return;
+        zu += 1;
+        if (!probe) b.done = true;
+      }));
+    }
+    abgeschlossen += zu;
     gefuellt += dieses;
-    if (dieses) geaendert.push(g);
+    if (dieses || zu) geaendert.push(g);
   });
-  return { gefuellt, geaendert, nurSatzHolz };
+  return { gefuellt, geaendert, nurSatzHolz, abgeschlossen };
 }
 
 // --- Spec -> fertiger, gefuellter Wettkampf ----------------------------------
@@ -685,11 +1001,13 @@ export function buildImportWettkampf(spec, opt = {}) {
     };
   });
 
-  nurSatzHolz = trageErgebnisseEin(games, spec).nurSatzHolz;
+  nurSatzHolz = trageErgebnisseEin(games, spec, { abschliessen: !!spec.gespielt }).nurSatzHolz;
 
   // Der Status wird ABGELEITET, nicht gesetzt: bei einer laufenden Partie sind noch nicht alle
   // Saetze da, und dann ist der Wettkampf eben 'laufend' und kein fertiges Spiel. Genau dieselbe
-  // Ableitung benutzt der Rest der App (gameBaseStatus arbeitet auf den Bloecken).
+  // Ableitung benutzt der Rest der App (gameBaseStatus arbeitet auf den Bloecken). Dass eine
+  // FERTIGE Partie auch dann 'beendet' herauskommt, wenn jemand aufgegeben hat, besorgt der
+  // `done`-Haken aus `abschliessen` — nicht ein hier gesetzter Status.
   games.forEach((g) => { g.status = gameBaseStatus(g); });
   wettkampf.status = wettkampfBaseStatus(wettkampf, games);
   wettkampf.swWeb = { idSpiel: spec.idSpiel, nurSatzHolz };

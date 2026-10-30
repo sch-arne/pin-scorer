@@ -49,10 +49,13 @@
 import { esc } from '../util.js';
 import {
   parseSpielListe, parseSpielerInfo, buildImportSpec, buildImportWettkampf, trageErgebnisseEin,
+  positionsHolz,
 } from '../logic/sw-web-import.js';
 import { gameBaseStatus, wettkampfBaseStatus } from '../logic/wettkampf.js';
 import { sektionToBahnart, parseBahnen } from '../logic/roster-import.js';
-import { partiePasst, meineKeys, profilVollstaendig } from '../logic/profil-match.js';
+import {
+  partiePasst, meineKeys, uebernehmbareKeys, profilVollstaendig,
+} from '../logic/profil-match.js';
 import { PRESETS, ART_LABEL } from '../logic/sportkegeln-presets.js';
 import {
   saveGame, saveWettkampf, setActiveWettkampf, getWettkaempfe, getWettkampf, getWettkampfGames,
@@ -114,9 +117,11 @@ export function importSwWebView() {
     gemeldeteBahnen: [],   // Bahnen laut Ergebnisdienst (GetBahnanlage) — Vorschlag, nicht Gesetz
     ichKey: '',            // "<mannschaftId>|<teamPos>" — meine Zeile in der Aufstellung
     meineKeys: [],         // die Slots, die laut Profil ueberhaupt meine sein koennen
+    meineUebernehmbar: [], // davon die, deren Holz genau mir gehoert (nicht geteilt/vermerkt)
     inDb: false,           // eigenes Ergebnis ins Konto uebernehmen? (sonst rein lokal)
     nachimport: null,      // { id, name, offen, ichSlot, remote, geteilt } — schon importiert
     warnungen: [],
+    hinweise: [],          // Wechsel/Abbruch im Klartext (logic/sw-web-import.js)
   };
 
   // Jeder Relay-Aufruf muss denselben Verband treffen — eine Liga-ID aus dem einen Dienst
@@ -286,7 +291,8 @@ export function importSwWebView() {
   // Spielbericht der gewählten Partie holen und daraus das Import-Spec bauen.
   async function ladeBericht(partie) {
     state.partie = partie; state.spec = null; state.berichtLaden = true; state.fehler = '';
-    state.ichKey = ''; state.meineKeys = []; state.inDb = false; state.nachimport = null;
+    state.ichKey = ''; state.meineKeys = []; state.meineUebernehmbar = [];
+    state.inDb = false; state.nachimport = null; state.hinweise = [];
     render();
     try {
       const preset = sektionToBahnart(state.sektion) || 'schere';
@@ -304,13 +310,17 @@ export function importSwWebView() {
       spec.preset = preset;
       state.spec = spec;
       state.warnungen = spec.warnungen;
+      state.hinweise = spec.hinweise || [];
       // Wer ich in dieser Aufstellung bin, steht damit fest — die Handauswahl von frueher ist
       // nur noch Bestaetigung (im Paarkreuz koennen es mehrere Positionen sein).
       state.meineKeys = meineKeys(spec, state.profil);
-      if (state.meineKeys.length === 1) [state.ichKey] = state.meineKeys;
+      // Gefunden werden heisst nicht uebernehmen duerfen: eine geteilte Position traegt das Holz
+      // zweier Leute (logic/sw-web-import.js, GETEILTE POSITIONEN).
+      state.meineUebernehmbar = uebernehmbareKeys(spec, state.meineKeys);
+      if (state.meineUebernehmbar.length === 1) [state.ichKey] = state.meineUebernehmbar;
       // Uebernahme ins Konto ist der Normalfall — aber nur, wenn ueberhaupt eine eigene
-      // Zeile da ist. Ohne sie bleibt der Import zwangslaeufig lokal.
-      state.inDb = state.meineKeys.length > 0;
+      // Zeile da ist, die auch mir allein gehoert. Sonst bleibt der Import rein lokal.
+      state.inDb = state.meineUebernehmbar.length > 0;
       const dup = getWettkaempfe().find((w) => w.swWeb && w.swWeb.idSpiel === spec.idSpiel);
       state.nachimport = dup ? probeNachimport(dup, spec) : null;
       if (!state.nachimport) await ladeAnlage();
@@ -328,13 +338,18 @@ export function importSwWebView() {
   // wird dabei nichts (`probe`); das entscheidet erst der Knopf.
   function probeNachimport(w, spec) {
     const games = getWettkampfGames(w.id);
-    const { gefuellt } = trageErgebnisseEin(games, spec, {
-      nurLeere: true, probe: true, mannschaften: w.mannschaften,
+    const { gefuellt, abgeschlossen } = trageErgebnisseEin(games, spec, {
+      nurLeere: true, probe: true, mannschaften: w.mannschaften, abschliessen: !!spec.gespielt,
     });
     return {
       id: w.id,
       name: w.name || '—',
-      offen: gefuellt,
+      // Auch ein Wettkampf, zu dem KEIN Ergebnis mehr dazukommt, kann noch etwas brauchen: ist
+      // die Partie inzwischen beendet, bekommen die leer gebliebenen Saetze ihren Haken und der
+      // Wettkampf damit den Status 'beendet' (siehe trageErgebnisseEin, `abschliessen`).
+      offen: gefuellt + abgeschlossen,
+      ergebnisse: gefuellt,
+      abschluss: abgeschlossen,
       ichSlot: !!w.ichSlot,
       remote: games.some((g) => g.remoteId),
       geteilt: !!w.linked,
@@ -404,7 +419,8 @@ export function importSwWebView() {
     // Der deaktivierte Knopf ist nicht die einzige Verteidigungslinie: in die Datenbank geht
     // eine Zeile nur, wenn sie laut Profil auch wirklich meine ist. Ohne diesen Nachweis wird
     // trotzdem importiert — nur eben rein lokal.
-    const insKonto = !!(state.inDb && state.ichKey && state.meineKeys.includes(state.ichKey));
+    const insKonto = !!(state.inDb && state.ichKey
+      && state.meineUebernehmbar.includes(state.ichKey));
     state.phase = 'anlegen'; state.msg = 'Baue Wettkampf …'; render();
     try {
       const anlage = state.anlagen.find((a) => a.id === state.anlageId) || null;
@@ -420,7 +436,7 @@ export function importSwWebView() {
       });
       // Die eigene Zeile auch beim rein lokalen Import markieren: davon lebt die Statistik
       // auf diesem Geraet. In die DB gespiegelt wird ichSlot ohnehin nie.
-      if (state.ichKey && state.meineKeys.includes(state.ichKey)) {
+      if (state.ichKey && state.meineUebernehmbar.includes(state.ichKey)) {
         wettkampf.ichSlot = state.ichKey;
       }
 
@@ -485,8 +501,8 @@ export function importSwWebView() {
       const w = getWettkampf(nach.id);
       if (!w) throw new Error('Der Wettkampf ist nicht mehr da — bitte neu importieren.');
       const games = getWettkampfGames(w.id);
-      const { gefuellt, geaendert } = trageErgebnisseEin(games, spec, {
-        nurLeere: true, mannschaften: w.mannschaften,
+      const { gefuellt, geaendert, abgeschlossen } = trageErgebnisseEin(games, spec, {
+        nurLeere: true, mannschaften: w.mannschaften, abschliessen: !!spec.gespielt,
       });
       geaendert.forEach((g) => { g.status = gameBaseStatus(g); saveGame(g); });
       w.status = wettkampfBaseStatus(w, games);
@@ -522,6 +538,7 @@ export function importSwWebView() {
         }
       }
       state.msg = `${gefuellt} Satzergebnis${gefuellt === 1 ? '' : 'se'} ergänzt`
+        + (abgeschlossen ? ', die Partie ist jetzt als beendet eingetragen' : '')
         + (uebertragen
           ? ` — ${geteilt ? 'der Stand ist' : 'dein Ergebnis ist'} in ${uebertragen} `
             + `Durchgang${uebertragen > 1 ? 'en' : ''} auch `
@@ -684,14 +701,21 @@ export function importSwWebView() {
           ${m.spieler.map((p) => {
             const key = `${m.id}|${p.teamPos}`;
             const erg = spec.ergebnisse[key];
-            const holz = erg && erg.saetze
-              ? erg.saetze.reduce((n, x) => n + (x.holz || 0), 0) : 0;
+            // Nicht hier gerechnet: `saetze` hat Luecken (nicht bespielte Bahn = null), und
+            // genau daran ist diese Summe schon einmal zerbrochen. Siehe positionsHolz().
+            const holz = positionsHolz(erg);
             const meiner = s.meineKeys.includes(key);
+            const nehmbar = s.meineUebernehmbar.includes(key);
+            const teiler = p.teiler
+              ? p.teiler.map((t) => `${t.name}: Bahn ${t.bahnen.map((b) => b + 1).join('+')}`)
+                .join(' · ')
+              : '';
             return `<button type="button" class="resume-main" data-ich="${esc(key)}"
-                ${meiner ? '' : 'disabled'}
+                ${nehmbar ? '' : 'disabled'}
                 ${s.ichKey === key ? 'aria-current="true"' : ''}>
                 <span class="tile-label">${s.ichKey === key ? '★ ' : ''}${esc(p.name)}</span>
-                <span class="tile-desc">${holz} Holz</span>
+                <span class="tile-desc">${holz} Holz${teiler ? ` · ${esc(teiler)}` : ''}${
+                  meiner && !nehmbar ? ' · geteilt, nicht übernehmbar' : ''}</span>
               </button>`;
           }).join('')}
         </div>
@@ -728,11 +752,11 @@ export function importSwWebView() {
           die Ergebnisse wandern dann mit ihrer Bahn.</p>
       </section>
       <section class="field">
-        <label class="field-label">Deine Zeile${s.meineKeys.length > 1
+        <label class="field-label">Deine Zeile${s.meineUebernehmbar.length > 1
           ? ' <small class="field-note">· Pflicht</small>' : ''}</label>
         ${teams}
         <p class="field-hint">${meineZeileHinweis()}</p>
-        ${s.meineKeys.length ? `
+        ${s.meineUebernehmbar.length ? `
         <label class="field-check">
           <input type="checkbox" data-field="inDb" ${s.inDb ? 'checked' : ''} />
           <span>Ergebnis in meine Konto-Statistik übernehmen</span>
@@ -765,6 +789,7 @@ export function importSwWebView() {
           bzw. Platzhalter), bei einer noch laufenden mit, weil die Live-Anzeige sie
           braucht.</p>
       </section>
+      ${hinweiseSection()}
       ${warnungenSection()}`;
   }
 
@@ -775,6 +800,21 @@ export function importSwWebView() {
       : '';
   }
 
+  // Wechsel, Aufgabe, Abbruch — und die Bemerkung des Ergebnisdienstes dazu. Bewusst getrennt
+  // von den Warnungen: das ist kein Fehler im Bericht, sondern etwas, das im Spiel passiert ist
+  // und das die Zahlen erklaert. Die Bemerkung steht zuerst, weil nur sie sagt, WANN gewechselt
+  // wurde („nach 60 Wurf") — der Bericht selbst nennt das nirgends.
+  function hinweiseSection() {
+    const spec = state.spec;
+    const bem = spec && spec.bemerkung;
+    if (!bem && !state.hinweise.length) return '';
+    return `<section class="field">
+      <span class="field-label">Besonderheiten dieser Partie</span>
+      ${bem ? `<p class="field-hint">📝 Bemerkung des Ergebnisdienstes: ${esc(bem)}</p>` : ''}
+      ${state.hinweise.map((h) => `<p class="field-hint">${esc(h)}</p>`).join('')}
+    </section>`;
+  }
+
   // Die Partie liegt schon als Wettkampf vor — hier steht nur noch, was ein zweiter Import
   // beitragen wuerde.
   function nachimportSection() {
@@ -782,9 +822,15 @@ export function importSwWebView() {
     return `
       <section class="field">
         <p class="field-hint">${n.offen
-          ? `↻ Diese Partie ist schon importiert („${esc(n.name)}"). Der Ergebnisdienst hat
-             inzwischen ${n.offen} Satzergebnis${n.offen === 1 ? '' : 'se'} mehr — genau die
-             kommen dazu. Alles, was schon dasteht, bleibt unangetastet.`
+          ? `↻ Diese Partie ist schon importiert („${esc(n.name)}"). ${n.ergebnisse
+            ? `Der Ergebnisdienst hat inzwischen ${n.ergebnisse}
+               Satzergebnis${n.ergebnisse === 1 ? '' : 'se'} mehr — genau die kommen dazu.`
+            : 'Ergebnisse kommen keine mehr dazu.'}
+             ${n.abschluss
+               ? 'Die Partie ist dort jetzt beendet: die leer gebliebenen Sätze werden als '
+                 + 'abgeschlossen eingetragen, damit auch der Wettkampf als beendet gilt.'
+               : ''}
+             Alles, was schon dasteht, bleibt unangetastet.`
           : `✓ Diese Partie ist schon importiert („${esc(n.name)}") und dort vollständig —
              es gibt nichts zu ergänzen. Du kannst sie direkt öffnen.`}</p>
         ${n.offen && n.ichSlot && !n.remote
@@ -799,6 +845,7 @@ export function importSwWebView() {
             ? '<p class="field-hint">Deine Ergebniszeile wird dabei auch in der Datenbank '
               + 'nachgezogen — weiterhin ohne Namen.</p>' : '')}
       </section>
+      ${hinweiseSection()}
       ${warnungenSection()}`;
   }
 
@@ -814,7 +861,16 @@ export function importSwWebView() {
         Konto-Statistik. Bist du doch dabei und schreibt der Ergebnisdienst deinen Namen
         anders, passe ihn im <a class="anl-inline-link" href="#/spieler">Profil</a> an.`;
     }
-    if (s.meineKeys.length > 1 && !s.ichKey) {
+    // Gefunden, aber keine Zeile gehoert mir allein: das ist genau der Wechsel-Fall, und er
+    // braucht eine eigene Auskunft — sonst stuende hier „waehle deine Position" vor lauter
+    // ausgegrauten Knoepfen.
+    if (!s.meineUebernehmbar.length) {
+      return `„${esc(name)}" steht in dieser Aufstellung, aber nur auf einer geteilten Position:
+        das Holz dort gehört zwei Spielern (siehe „Besonderheiten dieser Partie"). Welcher Anteil
+        wem gehört, lässt sich als eigenes Spielergebnis nicht festhalten — der Wettkampf wird
+        deshalb vollständig importiert, bleibt aber auf diesem Gerät.`;
+    }
+    if (s.meineUebernehmbar.length > 1 && !s.ichKey) {
       return 'Du stehst mehrfach in der Aufstellung — wähle die Position dieses Durchgangs.';
     }
     return '★ Aus deinem Profil erkannt. Nur die Ergebnisse dieser Zeile können in deine '
@@ -873,7 +929,7 @@ export function importSwWebView() {
     // Ohne Uebernahme ins Konto braucht es keine eigene Zeile — nur mit ihr muss belegt
     // sein, WELCHE Zeile meine ist (im Paarkreuz waehlt der Nutzer sie).
     const nach = s.nachimport;
-    const zeileOk = !s.inDb || (s.ichKey && s.meineKeys.includes(s.ichKey));
+    const zeileOk = !s.inDb || (s.ichKey && s.meineUebernehmbar.includes(s.ichKey));
     const kannAnlegen = !!(s.spec && !nach && zeileOk && s.phase === 'auswahl'
       && !Object.values(s.spec.ergebnisse).some((e) => !e.saetze));
     const kannErgaenzen = !!(nach && nach.offen && s.phase === 'auswahl');

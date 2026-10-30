@@ -94,16 +94,32 @@ export function nameMatcht(aufstellungsName, profil) {
 // die Mannschaft gehört zu meinem Verein UND der Name ist meiner. Die Vereinsbedingung ist
 // dabei kein Beiwerk: ohne sie könnte ein zufällig gleichnamiger Gegner gewählt werden.
 // Im Paarkreuz tritt derselbe Spieler mehrfach an, deshalb sind mehrere Treffer möglich.
+//
+// Geprüft werden ALLE Namen des Slots (`namen`), nicht nur der angezeigte: eine geteilte
+// Position trägt zwei: den des Ausgewechselten und den des Eingewechselten. Wer eingewechselt
+// wurde, muss sich in seiner eigenen Aufstellung wiederfinden — ob er die Zeile dann auch in
+// seine Konto-Statistik übernehmen darf, ist eine ANDERE Frage, und die entscheidet
+// `eindeutig` aus dem Spec (siehe logic/sw-web-import.js, GETEILTE POSITIONEN).
 export function meineKeys(spec, profil) {
   if (!spec || !profil) return [];
   const out = [];
   (spec.mannschaften || []).forEach((m) => {
     if (!vereinMatcht(m.name, profil.verein)) return;
     (m.spieler || []).forEach((p) => {
-      if (nameMatcht(p.name, profil)) out.push(`${m.id}|${p.teamPos}`);
+      const namen = p.namen && p.namen.length ? p.namen : [p.name];
+      if (namen.some((n) => nameMatcht(n, profil))) out.push(`${m.id}|${p.teamPos}`);
     });
   });
   return out;
+}
+
+// Welche dieser Slots lassen sich in die Konto-Statistik übernehmen? Nur die, deren Holz genau
+// EINER Person gehört. Eine geteilte Position (zwei Spieler auf vier Bahnen) und eine, in deren
+// Holz laut Vermerk die Leistung eines Ersatzspielers steckt, scheiden aus: `spiel_ergebnis` ist
+// das Ergebnis EINES Spiels EINER Person, und fremde Bahnen haben darin nichts zu suchen.
+export function uebernehmbareKeys(spec, keys) {
+  const erg = (spec && spec.ergebnisse) || {};
+  return (keys || []).filter((k) => !erg[k] || erg[k].eindeutig !== false);
 }
 
 // Trägt das Profil alles, was der Abgleich braucht? Die fehlenden Felder werden benannt,

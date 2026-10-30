@@ -3,12 +3,14 @@ import assert from 'node:assert/strict';
 import {
   parseSpielListe, parseSpielerInfo, erkenneLayout, pruefeSeite, ergebnisBlock, buildImportSpec,
   istWebImport, buildImportWettkampf, teilsatzPlan, bloeckeNachBahn, trageErgebnisseEin, blockLeer,
-  spielerName,
+  spielerName, positionsHolz,
 } from '../js/logic/sw-web-import.js';
+import { meineKeys, uebernehmbareKeys } from '../js/logic/profil-match.js';
+import { computeWettkampfStats } from '../js/logic/wettkampf.js';
 import {
   ligenName, ligenWertung, verbandGueltig, VERBAENDE, VERBAND_STANDARD, VERBAND_FREI,
 } from '../js/backend/sw-web.js';
-import { MODUS_GESAMT } from '../js/logic/sportkegeln-presets.js';
+import { MODUS_GESAMT, PRESETS } from '../js/logic/sportkegeln-presets.js';
 import { istLizenzWettkampf } from '../js/logic/spieler-identitaet.js';
 import { computeGameStats } from '../js/logic/statistik.js';
 import { satzHolz, satzWurfCount } from '../js/logic/holz.js';
@@ -19,10 +21,23 @@ import { fileURLToPath } from 'node:url';
 
 // Eine ECHTE GetSpielerInfo-Antwort vom KVN-Ergebnisdienst (Referenzpartie 328202).
 // Ohne sie waere die Spaltenzuordnung geraten — mit ihr ist sie belegt.
-const SCHERE = JSON.parse(readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'sw-web-spielerinfo-schere.json'),
+const fixture = (name) => JSON.parse(readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), 'fixtures', `sw-web-spielerinfo-${name}.json`),
   'utf8',
 ));
+const SCHERE = fixture('schere');
+
+// Echte Partien mit Wechsel, Aufgabe und Abbruch. Jede steht fuer EINE der Darstellungen, die
+// der Ergebnisdienst dafuer benutzt (siehe Kopf von logic/sw-web-import.js, GETEILTE
+// POSITIONEN) — geraten wird hier nichts, alle sechs sind am echten Dienst abgerufen.
+const ECHT = {
+  classicWechsel: fixture('classic-wechsel'),
+  classicWechselHeim: fixture('classic-wechsel-heim'),
+  schereGeteilt: fixture('schere-geteilt'),
+  schereVermerk: fixture('schere-vermerk'),
+  schereAbbruch: fixture('schere-abbruch'),
+  schereAufgabe: fixture('schere-aufgabe'),
+};
 
 // Ein Programm mit EINEM Teilsatz je Satz. So sahen Web-Importe bis Version 1 aus, deren Bericht
 // nur das Satz-Holz nennt; heute nur noch Altbestand (MODUS_GESAMT) — und ein Ein-Teilsatz-Fall
@@ -785,4 +800,178 @@ test('blockLeer: was schon dasteht, wird nicht ueberschrieben', () => {
   assert.equal(blockLeer({ wuerfe: [{ holz: 9 }], overrides: [null], satzOverride: null }), false);
   // Leer, aber von Hand abgeschlossen: das ist eine Entscheidung, kein freier Platz.
   assert.equal(blockLeer({ wuerfe: [], overrides: [null], satzOverride: null, done: true }), false);
+});
+
+// --- Wechsel, Aufgabe, Abbruch (echte Partien) -------------------------------
+//
+// Der Ergebnisdienst stellt eine geteilte Position auf drei Weisen dar (siehe Kopf von
+// logic/sw-web-import.js). Alle drei muessen dasselbe ergeben: SECHS Positionen, das
+// Mannschaftsholz des Dienstes auf die Kegel genau, und Status 'beendet' — auch wenn Saetze
+// leer geblieben sind. Vorher wurde aus einer Wechselzeile eine siebte Position: der
+// Mannschaftsschnitt teilte durch 7, ein Platzhalter-Spieler kam hinzu, es gab einen
+// Durchgang zu viel, und in der Schere verschwand ein Spieler samt seinem Holz ganz.
+
+// Die Mannschaftssumme, die der Dienst selbst in der letzten Zeile mitschickt.
+function dienstSumme(fix) {
+  const letzte = fix.rows[fix.rows.length - 1];
+  return fix._params.id_sektion === 2
+    ? { gg: Number(letzte[7]), g: Number(letzte[8]) }
+    : { gg: Number(letzte[5]), g: Number(letzte[10]) };
+}
+
+// Fixture -> fertiger Wettkampf, genau wie die View es tut.
+function importiere(fix) {
+  const preset = fix._params.id_sektion === 2 ? 'schere' : 'classic';
+  const partie = parseSpielListe([fix.spiel])[0];
+  const bericht = parseSpielerInfo(fix.rows, { saetze: PRESETS[preset].saetze });
+  const spec = buildImportSpec(partie, bericht);
+  spec.preset = preset;
+  return { partie, bericht, spec, ...buildImportWettkampf(spec, { playedLanes: [1, 2, 3, 4] }) };
+}
+
+const ALLE_ECHT = [
+  ['classic, Wechsel beim Gast', ECHT.classicWechsel],
+  ['classic, Wechsel beim Gastgeber', ECHT.classicWechselHeim],
+  ['schere, geteilte Positionen per Doppel-Flag', ECHT.schereGeteilt],
+  ['schere, Wechsel nur als Vermerk', ECHT.schereVermerk],
+  ['schere, Abbruch nach einem Wurf', ECHT.schereAbbruch],
+  ['schere, Aufgabe wegen Verletzung', ECHT.schereAufgabe],
+];
+
+for (const [was, fix] of ALLE_ECHT) {
+  test(`echte Partie (${was}): sechs Positionen, Holz exakt, Status beendet`, () => {
+    const { bericht, spec, wettkampf, games } = importiere(fix);
+    assert.equal(bericht.paare.length, 6, 'der Bericht hat sechs Positionen');
+    assert.equal(spec.spielerJeMannschaft, 6);
+    assert.deepEqual(bericht.warnungen, [], 'kein Fehlalarm der Kegelprobe');
+
+    const { einzel, mannschaften } = computeWettkampfStats(wettkampf, games);
+    const soll = dienstSumme(fix);
+    const heim = mannschaften.find((m) => m.name === spec.mannschaften[0].name);
+    const gast = mannschaften.find((m) => m.name === spec.mannschaften[1].name);
+    assert.equal(heim.gesamt, soll.gg, 'Mannschaftsholz Gastgeber');
+    assert.equal(gast.gesamt, soll.g, 'Mannschaftsholz Gast');
+    assert.equal(heim.spieler, 6);
+    assert.equal(gast.spieler, 6);
+
+    // Eine fertige Partie ist fertig, auch wenn jemand aufgibt: die leer gebliebenen Saetze
+    // bekommen den `done`-Haken. Ohne ihn blieb der Wettkampf fuer immer 'laufend' — und beim
+    // Teilen schrieb sync.linkGame dann keine Ergebnis-Snapshots.
+    assert.equal(wettkampf.status, 'beendet');
+    assert.ok(games.every((g) => g.status === 'beendet'));
+    assert.ok(games.every((g) => g.erfassung.bloecke.every((a) => a.every((b) => b.done))));
+
+    // Kein Platzhalter mehr: der entstand, wenn eine Wechselzeile eine eigene Position wurde
+    // und die Gegenmannschaft dort niemanden hatte (buildDurchgangGame nimmt dann den
+    // Mannschaftsnamen plus Positionsnummer).
+    const platzhalter = einzel.filter((e) => / \d+$/.test(e.name));
+    assert.deepEqual(platzhalter.map((e) => e.name), []);
+  });
+}
+
+test('classic: die Wechselzeile wird zur zweiten Person DERSELBEN Position', () => {
+  const { bericht, spec } = importiere(ECHT.classicWechsel);
+  const pos = bericht.paare[2].g;                    // Stacke -> Meske, "nach 61 Wurf"
+  assert.deepEqual(pos.namen, ['Sandro Stacke', 'Hannes Meske']);
+  assert.deepEqual(pos.teiler.map((t) => t.bahnen), [[0, 1], [2, 3]], 'die Bahnen ergaenzen sich');
+  assert.deepEqual(pos.saetze.map((x) => x && x.holz), [138, 133, 167, 155]);
+  assert.equal(pos.kegel, 271 + 322, 'das Positionsholz ist die Summe beider Zeilen');
+  assert.equal(pos.eindeutig, false, 'geteilt -> nicht in die Konto-Statistik');
+  assert.equal(spec.bemerkung, 'H. Meske für S. Stacke nach 61 Wurf');
+});
+
+test('classic: der Wechsel geht genauso beim Gastgeber und mit 3+1 Bahnen', () => {
+  const { bericht } = importiere(ECHT.classicWechselHeim);
+  const pos = bericht.paare[1].gg;                   // Reiter -> Thuerer, "nach 80 Wurf"
+  assert.deepEqual(pos.namen, ['Michael Reiter', 'Steve Thürer']);
+  assert.deepEqual(pos.teiler.map((t) => t.bahnen), [[0, 1, 2], [3]]);
+  assert.equal(pos.kegel, 418 + 155);
+  // Die Gegenseite der Wechselzeile ist leer und darf KEINE Person dieser Position werden.
+  assert.deepEqual(bericht.paare[1].g.namen, ['Wolfgang Bollack']);
+  assert.equal(bericht.paare[1].g.eindeutig, true);
+});
+
+test('schere: das Doppel-Flag [16]/[17] legt zwei Zeilen zu einer Position zusammen', () => {
+  const { bericht } = importiere(ECHT.schereGeteilt);
+  // Die Holz-Zelle der KOPFZEILE ist beim Doppel-Flag schon die Summe beider Zeilen — nicht
+  // die Summe der Zeilen-Kegel. Genau das hatte die Kegelprobe vorher als Fehler gemeldet.
+  const p3 = bericht.paare[2];
+  assert.deepEqual(p3.gg.namen, ['Katrin Schröder', 'Tanja Sonnhalter']);
+  assert.equal(p3.gg.kegel, 770);
+  assert.deepEqual(p3.gg.saetze.map((x) => x && x.holz), [205, 200, 180, 185]);
+  assert.deepEqual(p3.g.namen, ['Jana Lammert', 'Christina Rähse']);
+  assert.equal(p3.g.kegel, 790);
+  // Derselbe Name auf einer ZWEITEN, eigenen Position: die darf nicht mit der ersten
+  // verschmelzen. Vorher tat sie es — und Paula Kurzius verschwand samt 334 Holz.
+  const p4 = bericht.paare[3];
+  assert.deepEqual(p4.gg.namen, ['Tanja Sonnhalter', 'Tanja Plewa']);
+  assert.deepEqual(p4.g.namen, ['Paula Kurzius', 'Nora Rüsenberg']);
+  assert.deepEqual(bericht.paare[4].gg.namen, ['Katrin Schröder']);
+  assert.deepEqual(bericht.paare[5].gg.namen, ['Tanja Plewa']);
+});
+
+test('schere: eine ergebnislose Vermerkzeile verschiebt keine Position', () => {
+  const { bericht, spec } = importiere(ECHT.schereVermerk);
+  // Christmann steht am ENDE des Berichts, ohne Ergebnis — nicht bei der Position, zu der er
+  // gehoert. Eine Zuordnung gibt der Bericht nicht her, also wird keine erfunden.
+  assert.deepEqual(bericht.paare[1].gg.namen, ['Sascha Klein']);
+  assert.equal(bericht.paare[1].gg.eindeutig, false, '"a" -> in dem Holz steckt fremde Leistung');
+  assert.deepEqual(bericht.paare[1].gg.vermerke, ['a']);
+  const vermerk = bericht.hinweise.find((h) => h.art === 'vermerk');
+  assert.equal(vermerk.name, 'Patrik Christmann');
+  assert.equal(vermerk.vermerk, 'e');
+  assert.ok(spec.hinweise.some((t) => /Patrik Christmann/.test(t) && /eingewechselt/.test(t)));
+});
+
+test('schere: ein Abbruch bleibt eindeutig — ersetzt wurde niemand', () => {
+  const { bericht, spec } = importiere(ECHT.schereAbbruch);
+  const pos = bericht.paare[4].g;                    // Huebgen, "Abbruch nach 1 Wurf"
+  assert.deepEqual(pos.namen, ['Felix Hübgen']);
+  assert.deepEqual(pos.vermerke, ['b']);
+  assert.deepEqual(pos.saetze.map((x) => x && x.holz), [8, null, null, null]);
+  assert.equal(pos.eindeutig, true, 'sein Holz ist sein eigenes, nur eben kurz');
+  assert.ok(spec.hinweise.some((t) => /abgebrochen/.test(t)));
+});
+
+test('positionsHolz zaehlt ueber Luecken hinweg (sonst: TypeError in der Ansicht)', () => {
+  const { spec } = importiere(ECHT.schereAufgabe);
+  const gast = spec.mannschaften[1];
+  const kachel = gast.spieler.find((p) => p.name === 'Markus Kachel');
+  const erg = spec.ergebnisse[`${gast.id}|${kachel.teamPos}`];
+  assert.deepEqual(erg.saetze.map((x) => x && x.holz), [null, null, 195, null]);
+  assert.equal(positionsHolz(erg), 195);
+  assert.equal(positionsHolz(null), 0);
+  assert.equal(positionsHolz({ saetze: null, gesamt: { volle: 400, abr: 180 } }), 580);
+});
+
+test('eine geteilte Position findet mich, laesst sich aber nicht uebernehmen', () => {
+  const { spec } = importiere(ECHT.classicWechsel);
+  // Der Eingewechselte muss sich in der Aufstellung wiederfinden — sonst hiesse es "du stehst
+  // nicht in dieser Aufstellung", obwohl er gespielt hat.
+  const profil = { vorname: 'Hannes', nachname: 'Meske', verein: 'Geiseltal Mücheln' };
+  const keys = meineKeys(spec, profil);
+  assert.equal(keys.length, 1);
+  assert.deepEqual(uebernehmbareKeys(spec, keys), [], 'fremde Bahnen gehen nicht ins Konto');
+  // Wer eine eigene, ungeteilte Position hat, darf die sehr wohl uebernehmen.
+  const eigen = importiere(ECHT.schereGeteilt);
+  const plewa = { vorname: 'Tanja', nachname: 'Plewa', verein: 'DSC Wanne-Eickel' };
+  const k2 = meineKeys(eigen.spec, plewa);
+  assert.equal(k2.length, 2, 'geteilte Position 4 und eigene Position 6');
+  assert.equal(uebernehmbareKeys(eigen.spec, k2).length, 1);
+});
+
+test('eine LAUFENDE Partie wird nicht vorzeitig abgeschlossen', () => {
+  // Dieselben Zeilen, aber der Dienst sagt "wird gespielt": dann sind die leeren Saetze
+  // wirklich nur noch nicht gespielt, und der Haken darf nicht gesetzt werden.
+  const fix = ECHT.schereAufgabe;
+  const laufend = fix.spiel.slice();
+  laufend[9] = 'wird gespielt';
+  const partie = parseSpielListe([laufend])[0];
+  assert.equal(partie.gespielt, false);
+  const bericht = parseSpielerInfo(fix.rows, { saetze: 4 });
+  const spec = buildImportSpec(partie, bericht);
+  spec.preset = 'schere';
+  const { wettkampf, games } = buildImportWettkampf(spec, { playedLanes: [1, 2, 3, 4] });
+  assert.equal(wettkampf.status, 'laufend');
+  assert.ok(games.some((g) => g.erfassung.bloecke.some((a) => a.some((b) => !b.done))));
 });
