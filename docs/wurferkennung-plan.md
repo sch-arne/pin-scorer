@@ -22,14 +22,28 @@ Stand: 11.11.2026 · Status: Erkenner angebunden, Zuordnungslogik gebaut, Oberfl
 > sind damit gegenstandslos. Anforderung 1 (Wurf-Trigger auch bei 0 Holz) ist erfüllt —
 > gemessen, 0-Holz-Würfe stehen in den Daten.
 >
-> **3. Phase 1 ist gebaut:** [`js/logic/erkennung-zuordnung.js`](../js/logic/erkennung-zuordnung.js)
-> mit 25 Tests, darunter ein Durchlauf gegen eine echte Aufzeichnung (65 Würfe,
-> 08.09.2026): 60 sauber zuordenbar, 5 angemahnt, und jeder Abräum-Wurf, der die Kette
-> bricht, ist auch angemahnt worden.
+> **3. Phasen 1 und 2 sind gebaut** — alles, was ohne Oberfläche geht:
 >
-> Offen: `erkennung-strom.js` (Entdopplung, Lücken, Puffer je Bahn), der
-> `addWurfAn`-Umbau in der Erfassung und die Oberfläche (Abschnitt 3, Phase 3) samt
-> Betriebsmodus — bewusst zurückgestellt.
+> | Stück | Datei | Tests |
+> |---|---|---|
+> | Zuordnung eines Wurfs | [`js/logic/erkennung-zuordnung.js`](../js/logic/erkennung-zuordnung.js) | 25 |
+> | Reihenfolge, Entdopplung, Puffer je Bahn, Betriebsmodus | [`js/logic/erkennung-strom.js`](../js/logic/erkennung-strom.js) | 19 |
+> | Wurf an ein explizites Ziel schreiben (`addWurfAn`) | `js/views/spiel-laufend.js` | E2E |
+>
+> Darunter ein Durchlauf gegen eine echte Aufzeichnung (65 Würfe, 08.09.2026): 60 sauber
+> zuordenbar, 5 angemahnt, und jeder Abräum-Wurf, der die Kette bricht, ist auch angemahnt
+> worden.
+>
+> Beim Bauen des Stroms kam heraus, was Abschnitt 4 nicht bedacht hatte: **Der Puffer muss
+> JE BAHN sperren.** Wartet ein Wurf, muss alles dahinter auf derselben Bahn ebenfalls
+> warten — sonst nimmt der spätere Wurf den Platz des früheren, und aus 9-8-4 wird 9-4-8.
+> Ebenso darf es nur EINEN offenen Vorschlag je Platz geben; weil der erste Wurf eines
+> leeren Satzes immer nur vorgeschlagen wird (Einspielwürfe), stapelten sich sonst am
+> Satzanfang beliebig viele Vorschläge für denselben Wurf.
+>
+> Offen: der Transport (`js/backend/erkennung.js` — Realtime oder Polling auf
+> `erkannter_wurf`) und die Oberfläche (Abschnitt 3, Phase 3) samt Umschalter für den
+> Betriebsmodus. Letztere bewusst zurückgestellt.
 
 Ausgangslage: Eine externe Erkennung (Kamera/Sensorik an der Bahn) liefert **nur erkannte
 Wurfbilder plus die Bahn**. Sie kennt weder Spieler noch Satz, Teilsatz oder Teilsatzmodus.

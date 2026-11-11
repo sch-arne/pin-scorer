@@ -41,6 +41,7 @@ const SHELL = [
   './js/logic/wettkampf.js',
   './js/logic/wettkampf-build.js',
   './js/logic/wettkampf-wertung.js',
+  './js/logic/erkennung-strom.js',
   './js/logic/erkennung-zuordnung.js',
   './js/logic/ergebnis-grafik.js',
   './js/logic/grafik-zeichnen.js',
