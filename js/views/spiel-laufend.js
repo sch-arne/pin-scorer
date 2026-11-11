@@ -34,7 +34,7 @@ import {
   abraeumScan, abraeumStateBefore, volleKranz,
 } from '../logic/abraeumen.js';
 import { teilsatzStats, satzHolz, satzStatus, satzWurfCount, satzOverrideAktiv } from '../logic/holz.js';
-import { computeBahnState as computeBahnStatePure } from '../logic/bahnwechsel.js';
+import { computeBahnState as computeBahnStatePure, laneOf as laneOfPure } from '../logic/bahnwechsel.js';
 
 const MODUS_LABEL = { volle: 'Volle', abraeumen: 'Abräumen', 'kranz-abraeumen': 'Kranz-Abräumen', gesamt: 'Satz gesamt' };
 // Kurzform der Teilsatz-Beschreibung für die Wurfzeile (gleich lang -> gleiche Breite).
@@ -637,7 +637,7 @@ export function spielLaufendView() {
   }
   function block(sp, st) { return state.bloecke[sp][st]; }
   function current() { return block(state.aktiverSpieler, state.aktiverSatz); }
-  function laneOf(sp, st) { return c.bahnplan?.[sp]?.[st] ?? (c.ersteBahn + st); }
+  function laneOf(sp, st) { return laneOfPure(c, sp, st); }
   // Reale Bahn (aus der gewählten Anlage) zu einer Bahnnummer — { id, bahnart } oder null.
   function bahnInfo(nummer) { return c.bahnZuordnung?.[nummer] || null; }
   const ART_LABEL = { classic: 'Classic', bohle: 'Bohle', schere: 'Schere' };
