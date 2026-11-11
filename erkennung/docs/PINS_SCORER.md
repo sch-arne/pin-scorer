@@ -62,6 +62,19 @@ Dashboard → **Authentication → Users → Add user**: E-Mail und Passwort, *A
 Confirm* an. Das ist ein Zugang für ein **Gerät**, kein Mensch — also eine
 eigene Adresse (z. B. `erkennung-bahn@…`), nicht die eigene.
 
+> **Wer den Benutzer per SQL anlegt, braucht zwei Dinge mehr** (gemessen am 11.11.2026;
+> die Anmeldung scheiterte sonst mit `500 Database error querying schema` — einer Meldung,
+> die auf alles Mögliche hindeutet, nur nicht darauf):
+>
+> 1. eine Zeile in `auth.identities` mit `provider = 'email'` und
+>    `provider_id = <user id>`; ohne sie findet die Anmeldung den Benutzer nicht;
+> 2. **leere Zeichenketten statt `NULL`** in `confirmation_token`, `recovery_token`,
+>    `email_change_token_new` und `email_change`. GoTrue liest sie in Go-Zeichenketten,
+>    und `NULL` passt dort nicht hinein. Welche Spalten es genau sind, sagt der Vergleich
+>    mit einem Benutzer, der über die App entstanden ist.
+>
+> Für Prod ist der Weg über das Dashboard deshalb der ruhigere.
+
 Was dieser Zugang darf, steht in `supabase/policies.sql`: Würfe für seine eigene
 `erkenner_id` einfügen. Nicht lesen, nicht ändern, nicht löschen, kein Blick in
 Spiele, Profile oder Namen. Der schlimmste Fall eines gestohlenen Zugangs ist
@@ -148,6 +161,17 @@ zurück. Stand 11.11.2026: 24 von 24 Prüfungen grün. Darunter:
 * Das Gerät von Spiel B sieht nur die Würfe seiner Bahnen, nicht die von Spiel A auf
   derselben Anlage — und kann einen fremden Wurf auch nicht auf sein Spiel umschreiben.
 * Nach Spielende verschwinden die unzugeordneten Würfe; der zugeordnete bleibt als Beleg.
+
+### Der Durchstich (Test-DB, 11.11.2026)
+
+Beide Hälften sind auch zusammen geprüft, nicht nur einzeln: Der Erkenner hat sich mit
+der `.env` angemeldet und drei Würfe per HTTP eingefügt (201), das erfassende Konto sah
+genau diese Zeilen, `pins_erkenner_bahn` übersetzte die Bahn richtig, und das Zuordnen
+griff. Danach wurde alles wieder entfernt — Probewürfe und Testspiel.
+
+Dass ein Konto **ohne** Anlagenbesitz nur die Bahnen seines eigenen Spiels sieht, steckt
+im RLS-Durchlauf oben; der Anlagen-Besitzer sieht dagegen alle Bahnen seiner Anlage, und
+genau so ist es gedacht.
 
 **Eine Falle, die dabei aufgefallen ist:** Ein `insert … RETURNING` scheitert, weil
 RETURNING zusätzlich das Leserecht auf die neue Zeile verlangt. Postgres meldet dann
