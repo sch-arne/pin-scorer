@@ -1,0 +1,1754 @@
+{
+  "quelle": "Kegel_CV",
+  "lauf": "lauf_2026-09-09_17-36-26",
+  "anlage": "Heimhalle",
+  "erzeugt": "2026-09-09T18:26:58",
+  "hinweis": "bildVor und bildNach sind die STEHENDEN Kegel. Kegel 1 ist der vorderste, 9 der hinterste, 5 der Koenig -- identisch zu KEGEL_LAYOUT in pin-scorer.",
+  "ereignisse": [
+    {
+      "eventId": "780e3b6e-0083-5a1a-a02e-748cfdb3711c",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 1,
+      "ts": "2026-09-08T20:12:33.400",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "84a41f17-eff2-5b14-ab97-53e7a89a55b9",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 2,
+      "ts": "2026-09-08T20:12:37.000",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 0.8
+    },
+    {
+      "eventId": "da5bd81f-b0db-52e4-b523-8d922e7c8ab4",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 3,
+      "ts": "2026-09-08T20:13:00.130",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        7
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "7fc26fcf-1e2a-5dad-b589-3eca0c540b52",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 4,
+      "ts": "2026-09-08T20:13:21.120",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        2,
+        4,
+        7
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "8dca4d3e-a898-5679-9dec-0738f76d6b4b",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 5,
+      "ts": "2026-09-08T20:13:23.320",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        6
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "209a5a62-163e-56b2-9b6e-ccf4bdbca1d2",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 6,
+      "ts": "2026-09-08T20:13:46.120",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "927ed2b6-a55e-5f00-9a3e-519fbaa12a51",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 7,
+      "ts": "2026-09-08T20:13:54.520",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "baa28c37-f280-54a9-8a6d-1a72a3630ebf",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 8,
+      "ts": "2026-09-08T20:14:03.990",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        7
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "9e5ed0c0-de78-5e39-aa45-9a184b76f2d7",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 9,
+      "ts": "2026-09-08T20:14:13.320",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "6efcfc83-3e2c-5499-bf41-0087a795dee8",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 10,
+      "ts": "2026-09-08T20:14:23.320",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "d2738ac7-258f-5c82-9baa-e53958e3811d",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 11,
+      "ts": "2026-09-08T20:14:29.850",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "b80384a6-6602-581f-ad85-0db7c7e666e6",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 12,
+      "ts": "2026-09-08T20:14:41.580",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        7
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "c9c25402-ebf3-5b61-92f5-159f03678ec6",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 13,
+      "ts": "2026-09-08T20:14:47.380",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        3,
+        5,
+        6,
+        8
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "44eef873-69ba-502d-a895-379470e287a0",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 14,
+      "ts": "2026-09-08T20:15:08.840",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "7314ade8-da83-59f5-9937-1644a7d8d37f",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 15,
+      "ts": "2026-09-08T20:15:17.110",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        7
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "6fcba1e5-3bfb-5776-9494-e65d55899c85",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 16,
+      "ts": "2026-09-08T20:15:25.570",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "4a42ea71-6410-5b56-8a75-26924a7b24c2",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 17,
+      "ts": "2026-09-08T20:15:34.770",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "03b07fed-0bf9-5ef7-9788-7946c33c5a93",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 18,
+      "ts": "2026-09-08T20:15:44.370",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "873b5b89-46dd-521a-bc12-951ca7d0b94e",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 19,
+      "ts": "2026-09-08T20:15:51.900",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "d394c1b1-05ed-5dab-be77-81f2a059ddd8",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 20,
+      "ts": "2026-09-08T20:16:00.500",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        3,
+        5,
+        6,
+        8
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "562b8e41-d808-571c-9c77-565b990b78ef",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 21,
+      "ts": "2026-09-08T20:16:07.300",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "484310a8-a043-57b1-a221-1d6e1c5b7a72",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 22,
+      "ts": "2026-09-08T20:16:19.500",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        6,
+        8
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "4f09b7ad-2ab2-5d93-a2b3-e95a14b95fed",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 23,
+      "ts": "2026-09-08T20:16:25.170",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        2,
+        4,
+        5,
+        7
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "8e91a652-36d7-5429-b679-b44869c94d60",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 24,
+      "ts": "2026-09-08T20:16:38.900",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        8
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "7cd5313d-f393-5eca-83c8-72746e26fac8",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 25,
+      "ts": "2026-09-08T20:16:42.100",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        6
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "c6d32d83-68ec-5717-9aa9-2ac76b2dafb9",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 26,
+      "ts": "2026-09-08T20:16:58.490",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "65dc6472-f6ad-5fd5-b992-bbc9f2963603",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 27,
+      "ts": "2026-09-08T20:17:17.620",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "e1fa6d7d-8315-5390-91da-79f923b20f1a",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 28,
+      "ts": "2026-09-08T20:17:26.560",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        8
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "1594e26e-861a-52ee-9109-7af4842fdd6b",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 29,
+      "ts": "2026-09-08T20:17:33.560",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        3,
+        6
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "3cd75815-bd83-54e9-af61-688ffc6fa555",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 30,
+      "ts": "2026-09-08T20:17:51.090",
+      "art": "wurf",
+      "bildVor": [
+        3,
+        6
+      ],
+      "bildNach": [
+        6
+      ],
+      "konfidenz": 1.0,
+      "hinweis": "Kegel [1, 2, 4, 7, 9] galten als bereits gefallen -- unser Bild und die Messung widersprechen sich hier."
+    },
+    {
+      "eventId": "538753f3-9050-531d-8af6-44fb09b1cbb5",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 31,
+      "ts": "2026-09-08T20:18:11.950",
+      "art": "wurf",
+      "bildVor": [
+        6
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0,
+      "hinweis": "Kegel [1, 2, 3, 4, 7, 9] galten als bereits gefallen -- unser Bild und die Messung widersprechen sich hier."
+    },
+    {
+      "eventId": "da7d532e-3e60-5766-a9cc-946db2882983",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 32,
+      "ts": "2026-09-08T20:18:25.680",
+      "art": "wurf",
+      "bildVor": [
+        8
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0,
+      "hinweis": "Kegel [1, 2, 3, 4, 5, 6, 7, 9] galten als bereits gefallen -- unser Bild und die Messung widersprechen sich hier."
+    },
+    {
+      "eventId": "ab898680-4408-5abf-a0aa-639cff096824",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 33,
+      "ts": "2026-09-08T20:18:27.880",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "1de493b5-924e-5837-82f7-9cb040bdc101",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 34,
+      "ts": "2026-09-08T20:18:27.880",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        6,
+        8
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "4d2e6f52-9362-5686-b53a-7b757166f010",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 35,
+      "ts": "2026-09-08T20:18:45.680",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "002f6122-66a2-5575-a601-51b1e3ad1424",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 36,
+      "ts": "2026-09-08T20:18:45.680",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "ed56367b-c52a-5496-afcc-963b60afb1f9",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 37,
+      "ts": "2026-09-08T20:18:52.810",
+      "art": "wurf",
+      "bildVor": [
+        5,
+        6,
+        8
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0,
+      "hinweis": "Kegel [1, 2, 3, 4, 7, 9] galten als bereits gefallen -- unser Bild und die Messung widersprechen sich hier."
+    },
+    {
+      "eventId": "4ec2583b-b71c-5287-9d65-fb72352c1fcd",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 38,
+      "ts": "2026-09-08T20:19:08.010",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "f475859b-5fdd-5b69-a04f-75ced38a44ad",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 39,
+      "ts": "2026-09-08T20:19:08.010",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        4,
+        5
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "f7e56822-8368-5a13-b9e8-528b65daae4f",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 40,
+      "ts": "2026-09-08T20:19:18.740",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "06688f6b-73c5-5a86-9f1d-669d62d9261b",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 41,
+      "ts": "2026-09-08T20:19:18.740",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "a67efae4-bf52-56d9-a026-c8f49eb4c5c4",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 42,
+      "ts": "2026-09-08T20:19:27.940",
+      "art": "wurf",
+      "bildVor": [
+        4,
+        5
+      ],
+      "bildNach": [
+        5
+      ],
+      "konfidenz": 0.3,
+      "hinweis": "Kegel [3] galten als bereits gefallen -- unser Bild und die Messung widersprechen sich hier."
+    },
+    {
+      "eventId": "593a34b7-9e0c-50e4-94a9-7284a79e5adc",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 43,
+      "ts": "2026-09-08T20:19:37.800",
+      "art": "aufstellung",
+      "bildVor": [
+        5
+      ],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "dc9d7c7c-5623-5ebf-8619-8f80fddedad6",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 44,
+      "ts": "2026-09-08T20:19:37.800",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "51ff3d4e-4e10-5328-b0e5-c6f097bf1154",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 45,
+      "ts": "2026-09-08T20:19:44.200",
+      "art": "aufstellung",
+      "bildVor": [
+        5
+      ],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "6cf6b227-3b0f-5a0d-ba50-b9aadca80c68",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 46,
+      "ts": "2026-09-08T20:19:44.200",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        2,
+        4,
+        5,
+        7,
+        8
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "d5aa7cfb-27ed-58dd-8ea4-2a86c1cfc497",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 47,
+      "ts": "2026-09-08T20:19:55.400",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "a6ea3e89-7609-5393-9d4a-1e9503cbc640",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 48,
+      "ts": "2026-09-08T20:19:55.400",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        6
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "ec30572f-58b0-54a1-88f3-21e9ec2e9c91",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 49,
+      "ts": "2026-09-08T20:20:01.330",
+      "art": "wurf",
+      "bildVor": [
+        2,
+        4,
+        5,
+        7,
+        8
+      ],
+      "bildNach": [
+        7
+      ],
+      "konfidenz": 0.45,
+      "hinweis": "Kegel [3] galten als bereits gefallen -- unser Bild und die Messung widersprechen sich hier."
+    },
+    {
+      "eventId": "80d423e0-2369-55ed-acb7-74008032b0c2",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 50,
+      "ts": "2026-09-08T20:20:09.530",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        7
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "57713a70-f2eb-59bc-b080-9a3945343b89",
+      "anlage": "Heimhalle",
+      "bahn": 4,
+      "seq": 51,
+      "ts": "2026-09-08T20:20:12.470",
+      "art": "wurf",
+      "bildVor": [
+        5,
+        6
+      ],
+      "bildNach": [
+        5
+      ],
+      "konfidenz": 1.0,
+      "hinweis": "Kegel [1, 2, 3, 4, 7, 8, 9] galten als bereits gefallen -- unser Bild und die Messung widersprechen sich hier."
+    },
+    {
+      "eventId": "94c901cf-7a3a-5719-a390-da075e0b93ff",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 52,
+      "ts": "2026-09-08T20:20:16.330",
+      "art": "wurf",
+      "bildVor": [
+        7
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "7d103af6-604e-5172-bbee-648256343168",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 53,
+      "ts": "2026-09-08T20:20:29.930",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "145bfbea-853c-5390-8185-3bd47e3fff4e",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 54,
+      "ts": "2026-09-08T20:20:32.530",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "89ddca99-55ce-5d34-aa19-73b0bd5582d3",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 55,
+      "ts": "2026-09-08T20:20:32.530",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "7d8d76a4-c433-557f-95a3-b2576cd624af",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 56,
+      "ts": "2026-09-08T20:20:39.130",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        2,
+        4
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "c0c9de72-0894-5170-a1f2-457066e570a7",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 57,
+      "ts": "2026-09-08T20:20:49.390",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "c2ad5ae1-0db0-5136-8582-4094f47121d4",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 58,
+      "ts": "2026-09-08T20:20:49.390",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "9d9de5bd-0800-57b7-bccb-6f43f78d906c",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 59,
+      "ts": "2026-09-08T20:20:58.130",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "314a6bfc-9aa5-57fb-bdde-8012ba9eee43",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 60,
+      "ts": "2026-09-08T20:21:07.190",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "1c67f7f0-b49b-5c2e-8f08-48b5d96c2ce1",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 61,
+      "ts": "2026-09-08T20:21:07.190",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "91b4bd88-796c-5586-833e-f2a9f06d3d8b",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 62,
+      "ts": "2026-09-08T20:21:17.260",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "954d30cc-68a9-5288-b14c-76a04676305f",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 63,
+      "ts": "2026-09-08T20:21:28.590",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "d37d8817-cfa7-562d-8ab5-347562e9514b",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 64,
+      "ts": "2026-09-08T20:21:26.390",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "502a084e-9155-56cd-967a-ef179b799ce7",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 65,
+      "ts": "2026-09-08T20:21:26.390",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5,
+        7
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "6e407857-a198-53de-98b8-67f06084a2f1",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 66,
+      "ts": "2026-09-08T20:21:44.390",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        1,
+        2,
+        4,
+        5,
+        7,
+        8
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "1db3d2f8-abbc-510a-a65b-916b0e7eea0d",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 67,
+      "ts": "2026-09-08T20:21:52.650",
+      "art": "wurf",
+      "bildVor": [
+        5,
+        7
+      ],
+      "bildNach": [],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "90bc9492-dd4f-5a19-9592-0665ec368c6e",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 68,
+      "ts": "2026-09-08T20:22:05.850",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        1,
+        2,
+        6,
+        8,
+        9
+      ],
+      "konfidenz": 0.3
+    },
+    {
+      "eventId": "38a7c227-7e6a-536a-99f4-fe94b7d3fe8b",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 69,
+      "ts": "2026-09-08T20:22:20.580",
+      "art": "aufstellung",
+      "bildVor": [],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "445775a8-5fcd-588a-bb3c-be9857d966cb",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 70,
+      "ts": "2026-09-08T20:22:20.580",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        5
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "d976f425-13fd-5f68-bae4-781733856cad",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 71,
+      "ts": "2026-09-08T20:22:25.250",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "c89cb119-7e14-50f2-8abd-533b65e6c5a3",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 72,
+      "ts": "2026-09-08T20:22:33.050",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        2,
+        4
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "d775df3d-639b-50d7-8226-daf0c89d5525",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 73,
+      "ts": "2026-09-08T20:22:39.180",
+      "art": "aufstellung",
+      "bildVor": [
+        5
+      ],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 1.0
+    },
+    {
+      "eventId": "8e459807-d8af-5fec-9014-fb2962528c6c",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 74,
+      "ts": "2026-09-08T20:22:39.180",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        7
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "ef9f5a8b-17d5-57f3-afd1-ad6af5cba799",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 75,
+      "ts": "2026-09-08T20:22:50.180",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        4
+      ],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "e74c2e18-a155-564a-8580-6d80b195e250",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 76,
+      "ts": "2026-09-08T20:23:00.840",
+      "art": "wurf",
+      "bildVor": [
+        7
+      ],
+      "bildNach": [],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "1633eb9b-e603-537b-9412-f62c2c325b46",
+      "anlage": "Heimhalle",
+      "bahn": 3,
+      "seq": 77,
+      "ts": "2026-09-08T20:23:06.310",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [],
+      "konfidenz": 0.85
+    },
+    {
+      "eventId": "189d268d-473e-53cf-b408-8ad29223f9d7",
+      "anlage": "Heimhalle",
+      "bahn": 2,
+      "seq": 78,
+      "ts": "2026-09-08T20:27:03.480",
+      "art": "wurf",
+      "bildVor": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "bildNach": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "konfidenz": 0.85
+    }
+  ]
+}

@@ -1,0 +1,1220 @@
+{
+  "schema_version": 1,
+  "name": "2Spieltag",
+  "created": "2026-09-19T15:52:26",
+  "source_hint": {
+    "width": 1920,
+    "height": 1080,
+    "video": "https://manifest-oci-us-ashburn-1-vop1.fastly.mux.com/Rni01ufWklwRUSF76GnzS602nCnGo4kxHi7DmjfJw02rWupGOAPxKjwoVC6z4wigvnJ02igbSGIIhd7HJnzDpjImjuAMQIJgDNrC/rendition.m3u8?cdn=fastly&exclude_pdt=false&expires=1789869600&rid=tHwn9IHZGR9Vy91ZDD02tukx00lO1qTaO5PxGLZtnNFLo&skid=default&signature=NmFhZjNiYzdfMTlmMTQ0NzE2ODYyMTNkMzJiNTE4NGZjMGQ5ZWNmODNiNTU3MmFhMWRkMjkyN2UwMDczMWI5YTUyMDk4MDU5YQ=="
+  },
+  "anlage": {
+    "hue_min": null,
+    "hue_max": null,
+    "saturation_min": null,
+    "value_min": null,
+    "warmth_min": null,
+    "pin_count": null,
+    "throws_per_cycle": null,
+    "pin_number_mapping": null,
+    "late_fields": null,
+    "foul_field": null
+  },
+  "lanes": [
+    {
+      "lane_id": 1,
+      "quad": [
+        [
+          536.5828247070312,
+          69.42658233642578
+        ],
+        [
+          666.5778198242188,
+          70.56975555419922
+        ],
+        [
+          666.4259033203125,
+          204.56472778320312
+        ],
+        [
+          535.430908203125,
+          203.4215545654297
+        ]
+      ],
+      "rois": [
+        {
+          "name": "pin_lamp_1",
+          "rect": [
+            0.4847529215748363,
+            0.3387922188826034,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 9
+        },
+        {
+          "name": "pin_lamp_2",
+          "rect": [
+            0.32206012876051,
+            0.41735970729217065,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 7
+        },
+        {
+          "name": "pin_lamp_3",
+          "rect": [
+            0.6398413754531773,
+            0.4205682608563888,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 8
+        },
+        {
+          "name": "pin_lamp_4",
+          "rect": [
+            0.15539694788474176,
+            0.48957110596442105,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 4
+        },
+        {
+          "name": "pin_lamp_5",
+          "rect": [
+            0.48295542947735637,
+            0.4941355860565689,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 5
+        },
+        {
+          "name": "pin_lamp_6",
+          "rect": [
+            0.8056759148132238,
+            0.4945465061147201,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 6
+        },
+        {
+          "name": "pin_lamp_7",
+          "rect": [
+            0.32071987786881134,
+            0.570100222156895,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 2
+        },
+        {
+          "name": "pin_lamp_8",
+          "rect": [
+            0.645438125659171,
+            0.572985443778752,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 3
+        },
+        {
+          "name": "pin_lamp_9",
+          "rect": [
+            0.4839539961784253,
+            0.6437027964857599,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 1
+        },
+        {
+          "name": "green_lamp",
+          "rect": [
+            0.4660206665130466,
+            0.7547048898804866,
+            0.06489701914787288,
+            0.05259757139682773
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "left_display",
+          "rect": [
+            0.035242037043489556,
+            0.6608711794548036,
+            0.26,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "total_a",
+          "rect": [
+            0.6928119959102831,
+            0.654551704109192,
+            0.24,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "throw_number",
+          "rect": [
+            0.11713380198361163,
+            0.8370000200659901,
+            0.24,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "pin_count",
+          "rect": [
+            0.4035187587051189,
+            0.8445390389433606,
+            0.11,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "total_b",
+          "rect": [
+            0.5594201580106639,
+            0.8442753197035132,
+            0.33,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_1",
+          "rect": [
+            0.14394906013215666,
+            0.8498353543669849,
+            0.05525418414265255,
+            0.10453964563301543
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_2",
+          "rect": [
+            0.2184352550504375,
+            0.8493489208609729,
+            0.050253553867340095,
+            0.10201242593168759
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_3",
+          "rect": [
+            0.29005773602441576,
+            0.8489200058371692,
+            0.05234478328726756,
+            0.10148386526107789
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_pin_count_1",
+          "rect": [
+            0.4396954466686046,
+            0.8523464830389721,
+            0.05958954858779908,
+            0.1016729907989502
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_1",
+          "rect": [
+            0.5909909399625682,
+            0.853606631658831,
+            0.054683669090271,
+            0.09778651498070996
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_2",
+          "rect": [
+            0.666356580339613,
+            0.85106148985427,
+            0.05523161458969117,
+            0.09862522649765015
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_3",
+          "rect": [
+            0.7399419739934826,
+            0.8507467452444373,
+            0.05727909374237061,
+            0.09808479118347169
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_4",
+          "rect": [
+            0.8144201511632824,
+            0.8482747052740393,
+            0.0548231998352319,
+            0.09914623069763184
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_left_display_1",
+          "rect": [
+            0.1110148410128728,
+            0.6668449266853332,
+            0.055485768795013435,
+            0.10352019834518433
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_left_display_2",
+          "rect": [
+            0.19492077379749936,
+            0.6690678652725219,
+            0.05279544933741321,
+            0.10148541498184205
+          ],
+          "enabled": true,
+          "pin_number": null
+        }
+      ],
+      "real_lane_number": 2
+    },
+    {
+      "lane_id": 2,
+      "quad": [
+        [
+          794.595947265625,
+          69.4135513305664
+        ],
+        [
+          928.5908813476562,
+          71.58290100097656
+        ],
+        [
+          927.4127807617188,
+          205.5777587890625
+        ],
+        [
+          793.4179077148438,
+          204.4084014892578
+        ]
+      ],
+      "rois": [
+        {
+          "name": "pin_lamp_1",
+          "rect": [
+            0.4847529215748363,
+            0.3387922188826034,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 9
+        },
+        {
+          "name": "pin_lamp_2",
+          "rect": [
+            0.32206012876051,
+            0.41735970729217065,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 7
+        },
+        {
+          "name": "pin_lamp_3",
+          "rect": [
+            0.6398413754531773,
+            0.4205682608563888,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 8
+        },
+        {
+          "name": "pin_lamp_4",
+          "rect": [
+            0.15539694788474176,
+            0.48957110596442105,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 4
+        },
+        {
+          "name": "pin_lamp_5",
+          "rect": [
+            0.48295542947735637,
+            0.4941355860565689,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 5
+        },
+        {
+          "name": "pin_lamp_6",
+          "rect": [
+            0.8056759148132238,
+            0.4945465061147201,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 6
+        },
+        {
+          "name": "pin_lamp_7",
+          "rect": [
+            0.32071987786881134,
+            0.570100222156895,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 2
+        },
+        {
+          "name": "pin_lamp_8",
+          "rect": [
+            0.645438125659171,
+            0.572985443778752,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 3
+        },
+        {
+          "name": "pin_lamp_9",
+          "rect": [
+            0.4839539961784253,
+            0.6437027964857599,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 1
+        },
+        {
+          "name": "green_lamp",
+          "rect": [
+            0.4660206665130466,
+            0.7547048898804866,
+            0.06489701914787288,
+            0.05259757139682773
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "left_display",
+          "rect": [
+            0.035242037043489556,
+            0.6608711794548036,
+            0.26,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "total_a",
+          "rect": [
+            0.6928119959102831,
+            0.654551704109192,
+            0.24,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "throw_number",
+          "rect": [
+            0.11713380198361163,
+            0.8370000200659901,
+            0.24,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "pin_count",
+          "rect": [
+            0.4035187587051189,
+            0.8445390389433606,
+            0.11,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "total_b",
+          "rect": [
+            0.5594201580106639,
+            0.8442753197035132,
+            0.33,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_1",
+          "rect": [
+            0.14394906013215666,
+            0.8498353543669849,
+            0.05525418414265255,
+            0.10453964563301543
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_2",
+          "rect": [
+            0.2184352550504375,
+            0.8493489208609729,
+            0.050253553867340095,
+            0.10201242593168759
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_3",
+          "rect": [
+            0.29005773602441576,
+            0.8489200058371692,
+            0.05234478328726756,
+            0.10148386526107789
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_pin_count_1",
+          "rect": [
+            0.4396954466686046,
+            0.8523464830389721,
+            0.05958954858779908,
+            0.1016729907989502
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_1",
+          "rect": [
+            0.5909909399625682,
+            0.853606631658831,
+            0.047359204831038455,
+            0.09778651498070996
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_2",
+          "rect": [
+            0.666356580339613,
+            0.8581171176306883,
+            0.04684307088329326,
+            0.09156959872123192
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_3",
+          "rect": [
+            0.7399419739934826,
+            0.8566300860026796,
+            0.04650892700849736,
+            0.09220145042522929
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_4",
+          "rect": [
+            0.8029518417715206,
+            0.8592587793484697,
+            0.0548231998352319,
+            0.09547622282220682
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_left_display_1",
+          "rect": [
+            0.11555852536387183,
+            0.6668449266853332,
+            0.05094208444401441,
+            0.10352019834518433
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_left_display_2",
+          "rect": [
+            0.19709167070009878,
+            0.6690678652725219,
+            0.05062455243481381,
+            0.10148541498184205
+          ],
+          "enabled": true,
+          "pin_number": null
+        }
+      ],
+      "real_lane_number": 3
+    },
+    {
+      "lane_id": 3,
+      "quad": [
+        [
+          991.197021484375,
+          71.83232116699219
+        ],
+        [
+          1125.1766357421875,
+          75.17094421386719
+        ],
+        [
+          1122.820556640625,
+          209.150390625
+        ],
+        [
+          988.8409423828125,
+          207.811767578125
+        ]
+      ],
+      "rois": [
+        {
+          "name": "pin_lamp_1",
+          "rect": [
+            0.4847529215748363,
+            0.3387922188826034,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 9
+        },
+        {
+          "name": "pin_lamp_2",
+          "rect": [
+            0.32206012876051,
+            0.41735970729217065,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 7
+        },
+        {
+          "name": "pin_lamp_3",
+          "rect": [
+            0.6398413754531773,
+            0.4205682608563888,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 8
+        },
+        {
+          "name": "pin_lamp_4",
+          "rect": [
+            0.15539694788474176,
+            0.48957110596442105,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 4
+        },
+        {
+          "name": "pin_lamp_5",
+          "rect": [
+            0.48295542947735637,
+            0.4941355860565689,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 5
+        },
+        {
+          "name": "pin_lamp_6",
+          "rect": [
+            0.8056759148132238,
+            0.4945465061147201,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 6
+        },
+        {
+          "name": "pin_lamp_7",
+          "rect": [
+            0.32071987786881134,
+            0.570100222156895,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 2
+        },
+        {
+          "name": "pin_lamp_8",
+          "rect": [
+            0.645438125659171,
+            0.572985443778752,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 3
+        },
+        {
+          "name": "pin_lamp_9",
+          "rect": [
+            0.4839539961784253,
+            0.6437027964857599,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 1
+        },
+        {
+          "name": "green_lamp",
+          "rect": [
+            0.4660206665130466,
+            0.7547048898804866,
+            0.06489701914787288,
+            0.05259757139682773
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "left_display",
+          "rect": [
+            0.035242037043489556,
+            0.6608711794548036,
+            0.26,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "total_a",
+          "rect": [
+            0.6928119959102831,
+            0.654551704109192,
+            0.24,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "throw_number",
+          "rect": [
+            0.11713380198361163,
+            0.8370000200659901,
+            0.24,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "pin_count",
+          "rect": [
+            0.4035187587051189,
+            0.8445390389433606,
+            0.11,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "total_b",
+          "rect": [
+            0.5594201580106639,
+            0.8442753197035132,
+            0.33,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_1",
+          "rect": [
+            0.13596968583713154,
+            0.8498353543669849,
+            0.0490268736512591,
+            0.10453964563301543
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_2",
+          "rect": [
+            0.2136384967410611,
+            0.8493489208609729,
+            0.048365295322966836,
+            0.10201242593168759
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_3",
+          "rect": [
+            0.2876854667426779,
+            0.8489200058371692,
+            0.048021421948392935,
+            0.10148386526107789
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_pin_count_1",
+          "rect": [
+            0.4396954466686046,
+            0.8523464830389721,
+            0.05958954858779908,
+            0.1016729907989502
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_1",
+          "rect": [
+            0.5841394576459704,
+            0.853606631658831,
+            0.04763892167521995,
+            0.09778651498070996
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_2",
+          "rect": [
+            0.6596198694029852,
+            0.8558780905286154,
+            0.04942818412751706,
+            0.09494579193250963
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_3",
+          "rect": [
+            0.7352330618224799,
+            0.8578325227648553,
+            0.04623364714082007,
+            0.0967324794219062
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_4",
+          "rect": [
+            0.8068505897983271,
+            0.8630555880471709,
+            0.052438618359296876,
+            0.0912889740672374
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_left_display_1",
+          "rect": [
+            0.1110148410128728,
+            0.6668449266853332,
+            0.055485768795013435,
+            0.10352019834518433
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_left_display_2",
+          "rect": [
+            0.19492077379749936,
+            0.6690678652725219,
+            0.05279544933741321,
+            0.10148541498184205
+          ],
+          "enabled": true,
+          "pin_number": null
+        }
+      ],
+      "real_lane_number": 4
+    },
+    {
+      "lane_id": 4,
+      "quad": [
+        [
+          1244.80322265625,
+          76.25635528564453
+        ],
+        [
+          1376.9539184570312,
+          80.76406860351562
+        ],
+        [
+          1372.223388671875,
+          212.71780395507812
+        ],
+        [
+          1240.269287109375,
+          211.21009826660156
+        ]
+      ],
+      "rois": [
+        {
+          "name": "pin_lamp_1",
+          "rect": [
+            0.4847529215748363,
+            0.3387922188826034,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 9
+        },
+        {
+          "name": "pin_lamp_2",
+          "rect": [
+            0.32206012876051,
+            0.41735970729217065,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 7
+        },
+        {
+          "name": "pin_lamp_3",
+          "rect": [
+            0.6398413754531773,
+            0.4205682608563888,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 8
+        },
+        {
+          "name": "pin_lamp_4",
+          "rect": [
+            0.15539694788474176,
+            0.48957110596442105,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 4
+        },
+        {
+          "name": "pin_lamp_5",
+          "rect": [
+            0.48295542947735637,
+            0.4941355860565689,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 5
+        },
+        {
+          "name": "pin_lamp_6",
+          "rect": [
+            0.8056759148132238,
+            0.4945465061147201,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 6
+        },
+        {
+          "name": "pin_lamp_7",
+          "rect": [
+            0.32071987786881134,
+            0.570100222156895,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 2
+        },
+        {
+          "name": "pin_lamp_8",
+          "rect": [
+            0.645438125659171,
+            0.572985443778752,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 3
+        },
+        {
+          "name": "pin_lamp_9",
+          "rect": [
+            0.4839539961784253,
+            0.6437027964857599,
+            0.04,
+            0.0375
+          ],
+          "enabled": true,
+          "pin_number": 1
+        },
+        {
+          "name": "green_lamp",
+          "rect": [
+            0.4660206665130466,
+            0.7547048898804866,
+            0.06489701914787288,
+            0.05259757139682773
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "left_display",
+          "rect": [
+            0.035242037043489556,
+            0.6608711794548036,
+            0.26,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "total_a",
+          "rect": [
+            0.6928119959102831,
+            0.654551704109192,
+            0.24,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "throw_number",
+          "rect": [
+            0.11713380198361163,
+            0.8370000200659901,
+            0.24,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "pin_count",
+          "rect": [
+            0.4035187587051189,
+            0.8445390389433606,
+            0.11,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "total_b",
+          "rect": [
+            0.5594201580106639,
+            0.8442753197035132,
+            0.33,
+            0.13
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_1",
+          "rect": [
+            0.1363733025563991,
+            0.8498353543669849,
+            0.05525418414265255,
+            0.10453964563301543
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_2",
+          "rect": [
+            0.21085949747467994,
+            0.8568116074281371,
+            0.05463784902188071,
+            0.10201242593168759
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_throw_number_3",
+          "rect": [
+            0.2824819784486582,
+            0.8563826924043334,
+            0.055908704619252236,
+            0.10148386526107789
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_pin_count_1",
+          "rect": [
+            0.43211968909284704,
+            0.8598091696061363,
+            0.05958954858779908,
+            0.1016729907989502
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_1",
+          "rect": [
+            0.5834151823868107,
+            0.8610693182259952,
+            0.054683669090271,
+            0.09778651498070996
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_2",
+          "rect": [
+            0.6587054249222121,
+            0.8585241764214342,
+            0.04747281966674596,
+            0.09862522649765015
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_3",
+          "rect": [
+            0.732366216417725,
+            0.8582094318116015,
+            0.05727909374237061,
+            0.09808479118347169
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_total_b_4",
+          "rect": [
+            0.8068443935875248,
+            0.8557373918412035,
+            0.0548231998352319,
+            0.09914623069763184
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_left_display_1",
+          "rect": [
+            0.1110148410128728,
+            0.6668449266853332,
+            0.055485768795013435,
+            0.10352019834518433
+          ],
+          "enabled": true,
+          "pin_number": null
+        },
+        {
+          "name": "digit_left_display_2",
+          "rect": [
+            0.19492077379749936,
+            0.6690678652725219,
+            0.05279544933741321,
+            0.10148541498184205
+          ],
+          "enabled": true,
+          "pin_number": null
+        }
+      ],
+      "real_lane_number": 5
+    }
+  ]
+}

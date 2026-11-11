@@ -1,0 +1,83 @@
+# ---------------------------------------------------------------------------
+# Was NICHT ins Repository gehoert.
+#
+# Zwei Sorten: Geheimnisse und Ballast. Geheimnisse duerfen nie hinein, weil
+# ein einmal gepushter Schluessel auch nach dem Loeschen in der Historie steht.
+# Ballast (Videos, Debugbilder) sprengt jedes Repository und laesst sich
+# jederzeit neu erzeugen.
+# ---------------------------------------------------------------------------
+
+# --- Geheimnisse -----------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Personenbezogene Daten -----------------------------------------------
+# Die gemessene Wahrheit, gegen die die Zaehllogik geprueft wird. Sie enthaelt
+# die vollen Namen realer Spieler samt ihrer Ergebnisse:
+#
+#     Heimmannschaft;Spieler D;206;216;178;235;835;11
+#
+# Fuer die Pruefung zaehlen nur die ZAHLEN, und gebraucht wird sie ohnehin nur
+# lokal. Also bleibt sie hier -- ein einmal veroeffentlichter Name steht auch
+# nach dem Loeschen noch in der Historie.
+#
+# Wer die Dateien doch teilen will: `tools/pseudonymisiere_ground_truth.py`
+# ersetzt die Namen durch stabile Decknamen, `--zurueck` macht es rueckgaengig.
+data/ground_truth/
+
+# Die gedruckten Wurfprotokolle -- dieselben Namen, nur als PDF.
+Wurfprotokoll_*.pdf
+
+# --- Ballast ---------------------------------------------------------------
+# Debugausgabe: Ereignisbilder, Spuren, Wurfprotokolle. Waechst pro Lauf um
+# hunderte Megabyte, und die Ordnernamen enthalten die Quelladresse -- bei
+# einer Kamera samt Zugangsdaten.
+debug/
+
+# Videomaterial. Einzelne Dateien im Gigabytebereich.
+kegelVideos/
+*.mp4
+*.mkv
+*.ts
+*.m3u8
+
+# --- Python ----------------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# --- Betriebssystem und Editor --------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+
+# Personenmodell: AGPL-3.0 (Ultralytics), gehoert nicht ins Repo.
+# Holen mit tools/hole_personenmodell.py
+models/
+
+# Das Personenmodell wird beim Bauen aus models/ kopiert.
+android/app/src/main/assets/*.onnx
+
+# Android-Build
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+
+# Konfiguration und Modell holt Gradle beim Bauen aus dem Projekt.
+android/app/src/main/assets/
+android/.kotlin/
+
+# Kurzlebige Mess- und Zwischendateien.
+scratchpad/
+*.pkl

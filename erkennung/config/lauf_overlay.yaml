@@ -1,0 +1,1335 @@
+# ARCHIV: Einstellungen fuer das OVERLAY des Livestreams.
+#
+# NICHT aktiv. Aktiv ist immer config/default.yaml -- jeder Einstiegspunkt
+# (Starter, Oberflaeche, tools/run_analysis.py) nimmt diese eine Datei, damit
+# Werkzeug und Nachmessung nie auseinanderlaufen koennen.
+#
+# Zurueckwechseln aufs Overlay:  diese Datei ueber config/default.yaml kopieren.
+#
+# =============================================================================
+# Kegel_CV - Standardkonfiguration
+#
+# Grundsatz: KEINE Magic Numbers im Code. Jeder Schwellwert steht hier,
+# mit Begruendung. Gemessene Werte sind als solche gekennzeichnet.
+# =============================================================================
+
+video:
+  # Standard-Verzeichnis, in dem die GUI nach Videos sucht
+  directory: "kegelVideos"
+  # Zuletzt geladenes Video (wird von der GUI gepflegt)
+  source: null
+  # Anzeige-FPS der GUI - entkoppelt von der Analysegeschwindigkeit,
+  # damit die Oberflaeche bei schneller Analyse nicht ueberlastet wird
+  playback_fps: 25.0
+  # Wie viele fehlgeschlagene read()-Versuche hintereinander toleriert werden,
+  # bevor die Quelle als beendet gilt (Dropframes, Auftrag Paragraph 22)
+  max_consecutive_read_failures: 10
+
+  # Verhalten bei einem LIVESTREAM. Ein Aussetzer ist dort Alltag -- WLAN,
+  # Puffer, Umschaltung der Qualitaetsstufe -- und kein Grund aufzugeben.
+  # Bei einer Datei ist derselbe Fall dagegen ein ernstes Zeichen (BUG-003).
+  stream_reconnect_attempts: 5
+  stream_reconnect_delay_s: 2.0
+  # Erst nach so vielen erfolglosen Leseversuchen lohnt der teure
+  # Verbindungsaufbau. 25 Frames sind rund eine Sekunde.
+  stream_read_failures: 25
+
+  # TRANSPORTWEG FUER RTSP. "tcp", "udp" oder "" (FFmpeg entscheidet).
+  #
+  # GEMESSEN 2026-09-08 an der Hallenkamera (Reolink, 2304x1296, h264),
+  # zwoelf Sekunden je Durchgang, dieselbe Kamera, dieselbe Minute:
+  #
+  #     udp:  4,7 fps gelesen | groesste Luecke 5089 ms | Decoderfehler
+  #     tcp: 15,9 fps gelesen | groesste Luecke  235 ms | keine Fehler
+  #
+  # UDP verliert Pakete, und ein grosses Schluesselbild zerfaellt in viele.
+  # Fehlt eines, ist das ganze Bild hin -- entweder als Stillstand, oder als
+  # verstuemmeltes Bild, das trotzdem ankommt. Das zweite ist das schlimmere:
+  # Ein zerhackter Block ueber einer Ziffer liefert einen falschen Wert,
+  # obwohl die ROI exakt sitzt.
+  stream_rtsp_transport: "tcp"
+
+  # NEUANFANG DER QUELLE. Hinter einer m3u8-Adresse steckt oft eine
+  # Aufzeichnung. GEMESSEN 2026-08-29/30: Die Uebertragung riss rund eine
+  # Stunde nach dem Verbindungsaufbau ab -- bei Vorschau und Analyse zur
+  # selben Sekunde (22:24:40 und 22:24:47) -- und begann danach wieder bei
+  # Frame 0. Ergebnis: 1517 echte Wuerfe, danach 1693 Wiederholungen.
+  #
+  # Erste Verteidigung ist der Ruecksprung an die alte Stelle. Er ist nur
+  # moeglich, wenn die Quelle eine Laenge meldet (Aufzeichnung, gemessen:
+  # 312786 Frames = 3:28:31) und framegenau (2026-08-30 geprueft).
+  # So viele Frames Abweichung gelten dabei noch als angekommen -- gesprungen
+  # wird auf das naechste Schluesselbild, das bis zu 4 s entfernt liegen kann.
+  stream_resume_tolerance_frames: 100
+  # So nah am Ende gilt eine Aufzeichnung als ABGESPIELT, nicht als abgerissen.
+  #
+  # GEMESSEN 2026-08-30/31 (BUG-015): Der Lauf ueber den vollen Spieltag
+  # erreichte Frame 312784 von gemeldeten 312786 und drehte dann endlos --
+  # alle sieben Sekunden ein Abriss, ein erfolgreicher Ruecksprung auf 312784,
+  # wieder kein Frame. Die Schlussbilanz des Laufs entstand nie.
+  #
+  # Die letzten Frames einer HLS-Aufzeichnung fehlen regelmaessig; die
+  # gemeldete Laenge stammt aus der Playlist und ist kein Versprechen.
+  # 100 Frames sind 4 Sekunden.
+  stream_end_tolerance_frames: 100
+  # Hoechste Aufloesung, die von einer YouTube-Adresse geholt wird. Mehr Pixel
+  # heissen mehr Decodierarbeit je Frame -- breiter wird die Tafel davon nicht:
+  # Im Overlay-Video misst eine Tafel rund 190 Pixel, und darauf sass die
+  # Kalibrierung mit 1521 gueltigen Wuerfen (gemessen 2026-09-09).
+  youtube_max_height: 1080
+  # Zweite Verteidigung, falls der Sprung misslingt: die Bilder wiedererkennen.
+  stream_restart_check: true
+  # So viele Fingerabdruecke vom Anfang der Quelle werden behalten. 90 Frames
+  # sind rund 3,5 Sekunden -- lang genug, dass eine aufsteigende Kette darin
+  # sicher Platz hat.
+  stream_restart_probe_frames: 90
+  # So viele LUECKENLOS AUFSTEIGENDE Treffer belegen einen Neuanfang. Ein
+  # einzelner Treffer waere ein Standbild in einer Spielpause; erst die
+  # Reihenfolge unterscheidet Wiederholung von Stillstand.
+  stream_restart_matches: 3
+
+processing:
+  # Groesse des Ringpuffers fuer rueckwirkendes Frame-Sampling.
+  # 1920x1080x3 = ca. 6 MB pro Frame -> 50 Frames = ca. 300 MB.
+  # Bei Speichermangel: buffer_roi_only aktivieren.
+  frame_buffer_size: 50
+  # Nur die Overlay-Region puffern statt des Vollframes (ca. 1 MB statt 6 MB)
+  buffer_roi_only: false
+  # Jeden n-ten Frame auf den Green-Trigger pruefen. 1 = jeden Frame.
+  # Der Green-Check kostet nur ca. 0.1 ms, daher ist 1 vertretbar.
+  green_check_interval: 1
+
+# -----------------------------------------------------------------------------
+# Kalibrierung
+# -----------------------------------------------------------------------------
+calibration:
+  directory: "data/calibrations"
+  # Aufloesung der entzerrten Anzeigetafel (Tafelkoordinaten -> Pixel).
+  # Gross genug fuer die Ziffernerkennung, klein genug fuer Geschwindigkeit.
+  warped_width: 440
+  warped_height: 530
+  # --- Bibliothek bekannter Kegelboard-Bauarten -------------------------
+  # Ein Typ besteht aus einem Musterbild und den ROIs darauf. Wird das Muster
+  # in einem neuen Bild wiedergefunden, folgen alle Felder aus den vier Ecken.
+  boardtype_directory: "data/boardtypes"
+  # So viele tragende Merkmale muss der ERSTE Treffer haben. GEMESSEN
+  # 2026-09-09 ueber zwei Quellen: gelungene Treffer 15 bis 197, ein
+  # Fehltreffer 7 -- und der lag 1429 Pixel daneben.
+  boardtype_min_inlier: 14
+  # SUCHE UEBER MEHRERE STANDBILDER. GEMESSEN 2026-09-10, 16 Stichproben ueber
+  # ein Spiel von 3:08 h mit vier gleichen Tafeln im Bild:
+  #     4 Tafeln gefunden   1 Frame
+  #     3 Tafeln            6 Frames
+  #     1 Tafel             4 Frames
+  #     gar nichts          5 Frames
+  # Brennende Kegellampen und wechselnde Ziffern veraendern genau die
+  # Merkmale, an denen der Abgleich haengt. Die LAGE aendert sich nicht.
+  boardtype_sample_frames: 14
+  # So viele Bilder nach dem vollstaendigen Fund noch weitersammeln -- die
+  # Ecken werden ueber die Funde gemittelt. GEMESSEN 2026-09-10: bei 11 bis 13
+  # Funden je Tafel streuen die ROI-Lagen um 0,9 px, bei 2 bis 7 Funden um
+  # 1,8 px. Die Suche ist meist nach zwei bis vier Bildern vollstaendig.
+  boardtype_nachlauf_bilder: 6
+  boardtype_sample_step: 150      # 6 Sekunden Abstand in einer Datei
+  boardtype_sample_wait_s: 0.8    # bei einem Stream laesst sich nicht springen
+  # Schranke fuer die Tafeln NACH der ersten -- niedriger, weil die
+  # Wiederholung ueber mehrere Bilder die Sicherheit ersetzt. GEMESSEN: Die
+  # vierte Tafel kam mit 11 tragenden Merkmalen an der richtigen Stelle.
+  boardtype_anchor_inlier: 8
+  boardtype_min_frames: 2
+  # Zeitgrenze der Suche im LIVESTREAM -- dort gibt es nur das naechste Bild.
+  # GEMESSEN 2026-09-10 an acht Stellen, ein Bild je 0,8 s Streamzeit:
+  # sechsmal alle vier Tafeln nach 2,4 bis 14,4 s (im Mittel 4,8), zweimal
+  # nur zwei bzw. drei.
+  boardtype_live_timeout_s: 20.0
+  # Ziffernrahmen nach der Erkennung an den NULLEN ausrichten. Zu Spielbeginn
+  # steht auf der Tafel 000, 0, 0000 -- ein bekannter Sollwert, keine
+  # Optimierung auf das eigene Ergebnis. GEMESSEN 2026-09-10 am Hallenstream:
+  # angepasst an einem Bild, gemessen an acht spaeteren, unlesbare
+  # Ziffernstellen 21,6 % -> 17,5 %. Ohne Nullen auf der Tafel passiert nichts.
+  digit_zero_fit: true
+  # BILD IN BILD: die Tafel als Ganzes suchen statt ueber Merkmalspunkte.
+  # GEMESSEN 2026-09-10 an acht Stellen eines Spiels, Streuung der ROI-Lagen
+  # zwischen den vier baugleichen Tafeln:
+  #     Merkmalsabgleich   1,43 px, groesster Ausreisser 3,33
+  #     Bild in Bild       1,00 px, groesster Wert       1,16
+  #     von Hand gesetzt   0,89 px
+  # Alle acht Stellen finden alle vier Tafeln; der Merkmalsabgleich schaffte
+  # das an dreien nicht. So sicher muss ein Fund sein (maskierter ZNCC):
+  boardmatch_min_guete: 0.45
+  # Anzahl der Bahnen im Overlay
+  lane_count: 4
+  # Zuordnung Overlay-Position -> reale Bahnnummer.
+  # GEKLAERT (Q1): Das Overlay zeigt die Bahnen 2,3,4,5 -- Bahn 1 ist nicht relevant.
+  # Der Nutzer kann das pro Bahn in der Kalibrierung uebersteuern.
+  lane_number_mapping: [2, 3, 4, 5]
+  # ZUORDNUNG LAMPE -> KEGELNUMMER (beantwortet Q5). Der Eintrag an Stelle i
+  # ist die Kegelnummer der i-ten Lampe.
+  #
+  # Die Lampen liegen als Raute. Unsere ROIs zaehlen von OBEN nach unten, der
+  # Sport zaehlt von VORN -- und vorn ist auf der Tafel unten:
+  #
+  #        Tafel                 Kegel
+  #         L1                     9
+  #      L2    L3               7     8
+  #   L4   L5    L6          4    5     6
+  #      L7    L8               2     3
+  #         L9                     1
+  #
+  # Spiegelung von oben nach unten, links bleibt links. Vom Nutzer festgelegt
+  # am 2026-09-01 und gestuetzt durch Bahn 2, Frame 180238: Dort blieb unsere
+  # L2 stehen, und der Nutzer sagte unabhaengig "hinten links" voraus -- seine
+  # 7. Die Seitenzuordnung ist dabei Annahme, nicht Messung.
+  pin_number_mapping: [9, 7, 8, 4, 5, 6, 2, 3, 1]
+
+# -----------------------------------------------------------------------------
+# Erkennung
+# -----------------------------------------------------------------------------
+detection:
+  green:
+    # Austauschbare Implementierung (Auftrag Paragraph 8 / Prinzip P4)
+    implementation: "hsv"
+    # HSV-Bereich fuer "gruen". Gemessen am Material 2026-08-22.
+    hue_min: 40
+    hue_max: 90
+    saturation_min: 80
+    value_min: 80
+    # Hysterese. GEMESSEN: Lampe AUS -> Score 17.3-24.0, AN -> Score 59.9-74.3.
+    # Die Baseline ist NICHT null (beiges Tafelgehaeuse hat Gruenanteil),
+    # deshalb liegen beide Schwellen deutlich ueber 0 und auseinander.
+    on_threshold: 45.0
+    off_threshold: 35.0
+
+    # MITLAUFENDE SCHWELLEN.
+    #
+    # Die festen Werte oben tragen ueber eine lange Aufnahme nicht.
+    # GEMESSEN ueber 52 Minuten je Bahn (Score der gruenen Lampe):
+    #
+    #                   AUS 50%  AUS 95% |  AN 5%  AN 50%   Abstand
+    #     Min 1-3          28,3     38,4 |   71,7    75,8    +33,3
+    #     Min 47-49        36,4     43,4 |   69,7    74,7    +26,3
+    #     Min 47-49 B4     36,1     41,7 |   56,5    63,0    +14,8
+    #
+    # Beide Verteilungen wandern aufeinander zu -- AUS steigt, AN sinkt --,
+    # ueberlappen aber nie. Am Ende liegt die feste AUS-Schwelle (35) mitten in
+    # der AUS-Verteilung: ueber 100 von 130 Messungen landeten im Graubereich,
+    # GREEN_OFF loeste bis zu 180 Frames zu spaet aus, und die Kegellampen waren
+    # dann bereits zurueckgesetzt -- das Wurfergebnis wurde als 0 gelesen.
+    #
+    # Ein fester Wert kann das nicht auffangen, weil sich BEIDE Niveaus
+    # verschieben. Anteilig zwischen ihnen liegt die Schwelle immer richtig.
+    adaptive_thresholds: true
+    adaptive_window: 1500          # Frames -> 60 s, mehrere Wurfzyklen
+    adaptive_off_percentile: 20.0
+    adaptive_on_percentile: 90.0
+    adaptive_on_fraction: 0.55
+    adaptive_off_fraction: 0.40
+    # Darunter greifen die festen Schwellen.
+    #
+    # 12 war zu knapp: Bei durchgehend leuchtender Lampe liegen beide
+    # Perzentile in derselben Verteilung, und die Schwelle trennt Rauschen.
+    # GEMESSEN kippte der Zustand dadurch bei Score 78,8 auf AUS und bei 79,8
+    # zurueck auf AN -- aus einem Wurf wurden zwei.
+    #
+    # Spanne bei durchgehend AN: 3..9 | bei echtem Wechsel: 4..69
+    adaptive_min_span: 30.0
+
+    # GLEITENDES HISTOGRAMM -- hat Vorrang vor den Perzentilen oben.
+    #
+    # Die Perzentile setzen voraus, dass beide Zustaende im Fenster ungefaehr
+    # im erwarteten Verhaeltnis vorkommen. GEMESSEN 2026-08-30, Bahn 5:
+    #
+    #     Frame   Score    P20    P90  Spanne  AUS-Schwelle  Zustand
+    #     40903    47,8   40,0   70,0    30,0          52,0  OFF
+    #     40906    47,8   41,8   70,0    28,2  fest: 35,0    ON
+    #
+    # DERSELBE Score, zwei Zustaende -- die Spanne wackelte um die Sperre
+    # adaptive_min_span (30,0), und die Schwelle sprang zwischen 52,0 und 35,0.
+    # Die Bahn lag 71 % des Fensters auf AN, also war P20 kein AUS-Niveau,
+    # sondern der untere Rand der AN-Wolke. Der so entstandene GREEN_OFF
+    # erzeugte den Phantomwurf 17 und verschob die ganze folgende
+    # Wurfnummernkette (docs/AGENDA.md, A1).
+    #
+    # Das Histogramm desselben Fensters ist eindeutig zweigipflig:
+    #     18-26   233 Werte   AUS-Wolke, Gipfel 24-26
+    #     26-52  ~250         duenn verteilt -- die Flanken
+    #     52-78 ~1069         AN-Wolke, Gipfel 56-58
+    # Das Tal liegt bei 37; damit ist 47,8 durchgehend AN, und der Phantomwurf
+    # verschwindet (nachgerechnet ueber die volle Gruenspur, 297 715 Frames).
+    #
+    # UNVERHANDELBARE SPERRE: Gibt es nur EINE Wolke, wird keine Schwelle
+    # gerechnet und die zuletzt gemessene behalten. Ohne sie passiert genau
+    # das, was BUG-013 angerichtet hat -- in einem durchgehend leuchtenden
+    # Signal wird ein kuenstliches AUS gesucht, und aus einem Wurf werden zwei.
+    histogram_thresholds: true
+    # 22500 Frames = 15 min bei 25 fps. GEGENGERECHNET ueber die volle
+    # Gruenspur: zwischen 1500 und 45000 Frames Fensterlaenge aendert sich die
+    # Zahl der GREEN_OFF-Ereignisse je Bahn um hoechstens 13. Das Verfahren
+    # haengt also nicht an dieser Zahl.
+    histogram_window: 22500
+    # Vor 60 s Messung wird gar nichts abgeleitet -- dann gelten die festen.
+    histogram_min_samples: 1500
+    histogram_bin: 2.0
+    histogram_smoothing: 3
+    histogram_min_cloud: 0.05
+    histogram_min_gap: 15.0
+    histogram_max_valley: 0.25
+    histogram_hysteresis: 0.10
+    histogram_interval: 25
+
+    # Zustandswechsel erst nach so vielen bestaetigenden Frames.
+    # Verhindert, dass ein einzelner Stoerframe den Zustand kippt (Paragraph 9).
+    min_stable_frames: 3
+
+    # VERDECKTE TAFEL. Score nahe null heisst nicht "Lampe aus", sondern
+    # "keine Lampe im Bild": Die unbeleuchtete Lampe sitzt auf beigem Gehaeuse
+    # mit Gruenanteil, die AUS-Grundlinie ist deshalb nie null.
+    #
+    # GEMESSEN ueber 52 Minuten:
+    #   Score 0-1:  Bahn 2 1044 Frames, Bahn 3 169, Bahn 4 und 5 keine
+    #   Score 2-3:  Bahn 2    5 Frames, Bahn 3   8
+    # Ein scharfer Gipfel bei exakt null, danach fast nichts bis 20.
+    #
+    # Die 1213 Frames liegen in acht Abschnitten von 1 bis 18 Sekunden -- im
+    # Bild steht dort ein Spieler vor der Tafel. Als "aus" gelesen erzeugt das
+    # einen Wurf, den es nie gab: Beide Phantomwuerfe des Videos (F3228 und
+    # F43514) fallen exakt in eine solche Verdeckung.
+    #
+    # Waehrend der Verdeckung wird der Zustand eingefroren. Lieber eine Luecke
+    # im Protokoll als ein erfundener Wurf.
+    #
+    # ANGEHOBEN von 2,0 auf 12,0 am 2026-09-03. Der Nutzer sah in zwei
+    # Videoclips, dass eine Person durchs Bild laeuft und die Gruenphase kurz
+    # unterbricht -- die alte Schwelle fing das nicht ab.
+    #
+    # NACHGEMESSEN ueber 512 049 als AUS gelesene Scores des ganzen Spieltags:
+    #
+    #     Score  0-1    32 298 Messungen   <- Tafel verdeckt
+    #     Score  2-11      286 Messungen   <- Tal, 0,06 %
+    #     Score 12-41  479 465 Messungen   <- echtes Gruen-AUS
+    #
+    # Zwei sauber getrennte Wolken mit einem fast leeren Tal dazwischen. Bei
+    # 2,0 lag die Schwelle am RAND der Verdeckungswolke statt im Tal: Auf
+    # Bahn 2 fiel der Score bei F265718 auf 6,2 -- zu hoch fuer "verdeckt", zu
+    # niedrig fuer "aus". Die Zustandsmaschine loeste GREEN_OFF aus und buchte
+    # einen Wurf, bevor der Score zwei Frames spaeter 0,0 erreichte.
+    #
+    # WARUM KEINE PERSONENERKENNUNG: Der Score sagt es selbst. Eine
+    # ausgeschaltete Lampe KANN nicht auf null fallen, weil das beige Gehaeuse
+    # Gruenanteil hat -- echtes AUS liegt bei 20 bis 30. Ein Wert unter 12
+    # heisst zwingend, dass etwas davor ist. Ein Modell zur Personenerkennung
+    # (Eskalationsstufe 5) waere teurer und wuesste nichts, was diese eine Zahl
+    # nicht schon sagt.
+    occlusion_score: 12.0
+    occlusion_min_frames: 2
+    # Erinnerung waehrend einer Verdeckung, alle n Frames (750 = 30 s).
+    # Ohne sie bliebe eine dauerhaft eingefrorene Bahn nach EINER Logzeile
+    # stumm. Genau so sieht es aus, wenn die Schwelle zum Material nicht passt:
+    # Die Bahn meldet nie wieder einen Wurf, ohne dass etwas danach aussieht.
+    # Die Schwelle ist an einer einzigen Halle gemessen -- an einem anderen Ort
+    # gehoert sie nachgeprueft.
+    occlusion_reminder_frames: 750
+
+  person_mask:
+    enabled: false
+
+  lamps:
+    implementation: "warmth"
+    # GEMESSEN ueber 3600 Einzelmessungen (4 Tafeln x 9 Lampen x 100 Frames):
+    #   Helligkeit  AUS 154 +- 23   AN 254 +- 3    Trennguete 7.66
+    #   Waerme      AUS  19 +- 10   AN  57 +- 13   Trennguete 3.35
+    #
+    # Die HELLIGKEIT ist das Hauptkriterium -- eine leuchtende Lampe ist im Bild
+    # gesaettigt, daher die winzige Streuung.
+    #
+    # NEU BESTIMMT am 2026-09-01 (tools/fit_lamp_thresholds.py), weil der
+    # engere ROI-Zuschnitt alle Niveaus verschoben hat: Ohne das mitgefangene
+    # Gehaeuse liegt das Ruheniveau typisch bei 142,7 statt bei rund 165.
+    # Die Werte sind die anteiligen Schwellen bei diesem typischen Niveau --
+    # sie gelten nur, solange das Gedaechtnis einer Lampe zu duenn ist.
+    # Am 2026-09-03 mit den Anteilen nachgezogen (Niveau 148, Median ueber die
+    # vier Bahnen). Frueher: 222 / 198, davor (weiter ROI) 210 / 195.
+    brightness_on_threshold: 213
+    brightness_off_threshold: 205
+
+    # MITLAUFENDER AUS-BEZUGSWERT je Lampe.
+    #
+    # Die absoluten Schwellen oben tragen nicht ueber eine lange Aufnahme.
+    # GEMESSEN ueber 52 Minuten: Die Helligkeit der AUSGESCHALTETEN Lampen
+    # steigt von Median 151 auf 185 -- am Ende liegen 24 % aller AUS-Messungen
+    # ueber 195 und werden dadurch UNKNOWN. 22 der 31 Fehlerfaelle eines ganzen
+    # Trainings gingen darauf zurueck, und alle 22 lagen in der zweiten Haelfte.
+    #
+    # Die Drift betrifft NUR die Tafeln (94.9 -> 109.4), waehrend das uebrige
+    # Bild flach bleibt (100.2 -> 100.8) und der Bahnbereich sogar dunkler wird
+    # (74.8 -> 74.7 mit Maximum 83.3 dazwischen). Also weder Kamera-Nachregelung
+    # noch Hallenlicht, sondern die Anlage selbst -- ein globaler
+    # Helligkeitsausgleich wuerde deshalb nichts nuetzen.
+    #
+    # Mit false gelten wieder ausschliesslich die absoluten Schwellen.
+    adaptive_baseline: true
+    baseline_window: 400        # Messungen (alle 5 Frames) -> rund 80 Sekunden
+    baseline_percentile: 15.0
+    # Nur noch Untergrenze der Grundlinie -- die Schwellen liegen anteilig.
+    #
+    # `baseline_off_margin` spannt zusammen mit `brightness_off_threshold` die
+    # UNTERGRENZE des Niveaus auf: 198 - 75 = 123. Sie muss unter dem
+    # niedrigsten gemessenen Niveau liegen, sonst wird dieses hochgeklemmt und
+    # alle Schwellen verrutschen mit.
+    #
+    # GEMESSEN am 2026-09-01 mit dem engen ROI, zwei Strecken x vier Bahnen:
+    # Die Niveaus reichen von 132,8 (Bahn 5) bis 159,5 (Bahn 4). Der alte Wert
+    # 28 haette bei 170 geklemmt -- also OBERHALB aller acht Messungen, und
+    # damit jede einzelne verfaelscht.
+    baseline_on_margin: 45.0
+    baseline_off_margin: 75.0
+
+    # ANTEILIGE SCHWELLEN statt festem Abstand ueber der Grundlinie.
+    #
+    # GEMESSEN ueber 479 Wuerfe (4311 Einzelmessungen je Lampe):
+    #     AN    min 229,1   Median 253,7   max 255,0
+    #     AUS   min 134,2   Median 164,3   max 212,1
+    #
+    # Eine leuchtende Lampe ist im Bild GESAETTIGT -- ihr Niveau wandert nicht
+    # mit der Grundlinie mit. Ein fester Abstand bricht deshalb, sobald die
+    # Grundlinie hoch liegt: Bei einer Lampe mit AUS-Niveau 212 landete die
+    # AN-Schwelle bei 212 + 45 = 257, oberhalb der Saettigung. Sie leuchtete
+    # mit 254 und wurde als UNKNOWN gelesen, waehrend die Anzeige sie zaehlte.
+    #
+    # Die Anteile ergeben beim typischen AUS-Niveau (Median 164) dieselben
+    # Schwellen wie bisher, bleiben aber bei hoher Grundlinie erreichbar:
+    #     Niveau 164 -> AN 209, AUS 192   (wie zuvor)
+    #     Niveau 212 -> AN 233, AUS 225   (zuvor 257 und 240)
+    brightness_saturated: 255.0
+
+    # BEIDE WOLKEN MITFUEHREN statt nur der AUS-Seite.
+    #
+    # Die Rechnung darunter (`baseline_*_fraction`) fuehrt nur das AUS-Niveau
+    # mit und nimmt fuer die AN-Seite `brightness_saturated` an. Diese Annahme
+    # ist gemessen falsch, und zwar je Bahn verschieden:
+    #
+    #     Bahn   AN-Wolke (Median)   angenommen   Fehler
+    #        2               252,6          255     +2,4
+    #        3               249,0          255     +6,0
+    #        4               243,3          255    +11,7
+    #        5               246,2          255     +8,8
+    #
+    # Weil die Schwelle als ANTEIL dieses Abstands gerechnet wird, rutscht sie
+    # genau dort nach oben, wo die Lampen ohnehin am schwaechsten leuchten --
+    # der Fehler verstaerkt sich selbst. Auf Bahn 4 blieben dadurch nur 5,8
+    # Punkte zwischen Schwelle und AN-Wolke, und dort ging der einzige Wurf
+    # verloren, der gegen das Wurfprotokoll falsch war (F289308).
+    #
+    # Mit beiden Wolken entfaellt jede Annahme ueber Saettigung: Die Schwellen
+    # liegen mittig zwischen den gemessenen Raendern, je Lampe und je Bahn.
+    adaptive_on_level: true
+    # Ab hier praegt eine Messung das AN-Gedaechtnis. FESTE Schranke, damit die
+    # Schwelle nicht darueber entscheidet, was sie selbst bestimmt -- eine
+    # solche Rueckkopplung koennte beliebig weit driften.
+    #
+    # ZWISCHEN dieser Schranke und `baseline_ignore_above` (215) liegt ein
+    # Niemandsland, das keine Seite praegt. Ohne diesen Abstand landen
+    # Messungen in BEIDEN Gedaechtnissen, die Wolken ueberlappen sich
+    # kuenstlich und die Trennung faellt zurueck.
+    an_ignore_below: 225.0
+    # Welche Wolkenraender die Mitte aufspannen.
+    aus_rand_percentile: 95.0
+    an_rand_percentile: 5.0
+    # Breite der Totzone als Anteil des Wolkenabstands. Bei 42 bis 87 Punkten
+    # Abstand sind das 8 bis 16 Punkte -- genug fuer den Uebergang, ohne
+    # Messungen unnoetig zu UNKNOWN zu machen.
+    totzone_anteil: 0.18
+    # Beruehren sich die Wolken, wird nicht getrennt, sondern auf die Rechnung
+    # mit dem AUS-Niveau allein zurueckgefallen.
+    min_wolken_abstand: 20.0
+    # GEMESSEN 2026-08-31 ueber die Lampenspur (137 484 Messungen, 36 Lampen).
+    # Anteil unentscheidbarer Messungen (UNKNOWN) mit dem alten Wert 0,50:
+    #     Bahn 2  0,1 %   Bahn 3  4,1 %   Bahn 4  11,3 %   Bahn 5  5,6 %
+    #
+    # Die AN-Schwelle lag im Mittel bei 211-219 und damit MITTEN im Auslaeufer
+    # der AUS-Wolke (Bahn 4: Wolke 170-190, Auslaeufer bis 230, AN erst ab 240).
+    # Weil ein Kegel schon als gefallen gilt, wenn er in EINEM der zehn
+    # abgetasteten Frames leuchtete, genuegte ein Ausreisser fuer einen Kegel,
+    # der nie fiel. Bildbeleg Bahn 4 F54238: Tafel zeigt 7, gezaehlt wurden 8.
+    #
+    # NEU BESTIMMT am 2026-09-01 zum engen ROI-Zuschnitt
+    # (tools/fit_lamp_thresholds.py ueber zwei Messstrecken x vier Bahnen).
+    #
+    # Gesucht waren die Anteile, bei denen ueberall zugleich die AUS-Schwelle
+    # ueber dem 95. Perzentil der AUS-Messungen und die AN-Schwelle unter dem
+    # 5. Perzentil der AN-Messungen liegt. Die Anforderungen der acht Faelle:
+    #
+    #     noetig off_fraction >  0,389  (Bahn 5, spaete Strecke)
+    #     erlaubt on_fraction <  0,809  (Bahn 4, spaete Strecke)
+    #
+    # KORRIGIERT am 2026-09-03. Die erste Fassung (0,49 / 0,70) legte die
+    # Schwellen an die RAENDER der Wolken statt zwischen sie -- die Bedingung
+    # war "AN-Schwelle unter dem 5. Perzentil der AN-Messungen", und die
+    # erfuellt auch eine Schwelle, die gerade eben darunter liegt.
+    #
+    # WAS DAS KOSTETE, gemessen am Lauf 2026-09-02_21-11-00:
+    #
+    #     Bahn   AUS-Wolke bis   AN-Wolke ab   Mitte   AN-Schwelle war
+    #        2           160,8         248,1   204,4             220,0
+    #        3           179,9         244,3   212,1             224,2
+    #        4           190,6         232,2   211,4             226,4
+    #        5           179,4         239,1   209,2             221,4
+    #
+    # Auf Bahn 4 blieben zwischen Schwelle und AN-Wolke nur 5,8 Punkte. Genau
+    # dort ging der einzige Wurf verloren, der gegen das Wurfprotokoll falsch
+    # war (F289308): Eine Lampe leuchtete mit 227,7 gegen eine Schwelle von
+    # 228,9 -- 1,2 Punkte zu schwach. Die uebrigen acht Lampen lagen bei 250;
+    # diese eine ist rund zwanzig Punkte dunkler als ihre Nachbarn.
+    #
+    # JETZT liegt die Totzone symmetrisch um die Mitte zwischen den Wolken.
+    # Der Anteil fuer die Mitte betraegt je Bahn 0,542 bis 0,592 (Median
+    # 0,574); die Totzone ist +-0,04 breit. Damit:
+    #
+    #     Bahn   AUS-Schwelle (Reserve)   AN-Schwelle (Reserve)
+    #        2          200,6   (+39,8)          210,0   (+38,1)
+    #        3          207,3   (+27,4)          215,5   (+28,8)
+    #        4          210,6   (+20,0)          218,2   (+14,0)
+    #        5          202,8   (+23,4)          211,8   (+27,3)
+    #
+    # Die knappste Reserve steigt damit von 5,8 auf 14,0 Punkte.
+    #
+    # WARUM DIE TOTZONE SO SCHMAL SEIN DARF: Zwischen den Wolken liegen 42 bis
+    # 87 Punkte Luft. Eine breite Totzone wuerde nur mehr Messungen zu UNKNOWN
+    # machen, und UNKNOWN haelt den letzten Zustand -- es entscheidet nicht
+    # besser, es entscheidet spaeter.
+    baseline_on_fraction: 0.61
+    baseline_off_fraction: 0.53
+    # Messungen ab hier praegen das Gedaechtnis NICHT -- eine leuchtende Lampe
+    # darf ihr eigenes AUS-Niveau nicht anheben.
+    #
+    # NACHGEZOGEN am 2026-09-01: Mit dem engen ROI liegt das niedrigste
+    # gemessene AN-Perzentil bei 236,8 (Bahn 4, spaete Strecke) -- der alte
+    # Wert 235 haette leuchtende Lampen ins Gedaechtnis gelassen. 215 liegt
+    # mittig zwischen dem hoechsten AUS p95 (191,4) und diesem 236,8.
+    baseline_ignore_above: 215.0
+    baseline_max_drift: 70.0
+    # Waerme nur als Plausibilitaetsschranke gegen helle, farblose Reflexe.
+    # Bewusst locker: Frueher waren beide Kriterien mit UND verknuepft, wodurch
+    # das schwaechere dominierte -- klar leuchtende Lampen wurden als UNKNOWN
+    # gemeldet, weil ihre Waerme knapp unter der Schwelle lag.
+    warmth_min: 12.0
+    # 0 = ALLE Pixel des ROI mitteln, kein Kernfilter.
+    #
+    # Der Kernfilter war ein Notbehelf fuer einen zu weiten Rahmen: Die Lampe
+    # fuellte das Rechteck nicht aus, der Rand war Gehaeuse. Seit die ROIs auf
+    # 50 % verkleinert und auf die gemessene Lampenmitte zentriert sind
+    # (tools/fit_lamp_rois.py), schadet er -- er nimmt einer ohnehin kleinen
+    # Pixelmenge nochmals 70 %.
+    #
+    # GEMESSEN am 2026-09-01, Trennluecke p5(AN) - p95(AUS) auf Bahn 4:
+    #
+    #     voller ROI, Kernfilter 70    44,8
+    #     voller ROI, ohne Filter      16,3
+    #     50 % ROI,   Kernfilter 70    42,1
+    #     50 % ROI,   ohne Filter      61,8
+    #
+    # Rahmengroesse und Kernfilter ersetzen einander. Beides zugleich entzieht
+    # der Messung ihre Datenbasis: 50 % von 12x11 Pixeln sind 6x6, davon die
+    # hellsten 30 % waeren elf Pixel.
+    #
+    # ACHTUNG: Dieser Wert gehoert zur Kalibrierung mit engen Lampen-ROIs. Mit
+    # einer Kalibrierung im alten Zuschnitt muss er zurueck auf 70.
+    core_percentile: 0
+    min_stable_frames: 2
+    # Jeden n-ten Frame die Lampen fuer die LIVE-ANZEIGE lesen (0 = aus).
+    live_preview_interval: 5
+    # Siehe config/default.yaml -- die Lampen blinken.
+    live_preview_smoothing_frames: 20
+
+    # WACHHUND GEGEN DEN LAUTLOSEN AUSFALL.
+    #
+    # Nach so vielen Wuerfen in Folge, bei denen die Lampen NULL melden und die
+    # Anzeigetafel etwas anderes, wird ein Messfehler ins Log geschrieben --
+    # als ERROR, gut sichtbar, einmal je Bahn. Die Analyse laeuft weiter.
+    #
+    # ANLASS (2026-09-07): Ein Lauf ueber 67 Wuerfe buchte auf allen vier
+    # Bahnen ausschliesslich "0 Kegel" und schickte das so an die Datenbank.
+    # Geladen war eine alte Kalibrierung mit Lampen-ROIs im doppelten Zuschnitt
+    # (0,080 x 0,075) -- zusammen mit `core_percentile: 0` mittelt der Detektor
+    # dann die leuchtende Lampe mit ihrer dunklen Umgebung und bleibt unter der
+    # Schwelle (250 -> 203 bei Schwelle 206). Im Log stand der Widerspruch in
+    # jeder Zeile, aber nirgends stand, dass etwas GRUNDSAETZLICH nicht stimmt.
+    #
+    # GEMESSEN (Serie = Wuerfe in Folge auf derselben Bahn):
+    #   2026-09-04 12:31    706 Wuerfe     0 Widersprueche   laengste Serie --
+    #   2026-09-04 15:12   1677 Wuerfe     2 Widersprueche   laengste Serie  1
+    #   2026-09-07 13:14     67 Wuerfe    61 Widersprueche   Serie 12 bis 17
+    #
+    # Zwischen 1 und 12 liegt so viel Luft, dass die genaue Wahl kaum zaehlt.
+    silent_failure_after: 5
+
+  digits:
+    # "seven_segment" = Segment-Dekodierung (bevorzugt, da erklaerbar),
+    # Alternativen spaeter: "template", "ocr", "ml"
+    implementation: "seven_segment"
+    # Ergebnisse unterhalb dieser Confidence fliessen NICHT in die Aggregation
+    min_confidence: 0.5
+    # Rotschwelle der leuchtenden Segmente
+    red_threshold: 120
+    # Mindestabstand von Rot zu Gruen/Blau. Das beige Gehaeuse ist im Rotkanal
+    # ebenfalls hell -- erst dieser Abstand trennt Anzeige von Gehaeuse.
+    red_min_margin: 45
+    # Ab welchem Fuellgrad gilt ein Segment als aktiv (0..1)
+    segment_on_ratio: 0.35
+    # Breite einer Ziffer im Verhaeltnis zur Hoehe.
+    # GEMESSEN ueber alle Felder und Bahnen: 0.53-0.71, Schwerpunkt 0.65.
+    # Wird gebraucht, um die Ziffern rechtsbuendig aufzureihen, wenn sich keine
+    # eindeutigen Luecken finden (fuehrende "1" hat links keine Segmente).
+    digit_aspect_ratio: 0.65
+    # Mindestluecke zwischen aktiven und inaktiven Segmenten, damit die adaptive
+    # Schwelle greift. Darunter gilt segment_on_ratio.
+    # Hintergrund: Feste Schwellen scheiterten -- gemessen lagen echte Werte bei
+    # 0.25 (aktiv) und 0.39 (inaktiv), also beidseitig knapp daneben.
+    min_segment_gap: 0.15
+    # Fuer einzeln eingerahmte Ziffern: Ein Segment gilt als aktiv, wenn es
+    # diesen Anteil des HELLSTEN Segments derselben Ziffer erreicht.
+    # Hintergrund: Feste Schwellen und "groesste Luecke" scheiterten beide --
+    # bei einer "0" sind 6 Segmente aktiv, die groesste Luecke liegt dann
+    # INNERHALB der aktiven und die Schwelle landet zu hoch.
+    segment_relative_ratio: 0.35
+    # Untergrenze gegen Rauschen bei dunkler Anzeige
+    segment_floor: 0.12
+    # Mindesthelligkeit im Ziffern-ROI (95. Perzentil Rotkanal), damit ueberhaupt
+    # gelesen wird. GEMESSEN: klar lesbar 255, verblassend 196-212, fast
+    # erloschen 76-96. Ohne diese Schranke macht Otsu aus Rauschen eine Ziffer
+    # -- bevorzugt eine "8", die dann der Lampenzaehlung widerspricht.
+    # Ab wann gilt eine Ziffernzelle als beleuchtet -- und WORAUF gemessen.
+    #
+    # 100 = Maximum des Rotkanals. Vorher galt das 95. Perzentil ueber die
+    # ganze Zelle; das verwarf lesbare Ziffern, weil eine "1" nur zwei von
+    # sieben Segmenten leuchtet und gemittelt dunkler bleibt als jede andere.
+    #
+    # GEMESSEN ueber 4800 Zellen, Anteil im unsicheren Bereich 150-245:
+    #     95. Perzentil  24,9 %  |  99. Perzentil  6,5 %  |  Maximum  3,6 %
+    # Dunkle Zelle (Anzeige leer): Maximum 114-119. Leuchtende: 246-255.
+    # Die Schwelle 200 liegt in der Luecke dazwischen.
+    min_display_brightness: 200
+    brightness_percentile: 100.0
+    # Mindest-Korrelation beim Template Matching (implementation: "template").
+    # Darunter wird "?" gemeldet statt geraten.
+    template_min_score: 0.30
+
+  # Feinausrichtung der handgesetzten Ziffernrahmen: ABGESCHALTET.
+  #
+  # Der Versuch, den Rahmen auf hoechste Confidence auszurichten, war ein
+  # Denkfehler: Confidence misst die Schaerfe der Mustertreffer, NICHT die
+  # Richtigkeit. GEMESSEN wurde daraufhin aus "001" ein "081" -- der verschobene
+  # Rahmen las die 0 selbstbewusst als 8, weil er Teile der Nachbarsegmente
+  # einfing. Ganze Bahnen bekamen dadurch falsche Wurfnummern (Bahn 5 startete
+  # bei 301 statt 1).
+  #
+  # Eine Feinausrichtung braucht ein Kriterium, das VOM ERGEBNIS UNABHAENGIG ist
+  # -- etwa die Lage des Ziffernumrisses. Mit 0 bleibt der kalibrierte Rahmen
+  # unveraendert, und das ist bis dahin die ehrlichere Wahl.
+  # Band um die Segmentschwelle, in dem eine Lesung als UNENTSCHIEDEN gilt.
+  #
+  # Kippt die Ziffer an EINEM Segment auf der Schwelle, ist sie geraten.
+  # GEMESSEN auf Bahn 5: Segment a lag bei 0,333, die Schwelle bei 0,288-0,326;
+  # aus "bcfg" (4) wurde "abcfg" (9), obwohl die Tafel eine 4 zeigte. Beide
+  # Muster unterscheiden sich seit BUG-009 in genau einem Segment.
+  #
+  # Eine FALSCHE Gegenprobe ist schaedlicher als gar keine: Sie erzeugt einen
+  # Widerspruch, wo keiner ist, und stellt die Lampen zu Unrecht in Frage.
+  segment_ambiguous_band: 0.06
+
+  refine_radius: 0
+
+  # Felder, die die Tafel ERST SPAET aktualisiert.
+  #
+  # Vom Nutzer beobachtet und gemessen bestaetigt: Wurfnummer und Kegelzahl
+  # stehen sofort nach GREEN_OFF richtig da, die SUMME erst kurz vor dem
+  # naechsten GREEN_ON. Das Sampling-Fenster umfasst rund 34 Frames, das
+  # Wurfintervall aber 216-338 -- die Summe wurde damit ausnahmslos im alten
+  # Stand gelesen, und der Zuwachs passte zum jeweils VORHERIGEN Wurf.
+  late_fields: [total_a, total_b]
+  late_read_interval: 5
+  late_keep: 14
+
+  # FEHLWURFZAEHLER (linkes Display, Q2). Einzige Quelle fuer Wuerfe ohne
+  # Kegel: Faellt nichts, schaltet die Anlage die gruene Lampe gar nicht aus,
+  # und der Wurf ist fuer den Trigger unsichtbar (Q10).
+  #
+  # Wird IMMER gelesen, nicht nur im Wurffenster -- ein Nullwurf faellt ja,
+  # waehrend die gruene Lampe an ist.
+  #
+  # GEMESSEN ueber 52 Minuten auf Bahn 2 (tools/verify_foul_counter.py):
+  #   11 638 von 15 557 Messungen lesbar (74,8 %)
+  #   Rohwerte {0: 10711, 1: 776, 3: 147, 7: 3, 70: 1}
+  #   nach dem Filter: genau EIN Anstieg, genau am Nullwurf des Protokolls
+  foul_field: left_display
+  foul_read_interval: 10
+  foul_stable_readings: 5
+  # Um hoechstens so viel darf der Zaehler zwischen zwei stabilen Staenden
+  # STEIGEN. Mehr ist keine Serie von Nullwuerfen, sondern eine Fehllesung:
+  # Gelesen wird alle 10 Frames, ein Wurfzyklus dauert 216-338 Frames -- also
+  # kann zwischen zwei Lesungen hoechstens EIN Wurf liegen.
+  #
+  # GEMESSEN ueber den vollen Spieltag 2026-08-29, Anstiege nach Sprunghoehe:
+  #     Bahn 2  +1: 1  |  Bahn 3  keine  |  Bahn 4  +1: 1, +3: 14  |  Bahn 5  +1: 2
+  # Die 14 Dreiersprunge buchten 42 erfundene Wuerfe -- Bahn 4 kam so auf 463
+  # Wuerfe bei 426 Gruenzyklen. Bildbeleg Frame 270290: Tafel zeigt `00`,
+  # gelesen wurde `03`.
+  foul_max_rise: 1
+
+  # Gesamt-Mindestconfidence, ab der ein Wurf als bestaetigt gilt
+  minimum_confidence: 0.6
+
+# -----------------------------------------------------------------------------
+# Frame-Sampling rund um ein Ereignis (Auftrag Paragraph 7)
+# Bewusst NICHT hartcodiert - waehrend der Entwicklung anzupassen.
+# -----------------------------------------------------------------------------
+sampling:
+  # Frame-Offsets nach GREEN_OFF (positiv = spaeter)
+  #
+  # Die Spanne muss laenger sein als eine Blink-Dunkelphase. GEMESSEN Frame fuer
+  # Frame ueber zwei Bahnen: Periode 28-30 Frames, Dunkelphase bis 15 Frames.
+  # Die fruehere Spanne [2, 5, 10] umfasste nur zehn Frames und konnte daher
+  # vollstaendig in eine Dunkelphase fallen -- genau das geschah (Bahn 2 Wurf 5:
+  # Lampen meldeten 1, die Tafel zeigte 9).
+  #
+  # Nebeneffekt, ebenso wichtig: Die Ziffernfelder bekommen mehr Stimmen fuer die
+  # stellenweise Aggregation. Die Anzeige steht zwischen zwei Wuerfen still, also
+  # kostet ein spaeterer Frame nichts an Aktualitaet.
+  frames_after_green_off: [2, 5, 10, 16, 22, 28, 34]
+  # Frame-Offsets vor GREEN_ON (negativ = frueher)
+  frames_before_green_on: [-2, -8]
+  max_frames_per_event: 10
+
+  # WAEHREND der Gruenphase mitlesen, jeden n-ten Frame. Die Kegel fallen ja
+  # dann -- vom Nutzer vorgeschlagen (2026-08-28).
+  #
+  # GEMESSEN gegen das Wurfprotokoll (tools/measure_report_delay.py, 474 Wuerfe):
+  #
+  #     ein Frame bei Gruen-AUS          82,7 %
+  #     Maximum ueber die Gruenphase     98,9 %
+  #     ganzes Fenster danach (frueher)  98,5 %
+  #     Gruenphase + 40 Frames           99,4 %   <- beides zusammen
+  #
+  # 5 Frames genuegen: Die Blinkperiode betraegt 28-30 Frames, die Dunkelphase
+  # bis 15 -- jede Leuchtphase wird damit mehrfach getroffen.
+  green_phase_interval: 5
+
+  # Wartezeit nach GREEN_OFF bis zur Meldung, in Frames (25 fps -> 40 = 1,6 s).
+  #
+  # Vorher wurde bis zum naechsten GREEN_ON gewartet: im Mittel 15 Sekunden,
+  # beim Spielwechsel bis zu einer Minute, und der letzte Wurf einer Aufnahme
+  # ging ganz verloren. Ab 40 Frames ist gemessen nichts mehr zu gewinnen
+  # (+25: 470 richtig, +40: 471, +150: 471).
+  #
+  # 0 stellt das alte Verhalten wieder her.
+  report_after_green_off: 40
+
+  # GRUNDLINIE AUCH VOR DEM GRUEN-AN LESEN (BUG-016, Nutzeridee 2026-09-01).
+  #
+  # Das Fenster `baseline_offsets` haengt am ERKANNTEN Gruen-AN. Meldet der
+  # Detektor zu spaet -- gemessen bis 69 Frames, weil der Gruenscore langsam
+  # durch die Totzone kroch --, rutscht es in die Zeit, in der die Kegel
+  # fallen. Die Grundlinie enthaelt dann den Wurf selbst, die Differenz wird
+  # null, und `discard_unchanged_cycles` verwirft ihn. Fuenf Wuerfe des
+  # Spieltags 2026-08-22 gingen so verloren.
+  #
+  # Die Gegenprobe haengt an keiner Erkennung: Beim Raeumen bleiben die
+  # Ergebnislampen leuchten, bis der naechste Wurf abgeschlossen ist. Der
+  # Stand kurz VOR dem Gruen-AN ist also derselbe wie kurz danach -- es sei
+  # denn, dazwischen ist etwas gefallen.
+  #
+  # Allein taugt auch er nicht: Beim Aufstellen loescht die Anlage die Lampen,
+  # und das faellt gemessen in 3 von 1610 Faellen in die letzten 17 bis 24
+  # Frames vor dem Gruen-AN.
+  #
+  # Beide Fehler zeigen in dieselbe Richtung -- falsch ist immer der GROESSERE
+  # Wert. Darum die Schnittmenge: Ein Kegel gehoert zur Grundlinie, wenn er
+  # vorher UND nachher lag.
+  #
+  # GEMESSEN an 1610 Wuerfen gegen die Tafel-Ziffer:
+  #     nur nachher (bisher)   99,63 %
+  #     nur vorher             99,44 %
+  #     Schnittmenge           99,63 %   -- und die fuenf Wuerfe kommen zurueck
+  baseline_before_green: true
+
+  # 50 Frames = 2 s. Die Lampen blinken mit 28-30 Frames Periode, ueber diese
+  # Spanne wird jede brennende Lampe mehrfach getroffen.
+  baseline_before_frames: 50
+
+  # GRUNDLINIE AUCH VOR DEM GRUEN-AN LESEN (BUG-016, Nutzeridee 2026-09-01).
+  #
+  # Das Fenster `baseline_offsets` haengt am ERKANNTEN Gruen-AN. Meldet der
+  # Detektor zu spaet -- gemessen bis 69 Frames, weil der Gruenscore langsam
+  # durch die Totzone kroch --, rutscht es in die Zeit, in der die Kegel
+  # fallen. Die Grundlinie enthaelt dann den Wurf selbst, die Differenz wird
+  # null, und `discard_unchanged_cycles` verwirft ihn. Fuenf Wuerfe des
+  # Spieltags 2026-08-22 gingen so verloren.
+  #
+  # Die Gegenprobe haengt an keiner Erkennung: Beim Raeumen bleiben die
+  # Ergebnislampen leuchten, bis der naechste Wurf abgeschlossen ist. Der
+  # Stand kurz VOR dem Gruen-AN ist also derselbe wie kurz danach -- es sei
+  # denn, dazwischen ist etwas gefallen.
+  #
+  # Allein taugt auch er nicht: Beim Aufstellen loescht die Anlage die Lampen,
+  # und das faellt gemessen in 3 von 1610 Faellen in die letzten 17 bis 24
+  # Frames vor dem Gruen-AN.
+  #
+  # Beide Fehler zeigen in dieselbe Richtung -- falsch ist immer der GROESSERE
+  # Wert. Darum die Schnittmenge: Ein Kegel gehoert zur Grundlinie, wenn er
+  # vorher UND nachher lag.
+  #
+  # GEMESSEN an 1610 Wuerfen gegen die Tafel-Ziffer:
+  #     nur nachher (bisher)   99,63 %
+  #     nur vorher             99,44 %
+  #     Schnittmenge           99,63 %   -- und die fuenf Wuerfe kommen zurueck
+  baseline_before_green: true
+
+  # 50 Frames = 2 s. Die Lampen blinken mit 28-30 Frames Periode, ueber diese
+  # Spanne wird jede brennende Lampe mehrfach getroffen.
+  baseline_before_frames: 50
+
+# -----------------------------------------------------------------------------
+# Zustandsmaschine
+# -----------------------------------------------------------------------------
+state_machine:
+  # Timeouts verhindern, dass eine Bahn nach einer Fehlerkennung dauerhaft haengt
+  analyzing_timeout_s: 5.0
+  stabilization_timeout_s: 3.0
+  # Bewusst gross: "Spieler werfen lange nicht" ist ein regulaerer Fall (Par. 22)
+  wait_green_timeout_s: 300.0
+  # Physikalisch unmoeglich schneller Folgewurf = Fehlerkennung
+  min_frames_between_throws: 25
+
+# -----------------------------------------------------------------------------
+# Zaehl- und Summenlogik
+# -----------------------------------------------------------------------------
+scoring:
+  # Wuerfe pro Zyklus/Satz. Zwischensumme nach jedem Zyklus.
+  throws_per_cycle: 15
+
+  # ENTFERNT: `throws_per_game`. Der Wert stand auf 30 und wurde nirgends
+  # verwendet -- ein toter Parameter, der die falsche Annahme nahelegt.
+  # Ein LAUF endet nicht nach einer festen Zahl von Wuerfen, sondern erst,
+  # wenn die Anlage zuruecksetzt (`000  0000`). Beim Training kann jemand
+  # 35 Wuerfe machen; gezaehlt wird, was die Anlage tut.
+  # Ein Rueckfall der Wurfnummer von >= game_reset_after auf <= game_reset_below
+  # gilt als Spielwechsel, nicht als Lesefehler. Belegt: Zwei Bahnen sprangen im
+  # Abstand von zwei Sekunden gemeinsam von 33 auf 4.
+  game_reset_below: 5
+  game_reset_after: 10
+  # Zweites, unabhaengiges Zeichen fuer den Spielwechsel, vom Nutzer beschrieben:
+  # Die untere Reihe steht zwischen zwei Spielen auf `000  0000`.
+  #
+  # GEMESSEN mit tools/measure_display_reset.py am 52-Minuten-Video:
+  #   Standzeit je Bahn        20 bis 90 Sekunden
+  #   an allen 3 Satzgrenzen   auf allen 4 Bahnen gefunden
+  #   Kontrolle mitten im Satz 0 Treffer in 3000 Frames (2 Fenster, 4 Bahnen)
+  #   Gleichzeitigkeit         NEIN -- bis zu 36 s Abstand zwischen den Bahnen
+  #
+  # Warum zusaetzlich zum Ruecksprung der Wurfnummer: Der Ruecksprung setzt
+  # voraus, dass zuvor mindestens `game_reset_after` Wuerfe gezaehlt wurden.
+  # Endet ein Spiel frueher, ist es damit nicht erkennbar -- der Nutzer weist
+  # darauf hin, dass die Ruecksetzung "meistens nach 30 Wurf, aber nicht immer"
+  # kommt. Der Nullzustand kennt diese Voraussetzung nicht.
+  game_reset_by_zero_display: true
+  game_reset_min_frames: 3
+  game_reset_total_field: total_b
+  game_reset_number_field: throw_number
+
+  # NUR DIE WURFNUMMER als Zeugen fuer den Spielwechsel, ohne die Summe.
+  #
+  # Bisher mussten beide Felder null zeigen. Das klingt sicherer, ist es aber
+  # nicht: Die Summe wird ZUERST gelesen und ist damit der Torwaechter -- ist
+  # sie unlesbar, wird die Wurfnummer nie geprueft.
+  #
+  # GEMESSEN am Spieltag 2026-08-22 (Lauf 2026-09-02_18-30-19, 1695 Wuerfe),
+  # Verfuegbarkeit der beiden Felder IM WURFFENSTER:
+  #
+  #     Bahn    Wurfnummer    Summe (total_b)
+  #        2        100,0 %            97,6 %
+  #        3        100,0 %             0,0 %
+  #        4        100,0 %             5,0 %
+  #        5        100,0 %             9,1 %
+  #
+  # Die Summe ist dort das SCHWAECHERE Feld, die Wurfnummer das staerkere.
+  #
+  # WICHTIGER VORBEHALT ZU DIESER TABELLE: Sie misst den Aggregator ueber die
+  # zehn Frames des Wurffensters (`min_digit_agreement` 0,5) -- und dort
+  # WECHSELT die Summe gerade, weil der Wurf verbucht wird. Die Nullzustands-
+  # Pruefung liest dagegen einzeln, alle 25 Frames, waehrend die Anzeige
+  # stillsteht. Die Tabelle belegt also nicht direkt, dass die Summe auch DORT
+  # schweigt; sie zeigt nur, welches der beiden Felder insgesamt robuster ist.
+  # Was der Wechsel wirklich bringt, sagt der Lauf-Vergleich unten.
+  #
+  # WAS DEN SCHUTZ WEITER TRAEGT: `game_reset_min_frames` verlangt mehrere
+  # Messungen in Folge, und `is_readable` faengt die unlesbare Anzeige ab,
+  # bevor sie faelschlich als Null durchgeht. Eine Wurfnummer von 000 ist
+  # ausserdem waehrend des Spiels kein normaler Zustand -- sie laeuft 001..030.
+  #
+  # PREIS: Die Wurfnummer wird jetzt in jedem geprueften Frame gelesen, nicht
+  # nur wenn die Summe null zeigt. Das kostet Rechenzeit.
+  game_reset_number_only: true
+  # Takt der Nullzustands-Pruefung in Frames -- UNABHAENGIG vom Wurffenster.
+  #
+  # GEMESSEN 2026-08-30: Vorher wurde nur zwischen GREEN_OFF und dem naechsten
+  # GREEN_ON gelesen. Damit hing die Erkennung daran, ob die Anlage die Anzeige
+  # zufaellig waehrend einer Gruenpause zuruecksetzte:
+  #
+  #     Bahn 2   000/0000 stand F127115-F128475 (54 s)
+  #              Fenster offen bis F127177 -- 62 Frames.  NICHT erkannt
+  #     Bahn 3   000/0000 stand F126680-F128715 (81 s)
+  #              Fenster offen bis F126964 -- 284 Frames. erkannt
+  #
+  # Ergebnis ueber die ganze Aufzeichnung: Bahn 2 fand 2 Spielenden, Bahn 3
+  # dreizehn -- bei nahezu gleicher Wurfzahl.
+  #
+  # Der Nullzustand steht gemessen 40 bis 91 Sekunden. 25 Frames (1 s) treffen
+  # ihn vielfach. Die Pruefung liest zuerst die Summe; die Wurfnummer nur, wenn
+  # die Summe null zeigt -- im laufenden Spiel also fast nie.
+  game_reset_check_interval: 25
+  # So viele Messungen IN FOLGE muessen etwas anderes als null zeigen, bevor
+  # der Nullzustand als verlassen gilt.
+  #
+  # GEMESSEN 2026-08-30, Abschnitt F164535-F166780, Takt 25 Frames -- laengste
+  # Straehne von Nicht-Null-Messungen INNERHALB des Nullzustands:
+  #     Bahn 2   17 Straehnen, laengste 3
+  #     Bahn 3    0 Straehnen
+  #     Bahn 4    4 Straehnen, laengste 6
+  #     Bahn 5    0 Straehnen
+  # Mit 3 meldete Bahn 4 denselben Wechsel dreimal. 10 laesst vier Messungen
+  # Luft. Kostet nichts: 10 Sekunden, und so schnell beginnt kein neues Spiel.
+  game_reset_leave_frames: 10
+  # So viele Wuerfe muessen zwischen zwei Spielwechseln liegen. Ein Spiel hat
+  # 30 Wuerfe -- zwei Spielenden im Abstand von einem Wurf gibt es nicht.
+  #
+  # Es gibt ZWEI Zeugen fuer denselben Wechsel, beide gewollt: der Nullzustand
+  # der Anzeige und der Rueckfall der Wurfnummer. Sie treffen nur nicht
+  # gleichzeitig ein -- der Nullzustand wird um bis zu zwei Wuerfe
+  # weitergereicht, der Rueckfall greift sofort.
+  #
+  # GEMESSEN ueber den vollen Spieltag 2026-08-29, Wuerfe je erkanntem Spiel:
+  #     Bahn 2   25 Spiele: 1,1,1,1,1,1,1,1, 19,19,19, 29x5, 30x6, 32
+  #     Bahn 3   16 Spiele: 1, 19,20,21, 29, 30x11
+  #     Bahn 5   20 Spiele: 1,2, 20,21,21,28, 30x8, 31x3
+  # Die Ein- und Zwei-Wurf-Spiele sind ausnahmslos der doppelt gemeldete
+  # Wechsel. 5 deckt die gemessene Verzoegerung ab und laesst echte kurze
+  # Saetze (19, 20, 21) unangetastet.
+  game_reset_min_gap_throws: 5
+  # Wuerfe ohne Kegel ueber den Fehlwurfzaehler melden (Q10). Setzt voraus,
+  # dass `left_display` stellenweise kalibriert ist -- sonst passiert nichts.
+  detect_zero_throws: true
+  # Gruenzyklen verwerfen, bei denen die Kegelraute am Ende genau dasselbe
+  # zeigt wie am Anfang. Dann ist nichts gefallen -- und ein Wurf ohne Kegel
+  # erzeugt gar keinen Zyklus (Q10), der kommt ueber den Fehlwurfzaehler.
+  # Ein Zyklus ohne Veraenderung ist also eine Stoerung, kein Wurf.
+  # GEMESSEN: genau einer von 479 Zyklen, und genau der stand nicht im
+  # Wurfprotokoll. Bedingung ist eine vollstaendige Lampenmessung -- waren
+  # Lampen unlesbar, sagt die Gleichheit nichts.
+  discard_unchanged_cycles: true
+
+  # Ein Gruenzyklus, bei dem sich NICHTS geregt hat, ist kein Wurf: 0 Kegel,
+  # Wurfnummer unveraendert UND Fehlwurfzaehler unveraendert.
+  #
+  # GEMESSEN 2026-08-30 (Spieltag 2026-08-29, Bahn 5): Ein einziger solcher
+  # Zyklus verschob die gesamte folgende Wurfnummernkette um eins.
+  #     Spieler A, F40903    16/30 -> 29/30 nach Korrektur
+  #     Spieler D, F179349  27/30 -> 30/30 nach Korrektur
+  # Der Schaden entsteht durch den VERSATZ, nicht durch den falschen Wurf.
+  #
+  # Bewusst NICHT ueber die Zyklusdauer entschieden: ein echter Wurf lief ueber
+  # 7 Frames, ein falscher ueber 46 -- die Bereiche ueberlappen vollstaendig.
+  # Sind Wurfnummer oder Fehlwurfzaehler nicht lesbar, wird nichts verworfen.
+  discard_static_zero_cycles: true
+
+  # NULL KEGEL BRAUCHT EINEN ZEUGEN.
+  #
+  # Faellt kein Kegel, gibt es nichts aufzustellen -- die Anlage schaltet die
+  # gruene Lampe gar nicht erst aus (Q10). Ein Gruenzyklus mit null Kegeln
+  # entsteht deshalb fast immer aus etwas anderem als einem Wurf.
+  #
+  # GEMESSEN am Spieltag 2026-08-22, alle 19 Wuerfe mit null Kegeln:
+  #
+  #     Herkunft            Anzahl   Tafel-Ziffer   Lage im Abschnitt
+  #     fehlwurfzaehler          4   immer 0        mitten im Satz
+  #     gruenzyklus             15   nie vorhanden  erster/letzter Wurf
+  #
+  # Die Trennung ist vollstaendig. Acht der fuenfzehn stehen als ERSTER Wurf
+  # nach einem Spielwechsel, fuenf als LETZTER eines Warmwerf-Blocks -- und
+  # genau diese Bloecke hatten dadurch 31 statt 30 bzw. 21 statt 20 Wuerfe.
+  #
+  # `discard_static_zero_cycles` faengt sie nicht: Jene Regel verlangt eine
+  # unveraenderte Wurfnummer, beim Spielwechsel springt sie aber von 30 auf 1.
+  #
+  # PREIS: Ein echter Nullwurf ohne lesbare Tafelziffer geht verloren. Das ist
+  # bewusst so -- ein erfundener Wurf verschiebt die ganze Wurfnummernkette
+  # dahinter, ein fehlender nur sich selbst.
+  discard_zero_without_digit: true
+
+  # WURFNUMMER 000 -- ES GAB KEINEN WURF, PUNKT (Nutzerbeobachtung, 2026-09-03).
+  #
+  # Die Anlage zaehlt die Wurfnummer hoch, BEVOR der Einschlag im Bild
+  # sichtbar wird -- ein Frame, bevor der Ball trifft, springt die Anzeige auf
+  # 001. Umgekehrt zwingend: Solange sie 000 zeigt, hat noch KEIN Wurf
+  # stattgefunden -- unabhaengig davon, was die Kegellampen oder die
+  # Kegelzahl-Ziffer in diesem Moment zeigen. Die koennen naemlich noch das
+  # ERGEBNIS des VORHERIGEN Wurfs zeigen: Auf Bahn 4 leuchtete die Ziffer "9"
+  # von F30000 bis F30323 nach, waehrend die Lampen laengst aus waren.
+  #
+  # KORREKTUR (2026-09-03, voller Spieltag durchlaufen): Die vier Wuerfe, die
+  # diese Regel urspruenglich beheben sollte -- die "21." eines 20-Wurf-
+  # Warmwerf-Blocks, Bahn 3 F218448, Bahn 4 F126593, Bahn 4 F218644, Bahn 5
+  # F220170 -- zeigten GEMESSEN Wurfnummer 21, NICHT 000. Diese Regel hat im
+  # ganzen Lauf kein einziges Mal gegriffen. Die vier Faelle sind NICHT
+  # behoben -- ein Versuch (`discard_warmup_lock_cycle`) wurde am 2026-09-04
+  # zurueckgebaut, weil er nie griff und Wurf 21 eines regulaeren Satzes
+  # mitgefangen haette. Diese Regel bleibt fuer ihren urspruenglichen Fall
+  # stehen (Wurfzaehler springt VOR dem sichtbaren Einschlag auf 001).
+  #
+  # Staerker als `discard_zero_without_digit`: Diese Regel braucht weder eine
+  # erkannte Verdeckung noch die Kegelzahl -- nur die Wurfnummer selbst, die
+  # zuverlaessigste aller Quellen (ueber den Spieltag zu 100 % lesbar).
+  discard_zero_throw_number: true
+
+  # AB WANN SIND SICH DIE FRAMES EINIG? (BUG-020, gemessen 2026-09-04)
+  #
+  # Diese Schwelle ist etwas anderes als `throw_number_min_confidence`:
+  # jene misst, wie gut eine Ziffer auf EINEM BILD zu erkennen war, diese nur,
+  # ob die Frames DASSELBE gesehen haben. Die Regel oben braucht die zweite --
+  # der Kommentar dort sagte das immer schon ("eine Fehllesung flackert, ein
+  # echter Stillstand ist felsenfest"), geliefert wurde aber die erste.
+  #
+  # GEMESSEN am Sperrzyklus Bahn 4, F126593 (10 Sample-Frames):
+  #     alle zehn lasen '0','0','0'          -> Einigkeit 1,00
+  #     Scores der fuehrenden Stellen 0,35   -> unter `min_confidence` 0,5
+  # Ergebnis: Jede Stimme fiel durch, das Feld wurde None, und die Regel
+  # konnte nicht greifen -- obwohl die Anzeige zehnmal dasselbe zeigte.
+  throw_number_min_agreement: 0.9
+
+  # So viele FUEHRENDE Stellen bleiben bei der Einigkeit unbewertet.
+  # 1, weil ein Spiel 30 Wuerfe hat -- eine Hunderterstelle gibt es fachlich
+  # nicht (Nutzerangabe 2026-09-04). Sie steht dauerhaft auf einer dunklen
+  # Null und wird chronisch schwach gelesen; sie mitzubewerten hiesse, das
+  # ganze Feld an einer Stelle scheitern zu lassen, die nichts aussagt.
+  throw_number_ignore_leading: 1
+
+  # ZWEI FELDER, NICHT EINS (Q16, Nutzerhinweis 2026-09-04:
+  # "ein 9 als 30 ist durchaus sehr nah an 00").
+  #
+  # GEMESSEN an acht echten Neunern ueber alle vier Bahnen: ZWEI davon (25 %)
+  # las der Detektor an der Einerstelle als 0 -- und zwar in zehn von zehn
+  # Frames, also mit voller zeitlicher Einigkeit:
+  #
+  #     Bahn 3, Wurf 9  ->  ('0','3','0')   Summe 71
+  #     Bahn 4, Wurf 9  ->  ('0','1','0')   Summe unlesbar
+  #
+  # Beide entgingen der Regel nur, weil die ZEHNERSTELLE ebenfalls falsch
+  # war -- Zufall, keine Konstruktion. Einigkeit hilft hier nicht: Sie
+  # schuetzt gegen Flackern, nicht gegen systematische Fehllesung.
+  #
+  # Die Summe ist der zweite, UNABHAENGIGE Zeuge. Beim Spielwechsel zeigt die
+  # Anlage "000 0000"; ein echter Wurf hat eine Summe ueber null. GEMESSEN an
+  # denselben 24 Wuerfen: Summen von 12 bis 71, kein einziger auf null.
+  # Damit muessten zwei getrennt gelesene Felder gleichzeitig falsch sein.
+  discard_zero_requires_zero_total: true
+
+  # TAFEL-VERDECKUNG WAEHREND DES FENSTERS (BUG-017, Nutzerbeobachtung
+  # 2026-09-03: "könnte man Live nicht Personen detektieren, und wenn ein
+  # Mensch durch die Gruenphase laeuft...").
+  #
+  # Die Verdeckungsbremse in lane_processor friert Zustand und Messung
+  # waehrend einer Verdeckung ein -- aber tritt eine Person GENAU beim
+  # Wiedersichtbarwerden aus dem Bild, meldet die Zustandsmaschine sofort
+  # GREEN_ON, und das Fenster gilt als "fertig". 0 Kegel ist dann keine
+  # Messung, sondern eine Luecke.
+  #
+  # GEMESSEN an drei Faellen: Der rohe Gruen-Score faellt irgendwo im
+  # Fenster auf exakt 0.0 (Kamera komplett verdeckt) -- im Unterschied zu den
+  # vier Faellen des Warmwerf-Sperrzyklus oben, deren Score nie unter 17
+  # faellt:
+  #
+  #     Bahn 5 F15569   Bahn 5 F16256   Bahn 2 F265724
+  #
+  # Beschraenkt auf 0 Kegel: Ein NICHT-leeres Ergebnis waehrend einer
+  # Verdeckung ist in diesem Material nicht beobachtet.
+  discard_occluded_zero_throws: true
+
+  # Ein Gruenzyklus, bei dem die WURFNUMMER DER TAFEL sich nicht geruehrt hat,
+  # ist kein Wurf -- unabhaengig von der Kegelzahl.
+  #
+  # GEMESSEN 2026-08-31, zweiter Spieltag, Bahn 3 (Sollsumme 218):
+  #     Wurf 17  F247487  3 Kegel  Tafel: 3,  Wurfnummer 17
+  #     Wurf 18  F247898  1 Kegel  Tafel: unlesbar, Wurfnummer BLEIBT 17
+  #     Wurf 19  F248578  1 Kegel  Tafel: 1,  Wurfnummer 18
+  # Der Einschub zeigte EINEN Kegel -- `discard_static_zero_cycles` verlangt
+  # aber null und konnte ihn nicht fassen. Der Satz kam dadurch auf 219 Kegel
+  # in 31 Wuerfen statt 218 in 30.
+  #
+  # Die Anlage zaehlt ihre Wuerfe selbst. Ruehrt sich ihr Zaehler nicht, hat
+  # kein Wurf stattgefunden. Ist er NICHT LESBAR, wird nichts verworfen
+  # (BUG-008: Verwerfen bei unsicherer Lesung kostete 28 % der Wuerfe).
+  discard_cycles_without_throw_number: true
+  # So sicher muss die Wurfnummer gelesen sein, damit ihr Stillstand einen Wurf
+  # verwerfen darf. DAS ist der Unterschied zu BUG-008: Dort wurde bei nicht
+  # steigender Nummer verworfen und das kostete 28 % der Wuerfe -- weil die
+  # Nummer FEHLGELESEN war. Eine Fehllesung flackert und einigt sich ueber die
+  # abgetasteten Frames nicht; ein echter Stillstand ist felsenfest.
+  #
+  # GEMESSEN 2026-08-31 ueber 120 Frames je Wurf, alle zehn abgetastet:
+  #     Wurf 17  echt      Tafel  17 17 17 17 17 17 17 17 17 17 17 17
+  #     Wurf 18  PHANTOM   Tafel  17 17 17 17 17 17 17 17 17 17 17 17
+  #     Wurf 19  echt      Tafel  18 18 18 18 18 18 18 18 18 18 18 18
+  throw_number_min_confidence: 0.9
+  pin_count: 9
+  # Abweichung Lampen vs. Ziffer -> Confidence-Abschlag statt Verwerfen
+  mismatch_confidence_penalty: 0.4
+  # Summenpruefung aktiv
+  check_running_total: true
+  # Die Summenanzeige hinkt einen Wurf hinterher: Die Anlage traegt das
+  # Ergebnis erst kurz vor dem naechsten GREEN_ON ein (BUG-010), gemeldet wird
+  # der Wurf aber schon 1,6 s nach GREEN_OFF.
+  #
+  # GEMESSEN ueber einen ganzen Lauf, was zum Meldezeitpunkt dasteht:
+  #     vorherige Summe   294
+  #     aktuelle Summe      4
+  #     weder noch          7
+  #     nicht lesbar      175
+  #
+  # Geprueft wird deshalb gegen den Stand VOR diesem Wurf. Die Kette bleibt
+  # geschlossen -- der Stand vor Wurf N enthaelt das Ergebnis von Wurf N-1,
+  # jeder Wurf wird also bestaetigt, nur einen Wurf spaeter.
+  #
+  # Auf false, wenn wieder erst beim naechsten GREEN_ON gemeldet wird
+  # (sampling.report_after_green_off: 0).
+  displayed_total_lags: true
+  # Summe A gegen Summe B pruefen.
+  # GEKLAERT (Q3): Beide Felder sind Summen, aber NICHT zwangslaeufig gleich.
+  # Beleg: 2024-09-03 21-10-40.mp4, Frame 254 -> A=1990, B=0675 bei Wurf 89.
+  # Am Spielanfang stimmen sie ueberein (0063/0063 bei Wurf 12).
+  # Deutung: A = kumulierte Gesamtsumme, B = laufender Durchgang.
+  # Massgeblich fuer die Wurfauswertung ist B. Strikte Gleichheitspruefung daher aus.
+  check_total_a_vs_b: false
+  # GEKLAERT (Q2): Das linke zweistellige Display zaehlt die FEHLWUERFE (0 Kegel).
+  # Damit WAERE es eine unabhaengige Gegenprobe -- und die einzige Quelle, die
+  # einen Nullwurf verraet (siehe Q10: Bei 0 Kegeln schaltet die Anlage die
+  # gruene Lampe gar nicht aus, der Wurf ist fuer den Trigger unsichtbar).
+  #
+  # AUS, weil das Feld nicht lesbar ist. GEMESSEN ueber das ganze Video
+  # (tools/measure_throws_within_green.py):
+  #
+  #     Bahn 2:  0 von  8591 Messungen lesbar
+  #     Bahn 3:  0 von  8850
+  #     Bahn 4:  0 von  9832
+  #     Bahn 5:  0 von  9516
+  #
+  # Null von 36 789. Die Pruefung lief also seit ihrer Einfuehrung leer, ohne
+  # dass es auffiel -- eine Gegenprobe, die nichts prueft, ist schlimmer als
+  # keine, weil sie Sicherheit vortaeuscht.
+  #
+  # Ursache: `left_display` hat keine Rahmen je Ziffer und laeuft deshalb ueber
+  # den Gesamtfeld-Leser, der am Material 0/12 bis 7/12 erreicht. Werden die
+  # beiden Stellen einzeln kalibriert (wie throw_number, pin_count, total_b mit
+  # 59/70), wird das Feld voraussichtlich lesbar -- dann hier wieder auf true.
+  check_foul_count: false
+  # Groesster plausibler Sprung der Wurfnummer zwischen zwei erkannten Wuerfen.
+  # BEOBACHTET: Nach Wurf 2 lieferte die Ziffernerkennung einmal "703". Ohne
+  # diese Grenze waere der Zaehler der Bahn dauerhaft zerstoert -- alle weiteren
+  # Wuerfe gaelten als "bereits gebucht". Darueber wird die Ziffer verworfen und
+  # fortgezaehlt; die Zustandsmaschine hat den Wurf ohnehin bereits belegt.
+  max_throw_number_jump: 5
+
+# -----------------------------------------------------------------------------
+# Debug (Auftrag Paragraph 14 - Kernanforderung, kein Beiwerk)
+# -----------------------------------------------------------------------------
+debug:
+  directory: "debug"
+  save_frames: false
+  # Fehlerfaelle IMMER speichern, auch wenn save_frames aus ist - sie sind
+  # die wertvollsten Testdaten
+  save_failed_frames: false
+  # Kleine ROI-Ausschnitte statt Vollframes (spart erheblich Platz)
+  save_roi_crops: true
+  # Vollframes (1920x1080) zusaetzlich speichern.
+  # GEMESSEN: Ein Vollframe-PNG belegt 2,8 MB -> 4 Frames x 27 Ereignisse in nur
+  # 4 Minuten Video ergaben 289 MB. Bei 52 Minuten waeren das rund 4 GB.
+  # Standard aus: Gespeichert wird der Tafelausschnitt (wenige KB), der alles
+  # Auswertbare enthaelt. Vollframes nur als JPEG und nur auf Wunsch.
+  save_full_frames: false
+  # Auch die ZIFFERN-ROIs als Ausschnitte ablegen (Standard aus -- rund
+  # dreimal so viele Dateien je Ereignis). Einschalten, wenn eine Frage
+  # an einer Ziffer haengt: Bei BUG-009, den fuenf Ziffer-Abweichungen
+  # und BUG-018 lag genau dieses Material nicht vor.
+  save_digit_rois: false
+  max_events_per_lane: 200
+  jpeg_quality: 92
+  # Strukturiertes Event-Log (JSONL) zusaetzlich zum Text-Log
+  event_log: true
+
+  # Spur der gruenen Lampe je Frame und Bahn (gruenspur.csv im Laufordner).
+  # Ohne sie laesst sich "warum hat er hier ausgeloest?" nicht beantworten --
+  # die entscheidenden Frames liegen VOR dem ersten gespeicherten Bild.
+  # Kosten rund 6 MB bei 52 Minuten und vier Bahnen.
+  green_trace: true
+  # Messwerte der neun Kegellampen mitschreiben -- samt Grundlinie und beiden
+  # Schwellen. Ohne den Massstab sagt ein Messwert nichts darueber, ob er
+  # richtig eingeordnet wurde; genau daran zeigte sich der Fehler der gruenen
+  # Lampe (derselbe Score, zwei Zustaende).
+  lamp_trace: true
+  # Takt in Frames. 25 = einmal je Sekunde. Bei neun Lampen auf vier Bahnen
+  # ergibt das rund 430 000 Zeilen fuer eine Aufzeichnung von 3,5 Stunden --
+  # dieselbe Groessenordnung wie die Gruenspur.
+  lamp_trace_interval: 25
+
+  # Jeder erkannte Wurf sofort als CSV-Zeile (wuerfe.csv im Laufordner).
+  #
+  # Vorher schrieb ein Lauf nur die Gruenspur und die Bilder -- die
+  # Wurfergebnisse gab es nur ueber die Werkzeuge, also erst in einem ZWEITEN
+  # Durchlauf ueber dasselbe Video. An einem Spieltag laeuft die Analyse aber
+  # genau einmal, live.
+  #
+  # Wird zeilenweise geschrieben und sofort geleert: Bricht der Lauf ab,
+  # steht alles bis zum letzten Wurf trotzdem in der Datei.
+  throw_log: true
+
+  # JE WURF EIN BELEGBILD: die entzerrte Tafel mit allen Rahmen, darueber
+  # Zeitpunkt und Herkunft, darunter die gemessenen Werte samt Pruefungen.
+  #
+  # WOZU: Eine Zahlenzeile in `wuerfe.csv` sagt, WAS erkannt wurde, aber nicht,
+  # warum. Wer eine Zeile anzweifelt, sieht hier nach -- ohne Video, ohne
+  # Werkzeug. Genau die Frage, die dieses Projekt jederzeit beantworten koennen
+  # soll (Auftrag Paragraph 14, 27).
+  #
+  # SPEICHERBEDARF, gemessen an einem Spieltag mit 1695 Wuerfen:
+  #
+  #     Format                     je Bild   Spieltag
+  #     PNG, Faktor 3              1,6 MB     2,7 GB
+  #     JPEG q85, Faktor 3         295 KB     0,51 GB
+  #     JPEG q85, Faktor 2          93 KB     0,16 GB   <- Vorgabe
+  #
+  # Standard AUS: Ein Belegbild je Wurf ist wertvoll, aber niemand soll
+  # ungefragt ein Sechstel Gigabyte je Spieltag erzeugen.
+  throw_sheet: false
+  # Vergroesserung der entzerrten Tafel. 2 ist lesbar, 3 komfortabel -- und
+  # dreimal so teuer.
+  throw_sheet_scale: 2
+  throw_sheet_quality: 85
+  # Nur Wuerfe ablegen, bei denen etwas nicht stimmt: Status ungleich VALID
+  # oder Lampen und Tafelziffer uneins. Bei 1695 Wuerfen waren das zuletzt 23
+  # statt 1695 Bilder -- rund 2 MB.
+  throw_sheet_only_flagged: false
+
+  # Je Bahn ein Blatt: Wuerfe in den Zeilen, Laeufe in den Spalten
+  # (bahn{N}_laeufe.csv im Laufordner). Ein LAUF ist der Abschnitt zwischen
+  # zwei Ruecksetzungen der Anlage -- sie zeigt dabei `000  0000` und beginnt
+  # neu bei Wurf 1.
+  #
+  # Die Zeilenzahl richtet sich nach der HOECHSTEN tatsaechlich erreichten
+  # Wurfnummer, nicht nach 30: Ein abgebrochener oder verlaengerter Durchgang
+  # soll nicht stillschweigend abgeschnitten werden.
+  cycle_sheets: true
+
+logging:
+  level: "INFO"          # DEBUG | INFO | WARNING | ERROR
+  file: "debug/kegel_cv.log"
+  console: true
+  # Bei 25 fps x 4 Bahnen entstehen sonst schnell Millionen Zeilen
+  max_file_mb: 50
+  backup_count: 3
+
+gui:
+  window_width: 1600
+  window_height: 1000
+  show_debug_overlay: true
+  show_roi_labels: true
+  # Maximale Zeilen im Debug-Panel (Ringpuffer - sonst waechst der Speicher)
+  debug_panel_max_lines: 500
+
+# -----------------------------------------------------------------------------
+# Ergebnisausgabe. ApiSink und LocalDatabaseSink sind Phase 12 -
+# architektonisch vorbereitet, NICHT implementiert.
+# -----------------------------------------------------------------------------
+sinks:
+  jsonl:
+    enabled: true
+    path: "debug/throws.jsonl"
+
+# -----------------------------------------------------------------------------
+# Ergebnisversand (Auftrag Paragraph 26)
+#
+# Jeder erkannte Wurf wird sofort verschickt -- der Spielleiter vor Ort soll ihn
+# sehen, waehrend noch gespielt wird.
+# -----------------------------------------------------------------------------
+output:
+  # Das Tafelbild je Wurf mitschicken -- der Beleg zum Ergebnis.
+  #
+  # Uebertragen wird NUR die eingemessene Anzeigetafel, nichts aus der Halle.
+  # Als Base64 in derselben Zeile, nicht in einem eigenen Speicher-Dienst: So
+  # gilt fuer das Bild dieselbe Warteschlange und dieselbe Nachlieferung wie
+  # fuer den Wurf.
+  #
+  # Die Spalte muss in der Tabelle vorhanden sein:
+  #     alter table throws add column if not exists board_jpeg text;
+  send_board_image: true
+
+  # GEMESSEN am Ausschnitt eines echten Wurfs (152x154 px, Bahn 2, F26984):
+  #     Qualitaet 40 -> 4,8 KB      70 ->  6,7 KB
+  #     Qualitaet 55 -> 5,5 KB      PNG -> 46,4 KB
+  # Bei rund 2000 Wuerfen je Spieltag sind 40 also etwa 9 MB.
+  board_image_quality: 40
+
+  # Wie viele Frames nach der Freigabe (GREEN_ON) das "davor"-Bild noch
+  # nachgefuehrt wird. 25 Frames = eine Sekunde bei 25 fps: lang genug, dass die
+  # Anlage die Aufstellung gesetzt hat, kurz genug, dass in dieser Zeit niemand
+  # schon geworfen hat (ein Wurfzyklus dauert gemessen 216 bis 338 Frames).
+  #
+  # ANLASS (2026-09-07): Der erste Versuch schrieb bis zum naechsten GREEN_OFF
+  # mit und lieferte ein Bild, auf dem das Ergebnis SCHON STAND -- GREEN_OFF ist
+  # das Sperren NACH dem Wurf. Belegt an Bahn 5, id 3089/3093/3098: "davor" und
+  # "danach" zeigten dasselbe untere Display.
+  # Das "davor"-Bild: die Tafel in dem Frame, in dem die GRUENE LAMPE
+  # ANGEHT -- die Aufstellung, auf die geworfen wird. Vom Nutzer so
+  # festgelegt (2026-09-07), nachdem zwei andere Zeitpunkte beide ein
+  # Bild lieferten, auf dem das Ergebnis schon stand.
+  send_board_before_image: true
+  supabase:
+    # Aus, solange nichts eingerichtet ist. Dann laeuft alles wie bisher.
+    enabled: true
+
+    # Projekt-URL (Supabase-Dashboard, Settings -> API -> Project URL).
+    #
+    # STEHT IN DER `.env`, nicht hier -- als `SUPABASE_URL`. Sie ist kein
+    # Geheimnis (jede lesende Anwendung traegt sie), aber sie benennt die
+    # Datenbank EINES BESTIMMTEN Vereins: In einer geteilten Konfigurationsdatei
+    # ist das eine Einladung zum Ausprobieren, und fuer jeden anderen Nutzer
+    # ist sie schlicht falsch.
+    #
+    # Leer heisst "nicht eingerichtet": Es wird nichts versendet, die Analyse
+    # laeuft trotzdem. Der Wert hier ist nur der Rueckfall, wenn keine
+    # Umgebungsvariable gesetzt ist.
+    url: ""           # z. B. https://abcdefgh.supabase.co
+    url_env: "SUPABASE_URL"
+    table: "throws"
+
+    # DER SCHLUESSEL STEHT HIER NICHT.
+    #
+    # Diese Datei liegt in der Versionsverwaltung -- Zugangsdaten duerfen das
+    # nie. Angegeben wird nur der NAME der Umgebungsvariablen, aus der der
+    # Schluessel gelesen wird:
+    #
+    #     Windows:   setx SUPABASE_KEY "eyJhbGciOi..."
+    #     Git-Bash:  export SUPABASE_KEY="eyJhbGciOi..."
+    #
+    # Fehlt die Variable, wird nichts versendet und eine Warnung geschrieben --
+    # die Analyse laeuft trotzdem.
+    api_key_env: "SUPABASE_KEY"
+
+    timeout_s: 5.0
+    max_retries: 3
+    retry_delay_s: 2.0
+
+    # Warteschlange zwischen Analyse und Versand. 500 Wuerfe sind mehr als ein
+    # ganzes Training -- die Analyse haengt also selbst bei totem Netz nie.
+    queue_size: 500
+
+    # Was nicht rausgeht, landet hier und wird beim naechsten Start
+    # nachgeliefert. Ein gezogenes Netzwerkkabel kostet damit keinen Wurf.
+    spool_file: "debug/versand_puffer.jsonl"
