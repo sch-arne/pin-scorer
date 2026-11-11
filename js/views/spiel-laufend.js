@@ -430,9 +430,12 @@ export function spielLaufendView() {
     return linked && !!syncMod && syncMod.istFremdAktiv(ownerOf(sp), meGeraet);
   }
   // Sperr-Feedback für die mutierenden Aktionen. true = darf bearbeiten.
-  function guardEdit() {
-    if (canEdit(state.aktiverSpieler)) return true;
-    const o = ownerOf(state.aktiverSpieler);
+  // Ohne Argument gilt der aktive Spieler — so rufen es alle Bedienelemente. Mit Argument
+  // prüft es einen BESTIMMTEN Spieler; das braucht addWurfAn, weil ein erkannter Wurf nicht
+  // zwingend den gerade angezeigten Spieler trifft.
+  function guardEdit(sp = state.aktiverSpieler) {
+    if (canEdit(sp)) return true;
+    const o = ownerOf(sp);
     toast(o && o.besitzer ? '🔒 Wird auf anderem Gerät erfasst' : 'Bahn frei — erst „Übernehmen"');
     return false;
   }
@@ -778,8 +781,8 @@ export function spielLaufendView() {
   // Der aktuell "laufende" Satz des aktiven Spielers = erster noch nicht fertiger Satz.
   // Würfe gehören immer nur in diesen einen Satz; erfasst man in einem NEUEREN Satz, ist
   // ein früherer noch offen — dann fragt der Satz-Wechsel-Dialog nach.
-  function frontSatz() {
-    const arr = state.bloecke[state.aktiverSpieler];
+  function frontSatz(sp = state.aktiverSpieler) {
+    const arr = state.bloecke[sp];
     const i = arr.findIndex((b) => !b.done);
     return i < 0 ? arr.length - 1 : i;
   }
@@ -881,11 +884,72 @@ export function spielLaufendView() {
   function koenigKegelFor(ctx) {
     return ctx.exact && ctx.universe.includes(5) ? ctx.universe.filter((p) => p !== 5) : null;
   }
-  function addWurf(pins, koenigFlag = false) {
-    if (!guardEdit()) return false;
-    const blk = current();
+  // Einen Wurf an ein EXPLIZITES Ziel anfügen: Spieler `sp`, Satz `st`, hinten dran.
+  //
+  // WOZU getrennt von addWurf: Die Handerfassung kennt ihr Ziel aus dem UI-Zustand
+  // (state.aktiverSpieler/aktiverSatz) — ein Bedienelement trifft immer den angezeigten
+  // Spieler. Die Wurferkennung kennt es von dort NICHT: sie leitet es aus der Bahn ab
+  // (logic/erkennung-zuordnung.js) und muss es mitgeben können, auch für einen Spieler, der
+  // gerade nicht angezeigt wird.
+  //
+  // Entscheidend ist, dass beide durch DIESELBE Tür gehen. Jede Sperre gilt unverändert auch
+  // für einen erkannten Wurf:
+  //   fremdes Gerät oder freie Bahn  -> nein (guardEdit)
+  //   Satz fertig oder voll          -> nein
+  //   ein früherer Satz noch offen   -> nein
+  //   Bahnwechsel steht noch aus     -> nein
+  //   mehr Holz als Kegel stehen     -> nein
+  // Eine Erkennung, die an den Sperren vorbei schreiben könnte, wäre kein Komfort, sondern
+  // eine zweite Erfassung mit eigenen Regeln.
+  //
+  // `kegel` ist optional: Liegt eine konkrete Kegelliste vor — die Erkennung liefert sie, die
+  // Handerfassung nur in Sonderfällen —, wird sie übernommen; sonst entscheidet
+  // defaultKegelFor wie bisher. `null` ist dabei eine gültige Angabe („Menge unbekannt"),
+  // deshalb wird auf `undefined` geprüft und nicht auf Falsyness.
+  function addWurfAn({ sp, st, pins, kegel = undefined, koenigFlag = false }) {
+    if (!guardEdit(sp)) return false;
+    const satzArr = state.bloecke[sp];
+    const blk = satzArr && satzArr[st];
+    if (!blk) return false;
     if (!Array.isArray(blk.koenig)) blk.koenig = blk.wuerfe.map(() => false);
+    if (blk.done) { toast('Satz ist fertig'); return false; }
+    if (blk.wuerfe.length >= c.wuerfeProSatz) { toast('Satz voll — alle Würfe erfasst'); return false; }
+    // In einen späteren Satz eintragen ist gesperrt, solange ein früherer noch offen ist.
+    const front = frontSatz(sp);
+    if (st > front) { toast(`Erst Satz ${front + 1} abschließen`); return false; }
+    // Ein Spieler kann maximal auf EINEN Bahnwechsel warten: steht der Wechsel nach einem
+    // fertigen Satz noch aus (physisch noch auf der alten Bahn), darf der nächste Satz noch
+    // nicht bespielt werden. Sonst würde man einen zweiten Bahnwechsel „vorziehen".
+    if (st > computeBahnState()[sp].pos) {
+      toast('Erst Bahnwechsel abwarten'); return false;
+    }
+    const idx = blk.wuerfe.length;
+    const ctx = throwContext(blk, idx);
+    const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
+    if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
+    const kk = koenigFlag ? koenigKegelFor(ctx) : null;
+    blk.wuerfe.push(pins);
+    blk.kegel.push(koenigFlag ? kk : (kegel !== undefined ? kegel : defaultKegelFor(blk, idx, pins)));
+    blk.koenig.push(koenigFlag && kk == null);   // Flag nur, wenn Kegel offen bleiben
+    // Sind mit diesem Wurf alle Teilsätze voll (alle Soll-Würfe des Satzes erfasst), wird der
+    // Satz automatisch beendet — kein manuelles Abschließen mehr nötig. Da die Würfe die
+    // Teilsätze der Reihe nach füllen, ist das genau erreicht, wenn wuerfeProSatz voll ist.
+    const autoDone = blk.wuerfe.length >= c.wuerfeProSatz;
+    if (autoDone) blk.done = true;
+    flashTs = Date.now(); persist(); render();
+    if (autoDone) toast('Satz automatisch beendet');
+    else if (koenigFlag) toast('König bleibt stehen');
+    return true;
+  }
+
+  // Ein Wurf aus der Bedienung: Ziel ist immer der angezeigte Spieler und sein gewählter
+  // Satz. Die Korrektur eines BESTEHENDEN Wurfs (editIdx) bleibt hier — sie gehört zum
+  // UI-Zustand und hat kein Gegenstück in der Erkennung.
+  function addWurf(pins, koenigFlag = false) {
     if (editIdx !== null) {
+      if (!guardEdit()) return false;
+      const blk = current();
+      if (!Array.isArray(blk.koenig)) blk.koenig = blk.wuerfe.map(() => false);
       if (editIdx < blk.wuerfe.length) {
         const ctx = throwContext(blk, editIdx);
         const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
@@ -899,34 +963,7 @@ export function spielLaufendView() {
       editIdx = null; flashTs = Date.now(); persist(); render();
       toast(koenigFlag ? `Wurf #${idx + 1} korrigiert · König steht` : `Wurf #${idx + 1} korrigiert`); return true;
     }
-    if (blk.done) { toast('Satz ist fertig'); return false; }
-    if (blk.wuerfe.length >= c.wuerfeProSatz) { toast('Satz voll — alle Würfe erfasst'); return false; }
-    // In einen späteren Satz eintragen ist gesperrt, solange ein früherer noch offen ist.
-    const front = frontSatz();
-    if (state.aktiverSatz > front) { toast(`Erst Satz ${front + 1} abschließen`); return false; }
-    // Ein Spieler kann maximal auf EINEN Bahnwechsel warten: steht der Wechsel nach einem
-    // fertigen Satz noch aus (physisch noch auf der alten Bahn), darf der nächste Satz noch
-    // nicht bespielt werden. Sonst würde man einen zweiten Bahnwechsel „vorziehen".
-    if (state.aktiverSatz > computeBahnState()[state.aktiverSpieler].pos) {
-      toast('Erst Bahnwechsel abwarten'); return false;
-    }
-    const idx = blk.wuerfe.length;
-    const ctx = throwContext(blk, idx);
-    const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
-    if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
-    const kk = koenigFlag ? koenigKegelFor(ctx) : null;
-    blk.wuerfe.push(pins);
-    blk.kegel.push(koenigFlag ? kk : defaultKegelFor(blk, idx, pins));
-    blk.koenig.push(koenigFlag && kk == null);   // Flag nur, wenn Kegel offen bleiben
-    // Sind mit diesem Wurf alle Teilsätze voll (alle Soll-Würfe des Satzes erfasst), wird der
-    // Satz automatisch beendet — kein manuelles Abschließen mehr nötig. Da die Würfe die
-    // Teilsätze der Reihe nach füllen, ist das genau erreicht, wenn wuerfeProSatz voll ist.
-    const autoDone = blk.wuerfe.length >= c.wuerfeProSatz;
-    if (autoDone) blk.done = true;
-    flashTs = Date.now(); persist(); render();
-    if (autoDone) toast('Satz automatisch beendet');
-    else if (koenigFlag) toast('König bleibt stehen');
-    return true;
+    return addWurfAn({ sp: state.aktiverSpieler, st: state.aktiverSatz, pins, koenigFlag });
   }
 
   // Alle k-elementigen Teilmengen von `arr` (aufsteigend, lexikografisch) als Kegel-Listen.
