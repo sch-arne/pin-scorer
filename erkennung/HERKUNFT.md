@@ -6,7 +6,7 @@ Video oder Livestream liest und je Wurf Bahn und gefallene Kegel liefert.
 | | |
 |---|---|
 | Quelle | <https://github.com/ni5080/Kegel_CV> (ni5080 / Niklas) |
-| Stand | `4e60f75` „BUG-035 Fall C: zwei Wuerfe in einer Gruenphase, gemessen am Schaden" |
+| Stand | `e63e047` „Das Debug-Paket fehlte im Repo — .gitignore traf auch src/kegel_cv/debug" |
 | Geholt | 11.11.2026, `master`, ohne Fremd-Historie |
 | Lizenz | siehe [LICENSE](LICENSE) |
 
@@ -33,35 +33,52 @@ in eigenen Dateien.
 `android/` ist bewusst **mitgekommen**: ein Telefon als zweiter Sensor an der Bahn bleibt eine
 Option, und `BahnFilterSink` trennt mehrere Sensoren schon heute sauber voneinander.
 
-## Was im Ursprungs-Repo fehlt: `src/kegel_cv/debug/`
+## Behoben: das fehlende `debug/`-Paket
 
-**Der Erkenner lässt sich aus einem frischen Clone nicht starten.** Das Paket
-`src/kegel_cv/debug/` ist auf GitHub nicht vorhanden — und zwar nicht aus
-Absicht, sondern wegen einer Zeile im `.gitignore` des Ursprungsprojekts:
+Beim ersten Holen fehlte `src/kegel_cv/debug/` vollständig — die `.gitignore`-Zeile `debug/`
+ohne führenden Schrägstrich traf nicht nur den Ausgabeordner, sondern auch das Quellpaket
+(`git check-ignore -v src/kegel_cv/debug/` belegte es). `main.py` und `analysis/pipeline.py`
+importieren daraus, also startete der Erkenner aus einem frischen Clone nicht, und 12
+Testdateien ließen sich nicht einmal einlesen.
+
+Gemeldet und **upstream behoben** (`e63e047`: die Zeile heißt jetzt `/debug/`, das Paket ist
+drin). Am 11.11.2026 nachgezogen. Seither importieren `kegel_cv.main` und
+`kegel_cv.analysis.pipeline` durch, und von den vorher 16 Fehlschlägen plus 12 Sammelfehlern
+bleibt genau einer übrig: **1479 Tests grün, 1 rot, 1 übersprungen.** Der rote steht im
+nächsten Abschnitt.
+
+## Offen: OpenCV liest unter Windows keine Pfade mit Umlauten
+
+**Das betrifft dieses Repo unmittelbar**, denn es liegt unter
+`…\OneDrive - Verein Osnabrücker Kegler e.V\…`. Gemessen am 11.11.2026, dieselbe Datei:
 
 ```
-$ git check-ignore -v src/kegel_cv/debug/
-.gitignore:36:debug/    src/kegel_cv/debug/
+cv2.imread(r"…\Osnabrücker Kegler e.V\…\data\boardtypes\FUNK_klassisch.png")  ->  None
+cv2.imread(r"C:\Users\…\AppData\Local\Temp\ascii_test.png")                   ->  (191, 190, 3)
+np.fromfile(<Umlaut-Pfad>) + cv2.imdecode(…)                                  ->  (191, 190, 3)
 ```
 
-Gemeint war damit der Ausgabeordner `debug/` im Projektstamm (Ereignisbilder,
-Spuren, hunderte Megabyte je Lauf). Ohne führenden Schrägstrich passt das
-Muster aber auf **jeden** Ordner dieses Namens, also auch auf das Quellpaket.
-Daraus importieren `src/kegel_cv/main.py` (`logging_setup`) und
-`src/kegel_cv/analysis/pipeline.py` (`frame_logger`, `green_trace`,
-`lamp_trace`, `cycle_sheet`, `throw_log`, `throw_sheet`).
+Die Datei ist in Ordnung — byte-identisch zum frischen Clone. OpenCV benutzt auf Windows die
+ANSI-Dateifunktionen und findet sie unter diesem Namen nicht. Folge: Die Tafeltyp-Bibliothek
+bleibt leer („Musterbild FUNK_klassisch.png liess sich nicht lesen"), die automatische
+Kalibrierung findet keinen Typ, und `tests/unit/test_auto_kalibrieren.py` schlägt fehl.
+Videodateien unter so einem Pfad kann `cv2.VideoCapture` ebenso nicht öffnen.
 
-Folgen hier:
+Ein Verzeichnis-Link mit ASCII-Namen auf diesen Ordner hilft **nicht**: der Code löst den
+Pfad über `Path.resolve()` zur echten Stelle zurück — gemessen, die Prüfung bleibt auch über
+die Verzweigung rot.
 
-* `python -m kegel_cv.main` bricht beim Import ab.
-* 12 Testdateien lassen sich nicht einlesen (dieselben Importe).
-* Der **Versand** ist davon unberührt: `sinks/` importiert nichts aus `debug/`,
-  und `tests/unit/test_pins_scorer.py` läuft vollständig.
+Betroffen sind wenige Stellen im fremden Code: `calibration/board_library.py` (`cv2.imread`,
+`cv2.imwrite`), `debug/frame_logger.py` (`cv2.imwrite`) und `video/file_source.py`
+(`cv2.VideoCapture`). Für Bilder ist der Umweg bekannt und einzeilig (`np.fromfile` +
+`cv2.imdecode`, beim Schreiben `cv2.imencode` + `tofile`); für `VideoCapture` gibt es keinen
+sauberen — dort hilft nur der kurze Pfadname (8.3) oder eben ein ASCII-Pfad.
 
-Zu beheben ist das nur beim Urheber: `.gitignore` auf `/debug/` ändern und
-`src/kegel_cv/debug/` nachreichen. Nachbauen wäre der falsche Weg — es sind
-seine Debug-Werkzeuge, und eine eigene Fassung davon würde bei jedem Abgleich
-kollidieren.
+**Deshalb hier nicht gepatcht:** Es ist ein Fehler des Erkenners, keiner der Anbindung, und
+er trifft jeden Betreiber mit einem Umlaut im Pfad — in einem deutschen Verein also leicht
+(„Osnabrücker", „Müller", „Köln"). Er gehört upstream behoben, sonst steht die Änderung bei
+jedem Abgleich im Weg. Bis dahin: den Erkenner von einem Pfad ohne Umlaute betreiben. Für den
+Rechner an der Bahn ist das ohnehin der Normalfall.
 
 ## Was wir geändert haben
 

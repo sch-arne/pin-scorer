@@ -33,7 +33,7 @@ Wurfprotokoll_*.pdf
 # Debugausgabe: Ereignisbilder, Spuren, Wurfprotokolle. Waechst pro Lauf um
 # hunderte Megabyte, und die Ordnernamen enthalten die Quelladresse -- bei
 # einer Kamera samt Zugangsdaten.
-debug/
+/debug/
 
 # Videomaterial. Einzelne Dateien im Gigabytebereich.
 kegelVideos/
