@@ -1,6 +1,35 @@
 # Plan: automatische Wurfbild-Erkennung an die App andocken
 
-Stand: 01.09.2026 · Status: Konzept, noch keine Zeile Code
+Stand: 11.11.2026 · Status: Erkenner angebunden, Zuordnungslogik gebaut, Oberfläche offen
+
+> ## Was seit dem 01.09. daraus geworden ist
+>
+> Der Plan unten ist weiter gültig, mit drei Abweichungen — jede davon, weil sich die
+> Annahme als falsch oder überholt erwiesen hat:
+>
+> **1. Die Erkennung ist nicht extern, sie liegt im Repo.** [Kegel_CV](https://github.com/ni5080/Kegel_CV)
+> ist als `erkennung/` kopiert und schreibt in UNSERE Datenbank, Tabelle `erkannter_wurf`
+> (Einrichtung: [`erkennung/docs/PINS_SCORER.md`](../erkennung/docs/PINS_SCORER.md),
+> Herkunft: [`erkennung/HERKUNFT.md`](../erkennung/HERKUNFT.md)). Damit entfällt die
+> Transportfrage aus Abschnitt 2: es ist Variante B, aber ohne fremdes Projekt — der
+> Erkenner hat einen eigenen Login und darf ausschließlich Rohzeilen einfügen.
+>
+> **2. Der Kontrakt sieht anders aus als in Abschnitt 1.** Gesendet werden die GEFALLENEN
+> Kegel, nicht die stehenden, und es gibt weder `bildVor` noch `seq` noch `konfidenz` —
+> der Erkenner schickt Bahn, Anzahl, Kegelnummern, Zeit und vier nullbare Ablesungen der
+> Tafel. Die Drift-Erkennung aus Abschnitt 4 kann sich deshalb nicht auf einen gemeldeten
+> Vorzustand stützen; sie hängt allein an der Abräum-Kette. Die Anforderungen 2, 3, 5 und 6
+> sind damit gegenstandslos. Anforderung 1 (Wurf-Trigger auch bei 0 Holz) ist erfüllt —
+> gemessen, 0-Holz-Würfe stehen in den Daten.
+>
+> **3. Phase 1 ist gebaut:** [`js/logic/erkennung-zuordnung.js`](../js/logic/erkennung-zuordnung.js)
+> mit 25 Tests, darunter ein Durchlauf gegen eine echte Aufzeichnung (65 Würfe,
+> 08.09.2026): 60 sauber zuordenbar, 5 angemahnt, und jeder Abräum-Wurf, der die Kette
+> bricht, ist auch angemahnt worden.
+>
+> Offen: `erkennung-strom.js` (Entdopplung, Lücken, Puffer je Bahn), der
+> `addWurfAn`-Umbau in der Erfassung und die Oberfläche (Abschnitt 3, Phase 3) samt
+> Betriebsmodus — bewusst zurückgestellt.
 
 Ausgangslage: Eine externe Erkennung (Kamera/Sensorik an der Bahn) liefert **nur erkannte
 Wurfbilder plus die Bahn**. Sie kennt weder Spieler noch Satz, Teilsatz oder Teilsatzmodus.
