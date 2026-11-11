@@ -1703,6 +1703,14 @@ create policy erkenner_delete on erkenner for delete
 -- Die zugeordneten Spalten müssen beim Einfügen LEER sein: zuordnen darf nur
 -- die App. Ohne diese Bedingung könnte ein übernommener Erkenner-Login Würfe
 -- direkt an eine Stelle im Satz hängen, die ihm nicht gehört.
+--
+-- GEMESSEN am 11.11.2026, und es sieht wie ein Fehler der Regel aus, ist aber keiner:
+-- Ein `insert ... RETURNING` scheitert hier, weil RETURNING zusätzlich die LESE-Erlaubnis
+-- für die neue Zeile verlangt — und lesen darf der Erkenner gerade nicht. Postgres meldet
+-- dabei „new row violates row-level security policy", zeigt also auf die falsche Ursache.
+-- Der Versand schickt deshalb `Prefer: return=minimal` (sinks/supabase.py); das ist keine
+-- Sparsamkeit beim Datenverkehr, sondern Voraussetzung. Nachprüfbar mit
+-- tools/rls-erkennung-pruefen.py.
 drop policy if exists erkannter_wurf_insert on erkannter_wurf;
 create policy erkannter_wurf_insert on erkannter_wurf for insert
   with check (

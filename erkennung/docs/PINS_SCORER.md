@@ -135,6 +135,26 @@ python tools/pins_scorer_pruefen.py          # nur anmelden
 python tools/pins_scorer_pruefen.py --wurf   # und einen Probewurf einfügen
 ```
 
+## Nachgeprüft, nicht behauptet
+
+Die Rechte des Erkenners sind gegen die Test-Datenbank gemessen —
+`tools/rls-erkennung-pruefen.py` (im Hauptprojekt) legt zwei gleichzeitig laufende
+Spiele auf einer Anlage an, arbeitet als die echten Rollen und nimmt am Ende alles
+zurück. Stand 11.11.2026: 24 von 24 Prüfungen grün. Darunter:
+
+* Der Erkenner-Login darf einfügen — nur für seine eigene `erkenner_id`, nur solange
+  `aktiv` gilt, und ohne jede Zuordnung.
+* Er sieht **nichts**: keine Würfe, keine Spiele, keine Profile, keine Spielernamen.
+* Das Gerät von Spiel B sieht nur die Würfe seiner Bahnen, nicht die von Spiel A auf
+  derselben Anlage — und kann einen fremden Wurf auch nicht auf sein Spiel umschreiben.
+* Nach Spielende verschwinden die unzugeordneten Würfe; der zugeordnete bleibt als Beleg.
+
+**Eine Falle, die dabei aufgefallen ist:** Ein `insert … RETURNING` scheitert, weil
+RETURNING zusätzlich das Leserecht auf die neue Zeile verlangt. Postgres meldet dann
+„new row violates row-level security policy" und zeigt damit auf die falsche Ursache.
+Unser Versand schickt `Prefer: return=minimal` und ist davon nicht betroffen — wer das
+je auf `return=representation` umstellt, sucht den Fehler an der falschen Stelle.
+
 ## Was am Upstream-Code geändert wurde
 
 Drei Stellen — alles andere steht in eigenen Dateien, damit der nächste Abgleich
