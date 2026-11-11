@@ -435,6 +435,12 @@ create index if not exists idx_erkenner_konto  on erkenner(konto);
 -- 2–5 wäre dann jede Zuordnung um eins verschoben, ohne dass es auffällt.
 alter table erkenner add column if not exists bahn_zuordnung jsonb not null default '{}'::jsonb;
 
+-- Mehrere Spiele gleichzeitig auf einer Anlage sind vorgesehen: Nichts bindet
+-- eine Anlage an ein Spiel, und `spiel_id` steht je ZEILE. Eine Kamera, die alle
+-- vier Tafeln sieht, versorgt also ein Spiel auf Bahn 2+3 und ein zweites auf
+-- 4+5 gleichzeitig. Wer welche Zeile sehen und zuordnen darf, entscheidet dabei
+-- die BAHN und nicht die Anlage — siehe pins_wurf_lesbar in policies.sql.
+
 -- Ein erkannter Wurf. Die GEMESSENEN Spalten heißen wie in Kegel_CV
 -- (lane, pins_count, pins, video_time_s, displayed_*), damit dessen Versand
 -- ohne Übersetzungsschicht schreiben kann; die ZUGEORDNETEN tragen unsere Namen.

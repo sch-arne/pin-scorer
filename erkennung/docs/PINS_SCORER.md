@@ -25,6 +25,24 @@ Wie die App zuordnet (`erkenner_id` → Bahn → Anlage → laufendes Spiel →
 `computeBahnState`), steht in `../docs/wurferkennung-plan.md`. Diese Seite ist
 noch nicht gebaut; der Erkenner schreibt bereits.
 
+## Mehrere Spiele gleichzeitig auf einer Anlage
+
+Vorgesehen und ohne Zusatzaufwand: Ein Erkenner, der alle vier Tafeln sieht,
+schreibt die Würfe aller vier Bahnen in dieselbe Tabelle. Läuft auf Bahn 2+3 ein
+Spiel und auf 4+5 ein zweites, holt sich jedes Erfassungsgerät nur die Zeilen
+*seiner* Bahnen — `erkannter_wurf.spiel_id` steht je Zeile, nicht je Anlage.
+
+Die Datenbank setzt das durch, nicht die App: `pins_wurf_lesbar(erkenner_id,
+lane)` in `supabase/policies.sql` gibt eine Zeile nur frei, wenn die Bahn zu
+einem laufenden Spiel gehört, in dem ich Mitglied bin. Das Gerät von Spiel A
+sieht die Würfe von Spiel B also nicht und kann sie auch nicht als übernommen
+markieren.
+
+Welche Bahn eine gemeldete `lane` meint, sagt `pins_erkenner_bahn(erkenner_id,
+lane)`: die gekoppelte `bahn_id`, sonst `erkenner.bahn_zuordnung`, sonst die
+gemeldete Zahl selbst. Die App muss dieselbe Übersetzung anwenden, bevor sie
+eine Zeile einem Satz zuordnet.
+
 ## Einrichten
 
 ### 1. Tabellen anlegen

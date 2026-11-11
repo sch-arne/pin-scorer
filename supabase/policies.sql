@@ -1533,46 +1533,145 @@ create trigger trg_wettkampf_ohne_personendaten before insert or update of confi
 -- genügt als Reparatur. Deshalb schreibt der Erkenner auch nur die GEMESSENEN
 -- Spalten — er kann die Zuordnung gar nicht setzen, weil er die Zeile nach dem
 -- Einfügen nicht mehr anfassen darf.
+--
+-- MEHRERE SPIELE GLEICHZEITIG AUF EINER ANLAGE sind vorgesehen, nicht die
+-- Ausnahme: eine Kamera sieht alle vier Tafeln, auf Bahn 2+3 läuft ein Spiel,
+-- auf 4+5 ein anderes. Deshalb entscheidet über das Lesen und Zuordnen eines
+-- Wurfs nicht die ANLAGE, sondern die BAHN: Wer in Spiel A erfasst, sieht die
+-- Würfe der Bahnen von Spiel A — und die von Spiel B nicht.
 alter table erkenner        enable row level security;
 alter table erkannter_wurf  enable row level security;
 
--- Helfer: Darf der aktuelle Account die Würfe DIESES Erkenners sehen/zuordnen?
--- Drei Wege:
---   1) Er hat den Erkenner eingerichtet (erkenner.besitzer), ODER
---   2) ihm gehört die Anlage, an der der Erkenner hängt, ODER
---   3) er erfasst gerade ein LAUFENDES Spiel auf dieser Anlage — das ist der
---      Alltagsfall: das Tablet an der Bahn muss die erkannten Würfe sehen, um
---      sie zu übernehmen, gehört aber weder die Anlage noch den Erkenner.
--- Bewusst NICHT dabei: der Login des Erkenners selbst (erkenner.konto). Er
--- bekommt damit auch über diesen Helfer kein Leserecht.
--- security definer, damit die Policy anlage/spiel lesen darf, ohne selbst RLS
--- auszulösen (und ohne Rekursion über erkannter_wurf).
-create or replace function pins_erkenner_lesbar(p_erkenner uuid)
+-- Policies zuerst lösen: Sie hängen an den Helfern darunter und würden in einer
+-- Datenbank, in der eine frühere Fassung steht, deren Umbau blockieren.
+drop policy if exists erkenner_select on erkenner;
+drop policy if exists erkannter_wurf_select on erkannter_wurf;
+drop policy if exists erkannter_wurf_update on erkannter_wurf;
+drop policy if exists erkannter_wurf_delete on erkannter_wurf;
+drop function if exists pins_erkenner_lesbar(uuid);
+
+-- Helfer: Wer verwaltet diesen Erkenner? Das ist, wer ihn eingetragen hat, und
+-- wem die Anlage gehört, an der er hängt. Verwalten heißt: alles sehen und auch
+-- löschen dürfen — das ist der Weg, die Tafelbilder eines Spieltags wieder
+-- loszuwerden. security definer, damit die Policy `anlage` lesen darf, ohne
+-- selbst RLS auszulösen.
+create or replace function pins_erkenner_verwalter(p_erkenner uuid)
 returns boolean
 language sql security definer stable
 set search_path = public as $$
   select exists (
     select 1 from erkenner e
      where e.id = p_erkenner
-       and (
-         e.besitzer = auth.uid()
-         or exists (select 1 from anlage a where a.id = e.anlage_id and a.besitzer = auth.uid())
-         or exists (select 1 from spiel s
-                     where s.anlage_id = e.anlage_id
-                       and s.status = 'laufend'
-                       and pins_ist_mitglied(s.id))
-       )
+       and (e.besitzer = auth.uid()
+            or exists (select 1 from anlage a
+                        where a.id = e.anlage_id and a.besitzer = auth.uid()))
   );
 $$;
 
-grant execute on function pins_erkenner_lesbar(uuid) to authenticated;
+grant execute on function pins_erkenner_verwalter(uuid) to authenticated;
+
+-- Helfer: Welche BAHNNUMMER meint eine gemeldete `lane` dieses Erkenners?
+-- Drei Fälle, in dieser Reihenfolge:
+--   1) Der Erkenner ist an genau eine Bahn gekoppelt (bahn_id) — dann gilt die,
+--      und was auf der Tafel steht, ist unerheblich.
+--   2) `bahn_zuordnung` übersetzt sie ({"1":2,...}) — für Tafeln ohne
+--      kalibrierte Bahnnummern, die Kegel_CV von links durchzählt.
+--   3) Sonst IST die gemeldete Zahl die Bahnnummer.
+create or replace function pins_erkenner_bahn(p_erkenner uuid, p_lane int)
+returns int
+language sql security definer stable
+set search_path = public as $$
+  select coalesce(
+    (select b.nummer from erkenner e join bahn b on b.id = e.bahn_id
+      where e.id = p_erkenner),
+    (select (e.bahn_zuordnung ->> p_lane::text)::int from erkenner e
+      where e.id = p_erkenner and (e.bahn_zuordnung ->> p_lane::text) ~ '^[0-9]+$'),
+    p_lane
+  );
+$$;
+
+grant execute on function pins_erkenner_bahn(uuid, int) to authenticated;
+
+-- Helfer: Die Bahnen, die ein Spiel bespielt.
+--
+-- SPIEGELT `laneListOf` in js/logic/bahnwechsel.js — entweder die explizit
+-- gewählte `bahnListe` (auch nicht fortlaufend) oder der klassische Bereich
+-- ersteBahn … ersteBahn+bahnen-1. Dass dieselbe Regel zweimal steht, ist der
+-- Preis dafür, dass die Datenbank sie durchsetzen kann; hier entscheidet sie
+-- NUR über Sichtbarkeit. Liefen die beiden auseinander, wäre die Folge "Zeile
+-- nicht sichtbar", nie "Wurf falsch zugeordnet" — zugeordnet wird allein in der
+-- App.
+--
+-- NULL bei einem Setup ohne brauchbare Bahnangaben. Die Aufrufer behandeln das
+-- als "keine Bahn" und zeigen dann nichts: lieber eine Zeile zu wenig sehen als
+-- die eines fremden Spiels.
+create or replace function pins_spiel_bahnen(p_spiel uuid)
+returns int[]
+language sql security definer stable
+set search_path = public as $$
+  select case
+    when jsonb_typeof(s.config_json -> 'bahnListe') = 'array'
+         and jsonb_array_length(s.config_json -> 'bahnListe') > 0
+      then (select array_agg(w::int)
+              from jsonb_array_elements_text(s.config_json -> 'bahnListe') w
+             where w ~ '^[0-9]+$')
+    when (s.config_json ->> 'ersteBahn') ~ '^[0-9]+$'
+         and (s.config_json ->> 'bahnen') ~ '^[1-9][0-9]*$'
+      then (select array_agg(n) from generate_series(
+              (s.config_json ->> 'ersteBahn')::int,
+              (s.config_json ->> 'ersteBahn')::int
+                + (s.config_json ->> 'bahnen')::int - 1) n)
+    else null::int[]
+  end
+  from spiel s where s.id = p_spiel;
+$$;
+
+grant execute on function pins_spiel_bahnen(uuid) to authenticated;
+
+-- Helfer: Darf ich die Würfe DIESES Erkenners von DIESER Bahn sehen/zuordnen?
+--   1) Ich verwalte den Erkenner, ODER
+--   2) ich erfasse gerade ein LAUFENDES Spiel, das genau diese Bahn bespielt.
+-- Fall 2 ist der Alltag: Dem Tablet an der Bahn gehört weder die Anlage noch
+-- der Erkenner — aber es darf die Würfe SEINER Bahnen übernehmen, und nur die.
+-- Läuft auf der Anlage parallel ein zweites Spiel, bleiben dessen Bahnen für
+-- mich unsichtbar.
+--
+-- Ein Erkenner ohne Anlage (mobiles System) hat über Fall 2 keine Leser: Ohne
+-- Anlage gibt es kein Spiel, das seine Bahnen beanspruchen könnte. Bis er einer
+-- Anlage zugeordnet ist, sieht nur sein Verwalter die Würfe.
+create or replace function pins_wurf_lesbar(p_erkenner uuid, p_lane int)
+returns boolean
+language sql security definer stable
+set search_path = public as $$
+  select pins_erkenner_verwalter(p_erkenner) or exists (
+    select 1
+      from erkenner e
+      join spiel s on s.anlage_id = e.anlage_id
+     where e.id = p_erkenner
+       and s.status = 'laufend'
+       and pins_ist_mitglied(s.id)
+       and pins_erkenner_bahn(p_erkenner, p_lane)
+             = any (coalesce(pins_spiel_bahnen(s.id), '{}'::int[]))
+  );
+$$;
+
+grant execute on function pins_wurf_lesbar(uuid, int) to authenticated;
 
 -- --- erkenner ---------------------------------------------------------------
--- Lesen: wer ihn eingerichtet hat, der Anlagen-Besitzer, wer auf der Anlage
--- erfasst — und der Erkenner selbst (er prüft beim Start seine eigene Zeile).
-drop policy if exists erkenner_select on erkenner;
+-- Lesen: der Verwalter, der Erkenner selbst (er prüft beim Start seine eigene
+-- Zeile) — und wer auf der Anlage erfasst. Letzteres bewusst OHNE Bahnfilter:
+-- Die Stammdaten (Name, Anlage, Bahnkopplung, Übersetzung) braucht jedes Gerät,
+-- um eine Wurfzeile überhaupt deuten zu können, und sie verraten nichts über
+-- ein fremdes Spiel.
 create policy erkenner_select on erkenner for select
-  using (konto = auth.uid() or pins_erkenner_lesbar(id));
+  using (
+    konto = auth.uid()
+    or pins_erkenner_verwalter(id)
+    or exists (select 1 from spiel s
+                where s.anlage_id = erkenner.anlage_id
+                  and s.status = 'laufend'
+                  and pins_ist_mitglied(s.id))
+  );
 
 -- Anlegen/Ändern/Löschen: nur ein Mensch, und nur an SEINER Anlage. Ein
 -- Erkenner ohne Anlage (mobiles System) gehört dem, der ihn einträgt.
@@ -1616,27 +1715,28 @@ create policy erkannter_wurf_insert on erkannter_wurf for insert
     and verworfen_grund is null
   );
 
--- LESEN und ZUORDNEN: wer auf dieser Anlage erfasst (siehe Helfer). Zusätzlich
--- bleibt ein bereits zugeordneter Wurf für die Mitglieder SEINES Spiels lesbar,
--- auch wenn dort inzwischen nichts mehr läuft — sonst wäre das Wurfprotokoll
--- nach dem Spiel plötzlich ohne Beleg.
-drop policy if exists erkannter_wurf_select on erkannter_wurf;
+-- LESEN und ZUORDNEN: wer auf DIESER Bahn erfasst. Zusätzlich bleibt ein
+-- bereits zugeordneter Wurf für die Mitglieder SEINES Spiels lesbar, auch wenn
+-- dort inzwischen nichts mehr läuft — sonst wäre das Wurfprotokoll nach dem
+-- Spiel plötzlich ohne Beleg.
 create policy erkannter_wurf_select on erkannter_wurf for select
-  using (pins_erkenner_lesbar(erkenner_id)
+  using (pins_wurf_lesbar(erkenner_id, lane)
          or (spiel_id is not null and pins_ist_mitglied(spiel_id)));
 
-drop policy if exists erkannter_wurf_update on erkannter_wurf;
+-- Beim Zuordnen gilt die Bahn-Regel in BEIDE Richtungen (using + with check):
+-- Sonst könnte das Gerät von Spiel A eine Zeile von Spiel B anfassen, indem es
+-- sie auf sein eigenes Spiel umschreibt — oder eine eigene Zeile an ein fremdes
+-- Spiel hängen.
 create policy erkannter_wurf_update on erkannter_wurf for update
-  using (pins_erkenner_lesbar(erkenner_id)
+  using (pins_wurf_lesbar(erkenner_id, lane)
          or (spiel_id is not null and pins_ist_mitglied(spiel_id)))
-  with check (pins_erkenner_lesbar(erkenner_id)
-              or (spiel_id is not null and pins_ist_mitglied(spiel_id)));
+  with check (pins_wurf_lesbar(erkenner_id, lane)
+              and (spiel_id is null or pins_ist_mitglied(spiel_id)));
 
--- LÖSCHEN: der Anlagen-Besitzer bzw. wer den Erkenner eingerichtet hat. Das ist
--- auch der Weg, die Tafelbilder (board_jpeg) eines Spieltags wieder loszuwerden.
-drop policy if exists erkannter_wurf_delete on erkannter_wurf;
+-- LÖSCHEN: nur der Verwalter. Ein Erfassungsgerät soll Würfe zuordnen oder als
+-- verworfen markieren, nicht Belege wegräumen.
 create policy erkannter_wurf_delete on erkannter_wurf for delete
-  using (pins_erkenner_lesbar(erkenner_id));
+  using (pins_erkenner_verwalter(erkenner_id));
 
 -- Der Erkenner-Login ist ein Gerät, kein Mensch: er braucht keinen Anonymous-
 -- Zugang. Nichts davon wird an `anon` ge-grantet — der Erkenner meldet sich mit
