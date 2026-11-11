@@ -1519,3 +1519,125 @@ $$;
 drop trigger if exists trg_wettkampf_ohne_personendaten on wettkampf;
 create trigger trg_wettkampf_ohne_personendaten before insert or update of config_json on wettkampf
   for each row execute function pins_wettkampf_ohne_personendaten();
+
+-- =============================================================================
+-- Wurferkennung (erkenner / erkannter_wurf)
+-- =============================================================================
+-- Der Erkenner hat einen EIGENEN Login (erkenner.konto) und darf damit genau
+-- eines: Würfe für seine eigene erkenner_id einfügen. Kein select, kein update,
+-- kein delete, kein Blick in Spiele, Profile oder Namen.
+--
+-- WARUM so eng: Der Rechner steht offen an der Bahn. Ein Service-Role-Key dort
+-- wäre ein Generalschlüssel für die ganze Datenbank; mit diesem Login ist der
+-- schlimmste Fall "jemand schleust falsche Würfe ein", und Passwort ändern
+-- genügt als Reparatur. Deshalb schreibt der Erkenner auch nur die GEMESSENEN
+-- Spalten — er kann die Zuordnung gar nicht setzen, weil er die Zeile nach dem
+-- Einfügen nicht mehr anfassen darf.
+alter table erkenner        enable row level security;
+alter table erkannter_wurf  enable row level security;
+
+-- Helfer: Darf der aktuelle Account die Würfe DIESES Erkenners sehen/zuordnen?
+-- Drei Wege:
+--   1) Er hat den Erkenner eingerichtet (erkenner.besitzer), ODER
+--   2) ihm gehört die Anlage, an der der Erkenner hängt, ODER
+--   3) er erfasst gerade ein LAUFENDES Spiel auf dieser Anlage — das ist der
+--      Alltagsfall: das Tablet an der Bahn muss die erkannten Würfe sehen, um
+--      sie zu übernehmen, gehört aber weder die Anlage noch den Erkenner.
+-- Bewusst NICHT dabei: der Login des Erkenners selbst (erkenner.konto). Er
+-- bekommt damit auch über diesen Helfer kein Leserecht.
+-- security definer, damit die Policy anlage/spiel lesen darf, ohne selbst RLS
+-- auszulösen (und ohne Rekursion über erkannter_wurf).
+create or replace function pins_erkenner_lesbar(p_erkenner uuid)
+returns boolean
+language sql security definer stable
+set search_path = public as $$
+  select exists (
+    select 1 from erkenner e
+     where e.id = p_erkenner
+       and (
+         e.besitzer = auth.uid()
+         or exists (select 1 from anlage a where a.id = e.anlage_id and a.besitzer = auth.uid())
+         or exists (select 1 from spiel s
+                     where s.anlage_id = e.anlage_id
+                       and s.status = 'laufend'
+                       and pins_ist_mitglied(s.id))
+       )
+  );
+$$;
+
+grant execute on function pins_erkenner_lesbar(uuid) to authenticated;
+
+-- --- erkenner ---------------------------------------------------------------
+-- Lesen: wer ihn eingerichtet hat, der Anlagen-Besitzer, wer auf der Anlage
+-- erfasst — und der Erkenner selbst (er prüft beim Start seine eigene Zeile).
+drop policy if exists erkenner_select on erkenner;
+create policy erkenner_select on erkenner for select
+  using (konto = auth.uid() or pins_erkenner_lesbar(id));
+
+-- Anlegen/Ändern/Löschen: nur ein Mensch, und nur an SEINER Anlage. Ein
+-- Erkenner ohne Anlage (mobiles System) gehört dem, der ihn einträgt.
+drop policy if exists erkenner_insert on erkenner;
+create policy erkenner_insert on erkenner for insert
+  with check (
+    besitzer = auth.uid()
+    and (anlage_id is null
+         or exists (select 1 from anlage a where a.id = anlage_id and a.besitzer = auth.uid()))
+  );
+
+drop policy if exists erkenner_update on erkenner;
+create policy erkenner_update on erkenner for update
+  using (besitzer = auth.uid())
+  with check (
+    besitzer = auth.uid()
+    and (anlage_id is null
+         or exists (select 1 from anlage a where a.id = anlage_id and a.besitzer = auth.uid()))
+  );
+
+drop policy if exists erkenner_delete on erkenner;
+create policy erkenner_delete on erkenner for delete
+  using (besitzer = auth.uid());
+
+-- --- erkannter_wurf ---------------------------------------------------------
+-- EINFÜGEN: nur der Login des Erkenners, nur für seine eigene erkenner_id, nur
+-- solange er aktiv ist. `aktiv = false` ist damit ein echter Aus-Schalter, der
+-- nicht vom Gerät an der Bahn abhängt.
+-- Die zugeordneten Spalten müssen beim Einfügen LEER sein: zuordnen darf nur
+-- die App. Ohne diese Bedingung könnte ein übernommener Erkenner-Login Würfe
+-- direkt an eine Stelle im Satz hängen, die ihm nicht gehört.
+drop policy if exists erkannter_wurf_insert on erkannter_wurf;
+create policy erkannter_wurf_insert on erkannter_wurf for insert
+  with check (
+    exists (select 1 from erkenner e
+             where e.id = erkenner_id and e.konto = auth.uid() and e.aktiv)
+    and spiel_id is null
+    and satz_block_id is null
+    and wurf_index is null
+    and uebernommen_am is null
+    and verworfen_grund is null
+  );
+
+-- LESEN und ZUORDNEN: wer auf dieser Anlage erfasst (siehe Helfer). Zusätzlich
+-- bleibt ein bereits zugeordneter Wurf für die Mitglieder SEINES Spiels lesbar,
+-- auch wenn dort inzwischen nichts mehr läuft — sonst wäre das Wurfprotokoll
+-- nach dem Spiel plötzlich ohne Beleg.
+drop policy if exists erkannter_wurf_select on erkannter_wurf;
+create policy erkannter_wurf_select on erkannter_wurf for select
+  using (pins_erkenner_lesbar(erkenner_id)
+         or (spiel_id is not null and pins_ist_mitglied(spiel_id)));
+
+drop policy if exists erkannter_wurf_update on erkannter_wurf;
+create policy erkannter_wurf_update on erkannter_wurf for update
+  using (pins_erkenner_lesbar(erkenner_id)
+         or (spiel_id is not null and pins_ist_mitglied(spiel_id)))
+  with check (pins_erkenner_lesbar(erkenner_id)
+              or (spiel_id is not null and pins_ist_mitglied(spiel_id)));
+
+-- LÖSCHEN: der Anlagen-Besitzer bzw. wer den Erkenner eingerichtet hat. Das ist
+-- auch der Weg, die Tafelbilder (board_jpeg) eines Spieltags wieder loszuwerden.
+drop policy if exists erkannter_wurf_delete on erkannter_wurf;
+create policy erkannter_wurf_delete on erkannter_wurf for delete
+  using (pins_erkenner_lesbar(erkenner_id));
+
+-- Der Erkenner-Login ist ein Gerät, kein Mensch: er braucht keinen Anonymous-
+-- Zugang. Nichts davon wird an `anon` ge-grantet — der Erkenner meldet sich mit
+-- E-Mail und Passwort an und ist damit `authenticated`.
