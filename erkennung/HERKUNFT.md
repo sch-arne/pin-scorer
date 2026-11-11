@@ -31,7 +31,37 @@ in eigenen Dateien.
 | `scratch_*.py` | Kurzlebige Skripte des Urhebers, von nichts aufgerufen. |
 
 `android/` ist bewusst **mitgekommen**: ein Telefon als zweiter Sensor an der Bahn bleibt eine
-Option, und `BahnFilterSink` trennt mehrere Sensoren schon heute saubereinander.
+Option, und `BahnFilterSink` trennt mehrere Sensoren schon heute sauber voneinander.
+
+## Was im Ursprungs-Repo fehlt: `src/kegel_cv/debug/`
+
+**Der Erkenner lässt sich aus einem frischen Clone nicht starten.** Das Paket
+`src/kegel_cv/debug/` ist auf GitHub nicht vorhanden — und zwar nicht aus
+Absicht, sondern wegen einer Zeile im `.gitignore` des Ursprungsprojekts:
+
+```
+$ git check-ignore -v src/kegel_cv/debug/
+.gitignore:36:debug/    src/kegel_cv/debug/
+```
+
+Gemeint war damit der Ausgabeordner `debug/` im Projektstamm (Ereignisbilder,
+Spuren, hunderte Megabyte je Lauf). Ohne führenden Schrägstrich passt das
+Muster aber auf **jeden** Ordner dieses Namens, also auch auf das Quellpaket.
+Daraus importieren `src/kegel_cv/main.py` (`logging_setup`) und
+`src/kegel_cv/analysis/pipeline.py` (`frame_logger`, `green_trace`,
+`lamp_trace`, `cycle_sheet`, `throw_log`, `throw_sheet`).
+
+Folgen hier:
+
+* `python -m kegel_cv.main` bricht beim Import ab.
+* 12 Testdateien lassen sich nicht einlesen (dieselben Importe).
+* Der **Versand** ist davon unberührt: `sinks/` importiert nichts aus `debug/`,
+  und `tests/unit/test_pins_scorer.py` läuft vollständig.
+
+Zu beheben ist das nur beim Urheber: `.gitignore` auf `/debug/` ändern und
+`src/kegel_cv/debug/` nachreichen. Nachbauen wäre der falsche Weg — es sind
+seine Debug-Werkzeuge, und eine eigene Fassung davon würde bei jedem Abgleich
+kollidieren.
 
 ## Was wir geändert haben
 

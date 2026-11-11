@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ..config.schema import AppConfig
 from .base import BahnFilterSink, NullSink, ResultSink
+from .pins_scorer import ENV_EIN, aus_umgebung
 from .queued import QueuedSink
 from .supabase import SupabaseSink
 
@@ -41,8 +42,38 @@ def _baue_abnehmer(cfg: AppConfig, video_id: str,
     Versandeinstellung darf die Analyse nicht verhindern: Der Nutzer will seine
     Wuerfe sehen, auch wenn die Datenbank noch nicht eingerichtet ist.
     """
+    # DER PIN SCORER ZUERST (siehe sinks/pins_scorer.py). Er wird ueber die
+    # Umgebung eingeschaltet, nicht ueber die Konfiguration: Welche Datenbank
+    # und welcher Erkenner -- das gehoert zur INSTALLATION, und die Zugangsdaten
+    # duerfen ohnehin nie in eine Datei, die in der Versionsverwaltung liegt.
+    # Steht in der Umgebung nichts, bleibt alles beim Upstream-Weg darunter.
+    eigener = aus_umgebung(video_id)
+    if eigener is not None:
+        return QueuedSink(
+            eigener,
+            spool_file=Path(cfg.output.supabase.spool_file)
+            if cfg.output.supabase.spool_file else None,
+            max_retries=cfg.output.supabase.max_retries,
+            retry_delay_s=cfg.output.supabase.retry_delay_s,
+            queue_size=cfg.output.supabase.queue_size,
+            video_id=video_id,
+            mit_bild=cfg.output.send_board_image,
+            mit_vorher=cfg.output.send_board_before_image,
+            # KEIN Spielname: Bei uns gehoert die Partie zum `spiel` in der
+            # Datenbank, die Zuordnung macht die App. Eine Textspalte daneben
+            # waere eine zweite, konkurrierende Wahrheit.
+            game_name="",
+            game_name_column="",
+        )
+
     supabase = cfg.output.supabase
     if not supabase.enabled:
+        if ENV_EIN in os.environ:
+            # Hier steht der Schalter, aber `aus_umgebung` hat abgelehnt -- der
+            # Grund steht eine Zeile vorher im Protokoll. Diese Meldung sagt,
+            # was daraus folgt, damit nicht jemand eine halbe Stunde nach dem
+            # Versand sucht, der nie eingerichtet war.
+            log.warning("Es wird NICHTS versendet (siehe Meldung oben).")
         return NullSink()
 
     schluessel = os.environ.get(supabase.api_key_env, "")

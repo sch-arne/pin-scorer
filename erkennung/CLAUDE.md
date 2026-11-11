@@ -1,5 +1,15 @@
 # CLAUDE.md — Arbeitsanweisung für dieses Projekt
 
+> **Dies ist eine KOPIE in einem anderen Projekt.** Der Ordner `.claude/` des
+> Urhebers — 11 Fach-Skills und 38 Fehlerberichte — ist nicht mitgekommen
+> (Begründung in [HERKUNFT.md](HERKUNFT.md)). Die unten verlangten Dateien
+> `.claude/skills/*` gibt es hier also nicht; sie stehen bei Bedarf im
+> Ursprungsprojekt: <https://github.com/ni5080/Kegel_CV/tree/master/.claude/skills>
+>
+> Was in DIESER Kopie anders ist — Versand in die Datenbank des Pin Scorers,
+> Anmeldung als eigener Benutzer — steht in [docs/PINS_SCORER.md](docs/PINS_SCORER.md).
+> Die sieben Regeln und die Sprachkonvention unten gelten unverändert.
+
 ## Vor jeder Aufgabe
 
 1. **`.claude/skills/ORCHESTRATION.md` lesen** — Projektzustand, Phasenplan, Skill-Landkarte.

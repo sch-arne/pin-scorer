@@ -1,5 +1,11 @@
 # Kegel_CV — automatische Kegelerfassung aus Video
 
+> **Diese Kopie schreibt in die Datenbank des Pin Scorers.** Wie das eingerichtet
+> wird und was dafuer gegenueber dem Ursprungsprojekt geaendert wurde, steht in
+> [docs/PINS_SCORER.md](docs/PINS_SCORER.md); zur Herkunft des Ordners
+> [HERKUNFT.md](HERKUNFT.md). Der dort erwaehnte Liveticker (`apps/liveticker`)
+> ist nicht mitgekommen -- das Mitlesen macht der Pin Scorer selbst.
+
 Lokale Desktop-Anwendung, die aus einem Kegelbahn-Video oder Livestream jeden
 Wurf selbst erfasst: **welche Kegel gefallen sind, wie viele, auf welcher Bahn,
 wann.** Gelesen wird die Anzeigetafel der Anlage (FUNK), nicht die Kegel selbst.

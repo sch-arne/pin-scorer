@@ -66,6 +66,25 @@ class SupabaseSink(ResultSink):
             throw, video_id=self.video_id, game_name=self.game_name,
             game_name_column=self.game_name_column)])
 
+    def _kopfzeilen(self) -> dict[str, str]:
+        """Die Kopfzeilen des POST -- als eigene Methode, damit ein anderer
+        Anmeldeweg sie ersetzen kann.
+
+        ANGEPASST FUER DEN PINS SCORER (siehe docs/PINS_SCORER.md): Hier stehen
+        `apikey` und `Authorization` auf demselben Wert, weil ein Schluessel
+        beides ist. Meldet sich der Versand dagegen als BENUTZER an, sind es
+        zwei verschiedene Werte -- der oeffentliche Schluessel des Projekts und
+        das Zugangstoken der Anmeldung. Genau das braucht `PinsScorerSink`.
+        """
+        return {
+            "apikey": self.api_key,
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            # Ohne diesen Kopf antwortet PostgREST mit der eingefuegten
+            # Zeile -- Datenverkehr, den niemand braucht.
+            "Prefer": "return=minimal",
+        }
+
     def send_rows(self, rows: list[dict[str, Any]]) -> None:
         """Schickt mehrere Zeilen in EINEM Aufruf.
 
@@ -78,14 +97,7 @@ class SupabaseSink(ResultSink):
         koerper = json.dumps(rows).encode("utf-8")
         anfrage = urllib.request.Request(
             self.endpoint, data=koerper, method="POST",
-            headers={
-                "apikey": self.api_key,
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                # Ohne diesen Kopf antwortet PostgREST mit der eingefuegten
-                # Zeile -- Datenverkehr, den niemand braucht.
-                "Prefer": "return=minimal",
-            },
+            headers=self._kopfzeilen(),
         )
         try:
             with urllib.request.urlopen(anfrage, timeout=self.timeout_s) as antwort:
