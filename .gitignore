@@ -5,6 +5,10 @@ Thumbs.db
 # Lokale Entwicklungs-Config (Test-DB-Zugangsdaten) — nie deployen
 js/backend/config.local.js
 
+# Zugang zur TEST-Datenbank, um schema.sql/policies.sql einzuspielen (PGURL=postgresql://...).
+# Niemals ins Repo: ein einmal gepushtes Passwort steht auch nach dem Loeschen in der Historie.
+supabase/.db-test.env
+
 # Lokaler Sportwinner-Test-Roster (nicht deployen)
 roster.json
 

@@ -21,6 +21,7 @@
 // Reine Logik: kein DOM, kein Store, kein Netz (Browser + Node ladbar, per Unit-Test geprüft).
 
 import { teilsatzRanges } from './teilsaetze.js';
+import { laneOf } from './bahnwechsel.js';
 import { isAbraeumMode, abraeumScan } from './abraeumen.js';
 import { normalisiere } from './profil-match.js';
 
@@ -203,7 +204,9 @@ export function findeSpieler(name, spielerListe, belegt = []) {
 }
 
 // Bahn eines Spielers im Satz — wie in logic/statistik.js und logic/wurf-csv.js.
-export const bahnOf = (c, sp, st) => (c.bahnplan?.[sp]?.[st] ?? (c.ersteBahn + st));
+// Bahn je Spieler und Satz. Der Name bleibt (die View und die Tests rufen ihn so);
+// die Regel selbst steht in logic/bahnwechsel.js.
+export const bahnOf = (c, sp, st) => laneOf(c, sp, st);
 
 // Bahn-Spalten der Datei den SÄTZEN des Spielers zuordnen.
 //

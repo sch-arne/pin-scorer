@@ -17,6 +17,13 @@ export function laneListOf(s) {
   return Array.from({ length: s.bahnen }, (_, i) => s.ersteBahn + i);
 }
 
+// Welche Bahn spielt Spieler `sp` in Satz `st`? Der Bahnplan des Setups sagt es; fehlt er
+// (Altbestand oder Spiel ohne Plan), gilt der klassische fortlaufende Bereich ab ersteBahn.
+// EINE Definition fuer alle: die Erfassung (views/spiel-laufend.js), der CSV-Import
+// (logic/wurf-csv-import.js: bahnOf) und die Wurferkennung (logic/erkennung-zuordnung.js)
+// muessen sich hier zwingend einig sein — sonst ordnet jede Stelle Saetze anders zu.
+export const laneOf = (c, sp, st) => (c.bahnplan?.[sp]?.[st] ?? (c.ersteBahn + st));
+
 export function lanePlan(s) {
   const laneList = laneListOf(s);
   const B = laneList.length;

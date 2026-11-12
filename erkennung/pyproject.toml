@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kegel-cv"
+version = "0.1.0"
+description = "Automatische Kegelerfassung aus Kegelbahn-Videos"
+requires-python = ">=3.10"
+dependencies = [
+    # OpenCV 4.5 ist die Untergrenze, weil das Telefon nichts Neueres bekommt:
+    # Chaquopy liefert 4.5.1, und der Erkennungskern muss dort dieselbe
+    # Bibliothek benutzen. Siehe android/README.md.
+    "opencv-python>=4.5",
+    "numpy>=1.23",
+    # Nur die Oberflaeche. Erkennung, Analyse und Kalibrierung kommen ohne aus
+    # -- deshalb laufen sie auf dem Telefon.
+    "PySide6>=6.5",
+    "PyYAML>=6.0",
+]
+
+# KEIN pydantic. Sein Kern ist in Rust geschrieben und laeuft nicht auf
+# Android; die Feldpruefung steht deshalb in `kegel_cv/schema.py` -- klein
+# genug, dass eine Fremdbibliothek dafuer zu viel waere. Siehe dort.
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-cov>=4.1"]
+
+[project.scripts]
+kegel-cv = "kegel_cv.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = [
+    "integration: Test benoetigt echte Frames oder Videodateien",
+    "gui: Test benoetigt eine QApplication",
+]
+
+[tool.coverage.run]
+source = ["src/kegel_cv"]
+omit = ["*/gui/*"]

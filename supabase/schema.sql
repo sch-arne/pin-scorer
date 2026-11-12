@@ -388,3 +388,108 @@ create table if not exists konto_uebergabe (
   von         uuid not null references auth.users(id) on delete cascade,
   erstellt_am timestamptz not null default now()
 );
+
+-- =============================================================================
+-- Wurferkennung (Kegel_CV) — erkennung/
+-- =============================================================================
+-- Ein ERKENNER ist ein Gerät, das die Anzeigetafeln liest (Rechner an der Bahn,
+-- später ein Telefon) und je Wurf eine Zeile schreibt. Er kennt NUR Bahn und
+-- gefallene Kegel. Spieler, Satz, Teilsatz und Modus leitet die APP ab — der
+-- Erkenner darf das nicht wissen, sonst gäbe es zwei Wahrheiten, die
+-- auseinanderlaufen (siehe docs/wurferkennung-plan.md, und erkennung/HERKUNFT.md
+-- zur Herkunft des Erkenners).
+--
+-- Deshalb trägt `erkannter_wurf` zwei getrennte Hälften:
+--   * GEMESSEN    — was der Erkenner schreibt: Bahn, Anzahl, Kegelnummern, Zeit.
+--   * ZUGEORDNET  — was die App einträgt, wenn sie den Wurf übernimmt:
+--                   spiel_id, satz_block_id, wurf_index.
+-- Die zweite Hälfte bleibt leer, bis die App zugeordnet hat. Eine Zeile ohne
+-- satz_block_id ist also noch kein Wurf im Spiel, nur eine Beobachtung.
+
+-- Ein registrierter Erkenner.
+--  * anlage_id NULL = mobiles System, das (noch) zu keiner Anlage gehört.
+--  * bahn_id   NULL = der Erkenner liest MEHRERE Bahnen (der Normalfall: eine
+--                     Kamera sieht alle vier Tafeln). Gesetzt heißt: er liest
+--                     genau diese eine Bahn, und `lane` der Zeile ist egal.
+--  * konto          = der LOGIN des Erkenners (eigener Supabase-Benutzer, nicht
+--                     der eines Menschen). Nur mit ihm darf er einfügen, und er
+--                     darf sonst nichts — siehe policies.sql.
+create table if not exists erkenner (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null,
+  anlage_id   uuid references anlage(id) on delete cascade,
+  bahn_id     uuid references bahn(id) on delete set null,
+  konto       uuid not null references auth.users(id) on delete cascade,
+  besitzer    uuid references auth.users(id) on delete set null,
+  aktiv       boolean not null default true,
+  gesehen_am  timestamptz,                   -- letzter eingegangener Wurf
+  erstellt_am timestamptz not null default now()
+);
+create index if not exists idx_erkenner_anlage on erkenner(anlage_id);
+create index if not exists idx_erkenner_konto  on erkenner(konto);
+
+-- Übersetzt die gemeldete `lane` auf unsere Bahnnummer: { "1": 2, "2": 3, ... }.
+-- Leer = die gemeldete Zahl IST die Bahnnummer.
+-- WOZU: Kegel_CV liest die Bahnnummer von der Anzeigetafel. Sind dort keine
+-- Nummern kalibriert, zählt es die Tafeln von links (1…4) — auf unseren Bahnen
+-- 2–5 wäre dann jede Zuordnung um eins verschoben, ohne dass es auffällt.
+alter table erkenner add column if not exists bahn_zuordnung jsonb not null default '{}'::jsonb;
+
+-- Mehrere Spiele gleichzeitig auf einer Anlage sind vorgesehen: Nichts bindet
+-- eine Anlage an ein Spiel, und `spiel_id` steht je ZEILE. Eine Kamera, die alle
+-- vier Tafeln sieht, versorgt also ein Spiel auf Bahn 2+3 und ein zweites auf
+-- 4+5 gleichzeitig. Wer welche Zeile sehen und zuordnen darf, entscheidet dabei
+-- die BAHN und nicht die Anlage — siehe pins_wurf_lesbar in policies.sql.
+
+-- Ein erkannter Wurf. Die GEMESSENEN Spalten heißen wie in Kegel_CV
+-- (lane, pins_count, pins, video_time_s, displayed_*), damit dessen Versand
+-- ohne Übersetzungsschicht schreiben kann; die ZUGEORDNETEN tragen unsere Namen.
+create table if not exists erkannter_wurf (
+  id            bigint generated always as identity primary key,
+  erkenner_id   uuid not null references erkenner(id) on delete cascade,
+
+  -- gemessen
+  lane          int  not null,                -- Bahn laut Erkenner (siehe bahn_zuordnung)
+  pins_count    int  not null,                -- gefallene Kegel in diesem Wurf
+  pins          int[],                        -- welche (1..9); Anzahl == pins_count
+  recorded_at   timestamptz not null default now(),
+  video_time_s  real,                         -- Zeitpunkt im Video/Stream, je Lauf ab 0
+  video_id      text,                         -- welche Aufnahme/Übertragung
+
+  -- abgelesen, nur Beleg: was die Tafel zeigte. NULL = nicht sicher gelesen.
+  -- NIE zum Rechnen benutzen — pins_count ist die einzige gemessene Wahrheit.
+  displayed_throw_number int,
+  displayed_pin_count    int,
+  displayed_foul_count   int,
+  displayed_total        int,
+  board_jpeg             text,                -- Base64-JPEG der Tafel nach dem Wurf
+  board_before_jpeg      text,                -- und davor (die Aufstellung)
+
+  -- zugeordnet (von der App, beim Übernehmen)
+  spiel_id       uuid references spiel(id) on delete cascade,
+  satz_block_id  uuid references satz_block(id) on delete cascade,
+  wurf_index     int,                         -- Index im block_json.wuerfe
+  uebernommen_am timestamptz,
+  verworfen_grund text                        -- gesetzt = bewusst NICHT übernommen
+);
+-- Der Arbeitsindex: die noch nicht zugeordneten Würfe eines Erkenners, neueste
+-- zuerst. Partiell, weil genau diese Zeilen gesucht werden — alle anderen sind
+-- erledigt und würden den Index nur aufblähen.
+create index if not exists idx_erkannter_wurf_offen
+  on erkannter_wurf (erkenner_id, recorded_at desc)
+  where satz_block_id is null and verworfen_grund is null;
+create index if not exists idx_erkannter_wurf_spiel on erkannter_wurf (spiel_id);
+create index if not exists idx_erkannter_wurf_block on erkannter_wurf (satz_block_id);
+
+-- Ein Wurf gehört zu höchstens einer Stelle im Satz. Ohne diese Regel könnten
+-- zwei Zeilen auf denselben Wurf zeigen und die Korrekturquote wäre wertlos.
+create unique index if not exists idx_erkannter_wurf_stelle
+  on erkannter_wurf (satz_block_id, wurf_index)
+  where satz_block_id is not null;
+
+-- Realtime: die App bekommt neue Würfe, während gespielt wird.
+-- Gleiche Form wie oben — `duplicate_object` heißt: steht schon in der Publikation.
+do $$
+begin
+  begin execute 'alter publication supabase_realtime add table erkannter_wurf'; exception when duplicate_object then null; end;
+end $$;
