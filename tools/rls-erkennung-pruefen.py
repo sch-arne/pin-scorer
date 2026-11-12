@@ -215,6 +215,34 @@ als(A)
 cur.execute("select count(*) from erkannter_wurf where id = %s", [pos3])
 pruefe("… und fuer A nur, weil er die Anlage besitzt", cur.fetchone()[0] == 1)
 
+# ── Status 'setup': der Alltag ────────────────────────────────────
+#
+# Ein geteiltes Spiel steht in der Datenbank auf 'setup', solange es gespielt wird: Der
+# LOKALE Status springt beim ersten Wurf auf 'laufend' (store.js, saveErfassung), der
+# entfernte wird erst beim Beenden geschrieben. In der Test-Datenbank gab es deshalb zu
+# diesem Zeitpunkt 47 Spiele auf 'setup' und KEIN EINZIGES auf 'laufend'.
+#
+# Die Policies prueften anfangs nur auf 'laufend' und waren damit im Betrieb wirkungslos
+# -- aufgefallen erst beim ersten Durchlauf in der Oberflaeche, nicht hier. Dieser Block
+# ist die Lehre daraus.
+print("\n--- Status 'setup' (so steht ein geteiltes Spiel wirklich da) ---")
+als_eigentuemer()
+cur.execute("update spiel set status = 'setup' where id = %s", [spiel_b])
+als(B)
+cur.execute("""
+  select lane, pins_erkenner_bahn(erkenner_id, lane)
+    from erkannter_wurf where spiel_id is null order by lane
+""")
+sicht_setup = cur.fetchall()
+# Erwartet wird die Zeile mit TAFELPOSITION 3 -- fuer Spiel B ist das die Bahn 4. Die
+# Zeile von Bahn 4 selbst ist oben schon zugeordnet worden und faellt daher heraus.
+pruefe("ein Spiel auf 'setup' sieht die Wuerfe seiner Bahnen",
+       sicht_setup == [(3, 4)], f"(lane, Bahn): {sicht_setup}")
+cur.execute("select count(*) from erkenner where id = %s", [erkenner])
+pruefe("… und die Stammdaten des Erkenners", cur.fetchone()[0] == 1)
+als_eigentuemer()
+cur.execute("update spiel set status = 'laufend' where id = %s", [spiel_b])
+
 # ── Kein laufendes Spiel mehr ───────────────────────────────────────────────
 print("\n--- wenn kein Spiel mehr laeuft ---")
 als_eigentuemer()

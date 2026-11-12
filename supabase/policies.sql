@@ -1630,11 +1630,14 @@ grant execute on function pins_spiel_bahnen(uuid) to authenticated;
 
 -- Helfer: Darf ich die Würfe DIESES Erkenners von DIESER Bahn sehen/zuordnen?
 --   1) Ich verwalte den Erkenner, ODER
---   2) ich erfasse gerade ein LAUFENDES Spiel, das genau diese Bahn bespielt.
+--   2) ich erfasse gerade ein noch nicht beendetes Spiel, das genau diese Bahn
+--      bespielt ('setup' ODER 'laufend' -- siehe die Begruendung in der Funktion).
 -- Fall 2 ist der Alltag: Dem Tablet an der Bahn gehört weder die Anlage noch
 -- der Erkenner — aber es darf die Würfe SEINER Bahnen übernehmen, und nur die.
 -- Läuft auf der Anlage parallel ein zweites Spiel, bleiben dessen Bahnen für
 -- mich unsichtbar.
+-- Ein BEENDETES Spiel zählt nicht: Sonst nähme ein längst fertiges Spiel auf
+-- derselben Bahn die Würfe des nächsten für sich in Anspruch.
 --
 -- Ein Erkenner ohne Anlage (mobiles System) hat über Fall 2 keine Leser: Ohne
 -- Anlage gibt es kein Spiel, das seine Bahnen beanspruchen könnte. Bis er einer
@@ -1648,7 +1651,12 @@ set search_path = public as $$
       from erkenner e
       join spiel s on s.anlage_id = e.anlage_id
      where e.id = p_erkenner
-       and s.status = 'laufend'
+       -- 'setup' MUSS mitgezaehlt werden: Ein geteiltes Spiel, das gerade gespielt
+       -- wird, steht hier auf 'setup'. Lokal springt der Status beim ersten Wurf auf
+       -- 'laufend' (store.js, saveErfassung), zum Server geschrieben wird er aber erst
+       -- beim Beenden. Nur auf 'laufend' zu pruefen hiesse: nie. Die Grenze, auf die es
+       -- ankommt, ist 'beendet' -- ein fertiges Spiel darf keine Wuerfe mehr aufnehmen.
+       and s.status in ('setup', 'laufend')
        and pins_ist_mitglied(s.id)
        and pins_erkenner_bahn(p_erkenner, p_lane)
              = any (coalesce(pins_spiel_bahnen(s.id), '{}'::int[]))
@@ -1669,7 +1677,7 @@ create policy erkenner_select on erkenner for select
     or pins_erkenner_verwalter(id)
     or exists (select 1 from spiel s
                 where s.anlage_id = erkenner.anlage_id
-                  and s.status = 'laufend'
+                  and s.status in ('setup', 'laufend')   -- siehe pins_wurf_lesbar
                   and pins_ist_mitglied(s.id))
   );
 
