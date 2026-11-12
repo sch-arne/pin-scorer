@@ -218,3 +218,45 @@ einzige harte Zahl zur Erkennungsqualität.
 | 5 | Feldtest, Korrekturquote auswerten, Schwellen nachziehen | Automatik freischalten |
 
 Phasen 0–2 sind unabhängig von der Erkennungssoftware testbar — dafür reicht die Aufzeichnung.
+
+## 7. Selbst ausprobieren — ohne Kamera
+
+Zum Üben braucht es weder Bahn-Rechner noch Kegel_CV: `tools/erkennung-wuerfe-senden.py`
+meldet sich mit dem Erkenner-Login aus `erkennung/.env` an und schreibt über PostgREST in
+`erkannter_wurf` — denselben Weg, den der Rechner an der Bahn nimmt. Jeder Lauf prüft damit
+auch die Rechte mit, nicht nur die Oberfläche; ein SQL-Editor täte das nicht, dort sitzt man
+als Eigentümer.
+
+**Drei Dinge müssen stimmen, sonst passiert gar nichts** (`erkMoeglich` in
+`js/views/spiel-laufend.js`):
+
+1. Die App läuft gegen die Test-Datenbank — `js/backend/config.local.js`, `npm run dev`.
+2. Das Spiel hat eine **Anlage**, und zwar die, an der der Erkenner hängt.
+3. Das Spiel ist **geteilt**. Ohne geteiltes Spiel gibt es keinen Verweis zurück in die
+   Datenbank, und ohne ihn stünde nach einem Neuladen jeder Wurf doppelt.
+
+Dann:
+
+```
+npm run dev                                   # http://localhost:5173
+# Spiel anlegen (Anlage wählen!), teilen, Erfassung öffnen
+python tools/erkennung-wuerfe-senden.py . 1 9 8 7 --pause 2
+```
+
+Die Würfe erscheinen einzeln im Satz, jeder mit 👁 im Chip. `--pause` ist zum Zusehen da —
+ohne sie kommen sie schneller, als Realtime sie ausliefert, und man sieht nur das Ergebnis.
+
+Was sich damit vorführen lässt:
+
+| Zu sehen | Aufruf |
+| --- | --- |
+| Kegelbild (welche Kegel fielen) | `… . 1 9:1,2,3,4,5,6,7,8,9` |
+| Tafelbild am bearbeiteten Wurf (🖼) | `… . 1 7:bild` |
+| Widerspruch Bild ⇄ Holz → Holz zählt, Bild fällt weg | erst `9:1,2,3,4,5,6,7,8,9`, dann `8:1,2` |
+| Hinweis an der Bahn, Wurf bleibt draußen | mehr Holz schicken, als noch steht |
+| Stichtag: Einspielwürfe bleiben draußen | Würfe schicken, **dann** erst in der Bahneinstellung einschalten |
+
+Aufräumen: `python tools/erkennung-wuerfe-senden.py . --aufraeumen` (löschen darf nur der
+Verwalter, nicht der Erkenner — das geht deshalb über `supabase/.db-test.env`). Was die App
+schon übernommen hat, steht danach weiter im Satz; dafür gibt es in der Bahneinstellung
+„erkannte Würfe dieses Satzes verwerfen".
