@@ -26,6 +26,8 @@ import { teamUebersichtSection } from './wettkampf-teams.js';
 import { oeffneGrafikMenue } from './grafik-panel.js';
 import { buildSportwinnerPush } from '../logic/sportwinner-ergebnis.js';
 import { buildKonflikte } from '../logic/sportwinner-konflikte.js';
+import { MODUS, verarbeite } from '../logic/erkennung-strom.js';
+import { bahnFuerLane, erkennerFuerBahn } from '../logic/erkennung-zuordnung.js';
 import {
   getBruecke, pushErgebnis, holeStatus, holeSportwinnerLive, brueckeStatusInfo, brueckePushText,
 } from '../backend/sw-bruecke.js';
@@ -132,11 +134,18 @@ function initErfassung(c) {
   return {
     aktiverSpieler: 0,
     aktiverSatz: 0,
+    // Wurferkennung, je Bahnnummer: Schalterstellung ('aus'/'automatik') und Stichtag
+    // (ISO-Zeit -- nur was danach aufgezeichnet wurde, zaehlt). `erkHinweise` sammelt,
+    // was NICHT eingetragen wurde.
+    erkModus: {},
+    erkAb: {},
+    erkHinweise: [],
     bloecke: c.spielerListe.map(() =>
       Array.from({ length: c.saetze }, () => ({
         wuerfe: [],
         kegel: [], // je Wurf ein Array der gefallenen Kegel-Nummern (1-9)
         koenig: [], // je Wurf: König (5) steht danach noch? (nur Kranz-Abräumen, per Langdruck)
+        erkannt: [], // je Wurf: id der Zeile in `erkannter_wurf` (Kamera) oder null (getippt)
         overrides: c.teilsaetze.map(() => null),
         done: false,
       }))),
@@ -144,11 +153,24 @@ function initErfassung(c) {
 }
 
 // Bestehenden Stand an die aktuelle Konfiguration angleichen (robust gegen Aenderungen).
+//
+// ACHTUNG, STOLPERSTELLE: Diese Funktion baut jeden Block aus FESTEN Feldern neu auf.
+// Das ist Absicht -- so uebersteht der Stand Aenderungen an Saetzen, Wuerfen und
+// Teilsaetzen. Es heisst aber auch: Ein neues Feld JE WURF muss hier mitgefuehrt werden,
+// sonst ist es nach dem naechsten Oeffnen des Spiels weg, waehrend es in der Datenbank
+// noch steht. Bei `erkannt` ist genau das passiert und erst in der Oberflaeche aufgefallen.
 function normalizeErfassung(e, c) {
   const base = initErfassung(c);
   if (!e || !Array.isArray(e.bloecke)) return base;
   base.aktiverSpieler = Math.min(e.aktiverSpieler || 0, c.spielerListe.length - 1);
   base.aktiverSatz = Math.min(e.aktiverSatz || 0, c.saetze - 1);
+  // Die Erkennungs-Einstellungen gehoeren zum SPIEL, nicht zum Wurf, und muessen hier
+  // genauso mitgefuehrt werden (siehe den Hinweis ueber dieser Funktion). Der Stichtag ist
+  // dabei der wichtigste: Wuerde er beim Oeffnen neu gesetzt, zaehlte nach jedem Neuladen
+  // nur noch, was ab DANN aufgezeichnet wurde -- die Wuerfe der letzten Minuten waeren weg.
+  if (e.erkModus && typeof e.erkModus === 'object') base.erkModus = { ...e.erkModus };
+  if (e.erkAb && typeof e.erkAb === 'object') base.erkAb = { ...e.erkAb };
+  if (Array.isArray(e.erkHinweise)) base.erkHinweise = e.erkHinweise.slice();
   base.bloecke = base.bloecke.map((satzArr, sp) => satzArr.map((blk, st) => {
     const old = e.bloecke[sp] && e.bloecke[sp][st];
     if (!old) return blk;
@@ -164,6 +186,12 @@ function normalizeErfassung(e, c) {
         return defaultKegel(w);              // fehlend -> aus Holzzahl ableiten
       }),
       koenig: wuerfe.map((_, k) => !!oldKoenig[k]),
+      // Herkunft je Wurf (Kamera-Zeile oder null). Mitgefuehrt wie `koenig`, auf die
+      // Wurfliste ausgerichtet -- ein verschobener Index zeigte sonst auf den falschen Wurf.
+      erkannt: wuerfe.map((_, k) => {
+        const id = Array.isArray(old.erkannt) ? old.erkannt[k] : null;
+        return id != null ? id : null;
+      }),
       overrides: c.teilsaetze.map((_, i) => (old.overrides && old.overrides[i] != null ? old.overrides[i] : null)),
       // Satz-Ergebnis ohne Teilsatz-Aufteilung (Web-Import) mitnehmen — sonst waere das Holz
       // eines importierten Spiels beim ersten Oeffnen weg.
@@ -488,6 +516,7 @@ export function spielLaufendView() {
     if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
     if (zpollTimer) { clearInterval(zpollTimer); zpollTimer = null; }
     if (unsub) { try { unsub(); } catch (e) {} unsub = null; }
+    if (erkUnsub) { try { erkUnsub(); } catch (e) {} erkUnsub = null; }
     clearTimeout(bpushTimer);
     clearInterval(bstatusTimer);
     clearInterval(swKonfliktTimer);
@@ -552,6 +581,436 @@ export function spielLaufendView() {
     await poll();
     zpollTimer = setInterval(poll, 2500);
   }
+  // ── Wurferkennung: die Kamera an der Bahn schreibt mit ───────────────────────
+  //
+  // Der Weg einer Zeile:
+  //   `erkannter_wurf` (geschrieben vom Rechner an der Bahn, siehe erkennung/)
+  //     → backend/erkennung.js  holt sie und abonniert neue
+  //     → logic/erkennung-strom.js  ordnet ein: Reihenfolge, Entdopplung, Puffer
+  //     → addWurfAn  trägt sie ein — denselben Weg wie ein getippter Wurf
+  //     → zuordnen()  schreibt den Verweis zurück (satz_block_id + wurf_index)
+  //
+  // VIER ENTSCHEIDUNGEN, die man hier sehen muss:
+  //
+  // 1. KEINE VORSCHLAGSLISTE. Ein erkannter Wurf geht in den Satz, Korrektur wie bei jedem
+  //    getippten Wurf. Was die Zuordnung nicht sicher entscheiden kann, wird trotzdem
+  //    eingetragen und trägt einen HINWEIS (unten an der Bahn) — nur ein Wurf, den die
+  //    Erfassung selbst ablehnt, bleibt draußen. Die Oberfläche hat deshalb keine Liste zu
+  //    bestätigender Würfe, sondern eine Liste dessen, was NICHT geklappt hat.
+  //
+  // 2. NUR BEI EINEM GETEILTEN SPIEL. Der Verweis zurück braucht die id der Satz-Zeile, und
+  //    die gibt es nur in der Datenbank. Ohne diesen Verweis käme dieselbe Zeile nach jedem
+  //    Neuladen erneut und stünde doppelt im Satz. Ein rein lokales Spiel kann die Erkennung
+  //    deshalb nicht nutzen — die Bahneinstellung sagt das auch so.
+  //
+  // 3. EIN STICHTAG JE BAHN (`state.erkAb`). Einspielwürfe sehen für die Kamera aus wie
+  //    Würfe; die Erkennung trennt das nicht, ein Mensch mit einem Blick auf die Bahn schon.
+  //    Also gilt: Alles, was VOR dem Einschalten aufgezeichnet wurde, bleibt liegen. Wer die
+  //    Erkennung beim Anspiel einschaltet, hat das Problem nicht. Der Griff „Erkannte Würfe
+  //    dieses Satzes verwerfen" ist das Netz darunter, nicht der Schutz.
+  //
+  // 4. JE BAHN GETRENNT (`state.erkModus`). Ein Erkenner hängt an einer Bahn. Auf Bahn 2
+  //    kann die Kamera mitschreiben, während auf Bahn 3 von Hand erfasst wird — und ein
+  //    Erkenner, den es für eine Bahn nicht gibt, hat dort auch keinen Schalter.
+  let erkMod = null;                 // lazy geladenes backend/erkennung.js
+  let erkListe = [];                 // Erkenner dieser Anlage (aus der DB)
+  let erkUnsub = null;               // Realtime abmelden
+  let erkGesehenBis = 0;             // höchste verarbeitete Zeilen-id (nur im Speicher)
+  let erkPuffer = [];                // Zeilen, die auf ihren Platz warten
+  let erkUngebunden = [];            // eingetragen, aber der Verweis fehlt noch
+  let erkBild = null;                // offener Beleg: { wurfId, daten|null, fehler }
+  const erkBlockIds = {};            // "sp:st" -> satz_block.id
+
+  const ERK_HINWEISE_MAX = 20;       // mehr als das liest niemand mehr
+  const ERK_UNGEBUNDEN_MAX = 50;
+
+  // Diese drei leben im gespeicherten Zustand, damit sie ein Neuladen überstehen: der
+  // Stichtag wäre sonst nach jedem Reload „jetzt" (und die Erkennung stumm), und ein
+  // Hinweis auf einen verlorenen Wurf wäre genau dann weg, wenn man ihn braucht.
+  if (!state.erkModus || typeof state.erkModus !== 'object') state.erkModus = {};
+  if (!state.erkAb || typeof state.erkAb !== 'object') state.erkAb = {};
+  if (!Array.isArray(state.erkHinweise)) state.erkHinweise = [];
+
+  const erkMoeglich = () => !zuschauer && linked && !!game.remoteId && !!c.anlageId;
+  const erkFuer = (bahn) => erkennerFuerBahn(erkListe, bahn);
+
+  // Der Schalter kennt zwei Stellungen. MODUS.VORSCHLAG bleibt im Strom bestehen (und ist
+  // dort geprüft), hat hier aber keine Oberfläche: Es gibt keine Liste, in der ein Vorschlag
+  // landen könnte. Ein alter gespeicherter Wert fällt deshalb auf Automatik zurück.
+  function erkModus(bahn) {
+    if (!erkFuer(bahn)) return MODUS.AUS;
+    return state.erkModus[String(bahn)] === MODUS.AUS ? MODUS.AUS : MODUS.AUTOMATIK;
+  }
+  const erkBahnen = () => gameLanes().filter((b) => erkModus(b) !== MODUS.AUS);
+  const erkHinweiseFuer = (bahn) => state.erkHinweise.filter((h) => h.bahn === bahn);
+
+  function erkNotiere(bahn, text) {
+    // Denselben Befund nicht zweimal hintereinander: Eine Kamera, die sich verschluckt,
+    // tut das oft mehrfach, und zehn gleiche Zeilen verdecken die anderen.
+    const letzter = state.erkHinweise.find((h) => h.bahn === bahn);
+    if (letzter && letzter.text === text) return;
+    state.erkHinweise.unshift({ bahn, text, zeit: new Date().toISOString() });
+    if (state.erkHinweise.length > ERK_HINWEISE_MAX) {
+      state.erkHinweise.length = ERK_HINWEISE_MAX;
+    }
+  }
+
+  // Alle Zeilen-ids, die schon in einem Satz stehen. Der Riegel, der einen Neustart
+  // überlebt — siehe `schonImSatz` in logic/erkennung-strom.js.
+  function erkIdsImSatz() {
+    const ids = new Set();
+    state.bloecke.forEach((arr) => arr.forEach((b) => {
+      if (Array.isArray(b.erkannt)) b.erkannt.forEach((id) => { if (id != null) ids.add(id); });
+    }));
+    return ids;
+  }
+
+  // Die Brücke zum Strom: eintragen wie ein getippter Wurf.
+  //
+  // `melde` fängt die Begründung ab, mit der die Erfassung ablehnt, statt sie als Toast zu
+  // zeigen — bei einem Wurf, der alle 15 Minuten erneut versucht wird, wäre das Geblinke
+  // ohne Nutzen. Die Begründung wird an `e.grund` gehängt, weil der Strom genau dieses
+  // Objekt in seine `abgelehnt`-Liste legt und wir den Grund dort brauchen.
+  function erkUebernehmen(e, zeile) {
+    const ok = addWurfAn({
+      sp: e.ziel.sp,
+      st: e.ziel.st,
+      pins: e.holz,
+      // kegel == null heißt „rechne das Bild selbst aus" (wie beim Tippen), nicht
+      // „keine Kegel" — deshalb undefined und nicht null an addWurfAn.
+      kegel: e.kegel == null ? undefined : e.kegel,
+      koenigFlag: e.koenigFlag,
+      erkanntVon: zeile && zeile.id != null ? zeile.id : null,
+      melde: (txt) => { e.grund = e.grund || txt; },
+    });
+    return ok;
+  }
+
+  // Einen eingetragenen Wurf mit seiner Zeile in der Datenbank verknüpfen.
+  // Scheitert es (die Satz-Zeile ist noch nicht hochgeschrieben, keine Verbindung), kommt
+  // der Wurf in `erkUngebunden` und wird beim nächsten Durchgang erneut versucht. Dass der
+  // Wurf IM SATZ steht, hängt nicht daran — nur der Verweis fehlt dann noch.
+  async function erkBinde(eintrag) {
+    const { zeile, entscheidung } = eintrag;
+    if (!erkMod || !linked || !game.remoteId || !zeile || zeile.id == null) return;
+    const { sp, st, idx } = entscheidung.ziel;
+    const key = sp + ':' + st;
+    try {
+      if (!erkBlockIds[key]) {
+        const pid = owners[sp] && owners[sp].id;
+        if (!pid) return;
+        erkBlockIds[key] = await erkMod.satzBlockId({
+          spielId: game.remoteId, spielerId: pid, satz: st,
+        });
+      }
+      if (!erkBlockIds[key]) throw new Error('satz_block noch nicht da');
+      await erkMod.zuordnen(zeile.id, {
+        spielId: game.remoteId, satzBlockId: erkBlockIds[key], wurfIndex: idx,
+      });
+    } catch (err) {
+      if (erkUngebunden.length < ERK_UNGEBUNDEN_MAX) erkUngebunden.push(eintrag);
+    }
+  }
+
+  // Ein Schwung Zeilen: sieben, einordnen, eintragen, zurückschreiben.
+  async function erkVerarbeite(zeilenRoh) {
+    if (!erkMod || !erkMoeglich()) return;
+    const offen = erkUngebunden;
+    erkUngebunden = [];
+    for (const eintrag of offen) await erkBinde(eintrag);
+
+    const aktiv = new Set(erkBahnen());
+    if (!aktiv.size) return;
+
+    // Jede Zeile auf ihre Bahn übersetzen und zwei Siebe anwenden: läuft die Erkennung für
+    // diese Bahn, und liegt die Aufzeichnung nach dem Stichtag dieser Bahn? Was durchfällt,
+    // wird NICHT vermerkt — für ein anderes Spiel auf derselben Anlage kann dieselbe Zeile
+    // gültig sein.
+    const zeilen = [];
+    (zeilenRoh || []).forEach((z) => {
+      const erk = erkListe.find((e) => e.id === z.erkenner_id) || null;
+      const bahn = bahnFuerLane(erk, z.lane);
+      if (!aktiv.has(bahn)) return;
+      const ab = state.erkAb[String(bahn)];
+      if (ab && Date.parse(z.recorded_at) < Date.parse(ab)) return;
+      zeilen.push({ ...z, bahn });
+    });
+    if (!zeilen.length && !erkPuffer.length) return;
+
+    const r = verarbeite(zeilen, {
+      config: c,
+      bloecke: state.bloecke,
+      ranges,
+      darfSchreiben: canEdit,
+      modus: MODUS.AUTOMATIK,
+      puffer: erkPuffer,
+      gesehenBis: erkGesehenBis,
+      schonImSatz: erkIdsImSatz(),
+      uebernehmen: erkUebernehmen,
+    });
+    erkPuffer = r.puffer;
+    erkGesehenBis = r.gesehenBis;
+
+    // Was eingetragen wurde, aber einen Vorbehalt trägt: Hinweis an der Bahn.
+    r.gesetzt.forEach((g) => {
+      if (!g.hinweis) return;
+      // Ausnahme: der Satzanfang. Eingespielt wird VOR dem Spiel — in der Aufzeichnung
+      // vom 29.08. standen 20 Probewürfe vor dem ersten Satz und keiner nach einem
+      // Bahnwechsel. Ab Satz 2 wäre der Hinweis also bei JEDEM Satz derselbe und würde
+      // die Befunde zudecken, auf die es ankommt.
+      const ziel = g.entscheidung.ziel;
+      if (g.entscheidung.art === 'satzanfang' && ziel && ziel.st > 0) return;
+      erkNotiere(g.entscheidung.bahn, g.hinweis);
+    });
+    // Endgültig abgelehnt: Hinweis UND Vermerk in der Datenbank. Der Vermerk ist hier
+    // zulässig, weil nur Würfe EIGENER Spieler überhaupt bis zur Erfassung kommen
+    // (`darfSchreiben: canEdit`) — eine fremde Bahn wird schon in der Zuordnung verworfen.
+    r.abgelehnt.forEach((a) => {
+      erkNotiere(a.zeile.bahn, `nicht eingetragen — ${a.grund}`);
+      if (a.zeile.id != null) erkMod.verwerfen(a.zeile.id, a.grund).catch(() => {});
+    });
+    // Zu lange gewartet: nur hier aufgegeben, die Zeile in der Datenbank bleibt unberührt.
+    r.verfallen.forEach((v) => erkNotiere(v.zeile.bahn, `aufgegeben — ${v.grund}`));
+    r.vermerke.forEach((v) => {
+      if (v.zeile.id != null) erkMod.verwerfen(v.zeile.id, v.grund).catch(() => {});
+    });
+    // Im Automatik-Betrieb entsteht ein Vorschlag nur ohne Platz. Es gibt keine Liste, in
+    // der er landen könnte — also wenigstens sichtbar machen, statt ihn zu verschlucken.
+    r.vorschlaege.forEach((v) => erkNotiere(v.entscheidung.bahn,
+      v.entscheidung.grund || 'nicht zuordenbar'));
+
+    for (const g of r.gesetzt) await erkBinde(g);
+    // addWurfAn hat je Wurf schon gespeichert und gezeichnet; die Hinweise brauchen es noch.
+    if (r.abgelehnt.length || r.verfallen.length || r.vorschlaege.length
+        || r.gesetzt.some((g) => g.hinweis)) {
+      persistLocalOnly();
+      render();
+    }
+  }
+
+  async function erkHolen() {
+    if (!erkMod) return;
+    const ids = erkListe.map((e) => e.id);
+    const zeilen = await erkMod.offeneWuerfe({ erkennerIds: ids, seitId: erkGesehenBis });
+    await erkVerarbeite(zeilen);
+  }
+
+  // Stichtag für jede Bahn setzen, die noch keinen hat (siehe Punkt 3 oben).
+  function erkStichtag(bahnen) {
+    let neu = false;
+    bahnen.forEach((b) => {
+      const k = String(b);
+      if (!state.erkAb[k]) { state.erkAb[k] = new Date().toISOString(); neu = true; }
+    });
+    if (neu) persistLocalOnly();
+  }
+
+  async function initErkennung() {
+    if (!erkMoeglich()) return;
+    try {
+      erkMod = await import('../backend/erkennung.js');
+      erkListe = await erkMod.erkennerFuerAnlage(c.anlageId);
+      if (!erkListe.length) { erkMod = null; return; }
+      erkStichtag(gameLanes().filter((b) => !!erkFuer(b)));
+      await erkHolen();
+      erkUnsub = erkMod.abonniereWuerfe({
+        erkennerIds: erkListe.map((e) => e.id),
+        onNeu: (z) => { erkVerarbeite([z]).catch(() => {}); },
+      });
+      render();
+    } catch (e) {
+      // Ohne Verbindung (oder ohne Recht auf die Tabelle) gibt es keine Erkennung — die
+      // App läuft vollständig weiter, es wird eben getippt.
+      erkMod = null;
+    }
+  }
+
+  // Schalter in der Bahneinstellung. Beim Einschalten wird der Stichtag NEU gesetzt: Genau
+  // dafür ist der Griff da — man schaltet beim Anspiel ein, und was vorher auf der Bahn
+  // passiert ist (Einspielwürfe), bleibt draußen.
+  function erkSetzeModus(bahn, modus) {
+    const k = String(bahn);
+    if (modus === MODUS.AUS) {
+      state.erkModus[k] = MODUS.AUS;
+      erkPuffer = erkPuffer.filter((z) => z.bahn !== bahn);
+      persistLocalOnly(); render();
+      toast(`Erkennung Bahn ${bahn} aus`);
+      return;
+    }
+    state.erkModus[k] = MODUS.AUTOMATIK;
+    state.erkAb[k] = new Date().toISOString();
+    persistLocalOnly(); render();
+    toast(`Erkennung Bahn ${bahn}: Automatik — ab jetzt`);
+    if (!erkMod) initErkennung();
+    else erkHolen().catch(() => {});
+  }
+
+  // Alles, was die Kamera in DIESEN Satz geschrieben hat, wieder heraus. Für den Fall, dass
+  // die Erkennung schon vor dem Anspiel lief und die Einspielwürfe im Satz stehen.
+  // Von hinten gelöscht, damit die Indizes der noch zu löschenden Würfe gültig bleiben.
+  // Der Stichtag wird neu gesetzt — sonst kämen dieselben Zeilen gleich wieder.
+  function erkVerwerfeSatz() {
+    if (!guardEdit()) return;
+    const blk = current();
+    if (!Array.isArray(blk.erkannt)) { toast('In diesem Satz steht kein erkannter Wurf'); return; }
+    const weg = [];
+    for (let k = blk.erkannt.length - 1; k >= 0; k -= 1) {
+      if (blk.erkannt[k] == null) continue;
+      weg.push(blk.erkannt[k]);
+      blk.wuerfe.splice(k, 1);
+      blk.kegel.splice(k, 1);
+      if (Array.isArray(blk.koenig)) blk.koenig.splice(k, 1);
+      blk.erkannt.splice(k, 1);
+    }
+    if (!weg.length) { toast('In diesem Satz steht kein erkannter Wurf'); return; }
+    if (blk.wuerfe.length < c.wuerfeProSatz) blk.done = false;
+    const bahn = laneOf(state.aktiverSpieler, state.aktiverSatz);
+    state.erkAb[String(bahn)] = new Date().toISOString();
+    editIdx = null;
+    persist(); render();
+    // `freigeben` und nicht `verwerfen`: Diese Zeilen sind ZUGEORDNET, und `verwerfen`
+    // laesst zugeordnete Zeilen bewusst in Ruhe. Der Verweis muss hier mit weg.
+    if (erkMod) weg.forEach((id) => erkMod.freigeben(id, 'von Hand verworfen').catch(() => {}));
+    toast(`${weg.length} erkannte ${weg.length === 1 ? 'Wurf' : 'Würfe'} verworfen`);
+  }
+
+  function erkHinweiseLoeschen(bahn) {
+    state.erkHinweise = state.erkHinweise.filter((h) => h.bahn !== bahn);
+    persistLocalOnly(); render();
+  }
+
+  // Das Tafelbild eines Wurfs holen — der Beleg, wenn jemand einen Wert anzweifelt.
+  // Einzeln, nie in einer Liste: es sind rund 5 KB je Wurf (siehe backend/erkennung.js).
+  async function erkZeigeBild(wurfId) {
+    erkBild = { wurfId, daten: null, fehler: '' };
+    render();
+    try {
+      if (!erkMod) erkMod = await import('../backend/erkennung.js');
+      const daten = await erkMod.tafelbild(wurfId);
+      if (!erkBild || erkBild.wurfId !== wurfId) return;      // zwischenzeitlich geschlossen
+      erkBild = { wurfId, daten, fehler: daten ? '' : 'Zu diesem Wurf gibt es keine Zeile mehr.' };
+    } catch (e) {
+      if (erkBild && erkBild.wurfId === wurfId) {
+        erkBild = { wurfId, daten: null, fehler: 'Das Bild konnte nicht geladen werden.' };
+      }
+    }
+    render();
+  }
+
+  // Uhrzeit eines Zeitstempels, kurz. Hinweise und Stichtage sind Dinge, die man mit dem
+  // Spielverlauf vergleicht („war das vor dem Anspiel?") — Datum hilft dabei nicht.
+  function erkUhr(iso) {
+    const t = new Date(iso);
+    return Number.isNaN(t.getTime())
+      ? '?'
+      : `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  }
+
+  // Der Erkennungs-Teil der Bahneinstellung. Er steht dort und nicht im allgemeinen
+  // ⚙-Menü, weil ein Erkenner an EINER Bahn hängt: auf Bahn 2 kann die Kamera mitschreiben,
+  // während Bahn 3 von Hand erfasst wird.
+  function erkLanePanel(bahn) {
+    if (zuschauer) return '';
+    if (!c.anlageId) {
+      return `<p class="erf-lane-sub">👁 <strong>Erkennung:</strong> Dieses Spiel hat keine Anlage
+        — und ein Erkenner gehört immer zu einer.</p>`;
+    }
+    if (!linked) {
+      return `<p class="erf-lane-sub">👁 <strong>Erkennung</strong> braucht ein geteiltes Spiel:
+        Jeder erkannte Wurf wird mit seinem Wurf im Satz verknüpft, und diesen Verweis gibt es
+        nur in der Datenbank. Ohne ihn stünde nach einem Neuladen jeder Wurf doppelt im Satz.</p>`;
+    }
+    const e = erkFuer(bahn);
+    if (!e) {
+      return `<p class="erf-lane-sub">👁 Für Bahn ${bahn} ist kein Erkenner eingetragen.</p>`;
+    }
+    const modus = erkModus(bahn);
+    const hinweise = erkHinweiseFuer(bahn);
+    const blk = current();
+    const imSatz = Array.isArray(blk.erkannt) ? blk.erkannt.filter((x) => x != null).length : 0;
+    const ab = state.erkAb[String(bahn)];
+    return `
+      <div class="erf-erk">
+        <div class="erf-erk-head">
+          <span class="erf-erk-title">👁 Erkennung</span>
+          <span class="erf-erk-name">${esc(e.name || 'Kamera')}</span>
+        </div>
+        <div class="erf-erk-switch" role="group" aria-label="Erkennung Bahn ${bahn}">
+          <button type="button" class="erf-btn${modus === MODUS.AUS ? ' is-on' : ''}"
+            data-erkmodus="aus" data-erkbahn="${bahn}">Aus</button>
+          <button type="button" class="erf-btn${modus === MODUS.AUTOMATIK ? ' is-on' : ''}"
+            data-erkmodus="automatik" data-erkbahn="${bahn}">Automatik</button>
+        </div>
+        <p class="erf-lane-sub">${modus === MODUS.AUTOMATIK
+          ? `Erkannte Würfe gehen direkt in den Satz — korrigieren wie jeden getippten Wurf.
+             Gezählt wird, was ab ${ab ? erkUhr(ab) : 'jetzt'} aufgezeichnet wurde.`
+          : `Die Kamera schreibt weiter in die Datenbank, die App rührt sie nicht an.
+             Beim Einschalten zählt, was ab DANN aufgezeichnet wird — deshalb erst beim
+             Anspiel einschalten, dann bleiben die Einspielwürfe draußen.`}</p>
+        ${imSatz ? `<button type="button" class="erf-btn danger" data-act="erk-verwerfen">
+          ↺ ${imSatz} erkannte${imSatz === 1 ? 'n Wurf' : ' Würfe'} dieses Satzes verwerfen</button>` : ''}
+        ${hinweise.length ? `
+          <div class="erf-erk-hint">
+            <div class="erf-erk-hint-head">
+              <span>⚠ ${hinweise.length} ${hinweise.length === 1 ? 'Hinweis' : 'Hinweise'}</span>
+              <button type="button" class="icon-btn" data-act="erk-hinweise-weg"
+                aria-label="Hinweise löschen">✕</button>
+            </div>
+            <ul class="erf-erk-hint-list">
+              ${hinweise.map((h) => `<li><span class="eeh-zeit">${erkUhr(h.zeit)}</span>
+                ${esc(h.text)}</li>`).join('')}
+            </ul>
+          </div>` : ''}
+      </div>`;
+  }
+
+  // Der Beleg zu einem Wurf: was die Kamera gesehen hat. Erreichbar genau dann, wenn man
+  // den Wurf ohnehin ansieht (ein Tipp auf den Chip) — das ist der Moment, in dem man ihn
+  // braucht, und so bleibt die Wurfzeile frei von einem zweiten Bedienelement je Wurf.
+  function erkBildPanel() {
+    const d = erkBild.daten;
+    const bild = (b64, label) => (b64
+      ? `<figure class="erf-erkbild-fig">
+          <img src="data:image/jpeg;base64,${b64}" alt="Tafel ${label}">
+          <figcaption>${label}</figcaption>
+        </figure>`
+      : '');
+    const abgelesen = d ? [
+      ['Wurf-Nr.', d.displayed_throw_number],
+      ['Kegel', d.displayed_pin_count],
+      ['Fehler', d.displayed_foul_count],
+      ['Gesamt', d.displayed_total],
+    ].filter((p) => p[1] != null) : [];
+    return `
+      <div class="erf-settings-backdrop" data-act="erk-bild-close">
+        <div class="erf-settings-sheet" role="dialog" aria-modal="true" aria-label="Tafelbild">
+          <div class="erf-settings-head">
+            <h2 class="erf-settings-title">🖼 Tafelbild</h2>
+            <button type="button" class="icon-btn" data-act="erk-bild-close"
+              aria-label="Schließen">✕</button>
+          </div>
+          <div class="erf-settings-body">
+            ${erkBild.fehler ? `<p class="erf-lane-sub">${esc(erkBild.fehler)}</p>` : ''}
+            ${!d && !erkBild.fehler ? '<p class="erf-lane-sub">Wird geladen …</p>' : ''}
+            ${d ? `
+              <div class="erf-erkbild">
+                ${bild(d.board_before_jpeg, 'vor dem Wurf')}
+                ${bild(d.board_jpeg, 'nach dem Wurf')}
+              </div>
+              ${!d.board_jpeg && !d.board_before_jpeg
+                ? '<p class="erf-lane-sub">Zu diesem Wurf wurde kein Bild mitgeschickt.</p>' : ''}
+              ${abgelesen.length ? `
+                <p class="erf-lane-sub">Von der Tafel abgelesen — nur Beleg, nie zum Rechnen
+                  (gemessen ist allein die Zahl gefallener Kegel):</p>
+                <div class="summary">
+                  ${abgelesen.map((p) => `<div class="sum-row"><span>${p[0]}</span>
+                    <strong>${p[1]}</strong></div>`).join('')}
+                </div>` : ''}` : ''}
+          </div>
+        </div>
+      </div>`;
+  }
+
   window.addEventListener(UNMOUNT_EVENT, teardownSync);
 
   // Lokales Spiel teilen: in Supabase spiegeln, ab jetzt verknüpft + Realtime.
@@ -578,6 +1037,10 @@ export function spielLaufendView() {
       saveGame(game);
       seedPushed();
       startRealtime();
+      // Erst mit dem Teilen wird die Erkennung ueberhaupt moeglich (sie braucht die id der
+      // Satz-Zeile fuer den Verweis zurueck). Ohne diesen Aufruf blieb sie bis zum naechsten
+      // Oeffnen des Spiels stumm -- aufgefallen beim ersten Durchlauf in der Oberflaeche.
+      initErkennung();
       toast('Spiel geteilt · Code ' + res.beitrittsCode);
       render();
     } catch (e) {
@@ -906,31 +1369,42 @@ export function spielLaufendView() {
   // Handerfassung nur in Sonderfällen —, wird sie übernommen; sonst entscheidet
   // defaultKegelFor wie bisher. `null` ist dabei eine gültige Angabe („Menge unbekannt"),
   // deshalb wird auf `undefined` geprüft und nicht auf Falsyness.
-  function addWurfAn({ sp, st, pins, kegel = undefined, koenigFlag = false }) {
+  // `melde` ist die Stelle, an der eine Ablehnung herauskommt — normalerweise ein Toast.
+  // Die Wurferkennung gibt stattdessen eine Senke mit: Ein Wurf, den die Erfassung ablehnt,
+  // wird dort zum Hinweis an der Bahn, und ein Toast, der sich bei jedem Durchgang
+  // wiederholt, wäre nur Geblinke.
+  // `erkanntVon` ist die id der Zeile in `erkannter_wurf`: die Herkunft des Wurfs. Sie steht
+  // im Block (`blk.erkannt`), weil sie zwei Dinge trägt, die sonst verloren gingen — das
+  // 👁 an der Wurfzeile samt Tafelbild, und den Riegel gegen Doppel-Einträge nach einem
+  // Neuladen (siehe `schonImSatz` in logic/erkennung-strom.js).
+  function addWurfAn({ sp, st, pins, kegel = undefined, koenigFlag = false,
+                       melde = toast, erkanntVon = null }) {
     if (!guardEdit(sp)) return false;
     const satzArr = state.bloecke[sp];
     const blk = satzArr && satzArr[st];
     if (!blk) return false;
     if (!Array.isArray(blk.koenig)) blk.koenig = blk.wuerfe.map(() => false);
-    if (blk.done) { toast('Satz ist fertig'); return false; }
-    if (blk.wuerfe.length >= c.wuerfeProSatz) { toast('Satz voll — alle Würfe erfasst'); return false; }
+    if (blk.done) { melde('Satz ist fertig'); return false; }
+    if (blk.wuerfe.length >= c.wuerfeProSatz) { melde('Satz voll — alle Würfe erfasst'); return false; }
     // In einen späteren Satz eintragen ist gesperrt, solange ein früherer noch offen ist.
     const front = frontSatz(sp);
-    if (st > front) { toast(`Erst Satz ${front + 1} abschließen`); return false; }
+    if (st > front) { melde(`Erst Satz ${front + 1} abschließen`); return false; }
     // Ein Spieler kann maximal auf EINEN Bahnwechsel warten: steht der Wechsel nach einem
     // fertigen Satz noch aus (physisch noch auf der alten Bahn), darf der nächste Satz noch
     // nicht bespielt werden. Sonst würde man einen zweiten Bahnwechsel „vorziehen".
     if (st > computeBahnState()[sp].pos) {
-      toast('Erst Bahnwechsel abwarten'); return false;
+      melde('Erst Bahnwechsel abwarten'); return false;
     }
     const idx = blk.wuerfe.length;
     const ctx = throwContext(blk, idx);
     const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
-    if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
+    if (ctx.abraeum && pins > cap) { melde(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
     const kk = koenigFlag ? koenigKegelFor(ctx) : null;
+    if (!Array.isArray(blk.erkannt)) blk.erkannt = blk.wuerfe.map(() => null);
     blk.wuerfe.push(pins);
     blk.kegel.push(koenigFlag ? kk : (kegel !== undefined ? kegel : defaultKegelFor(blk, idx, pins)));
     blk.koenig.push(koenigFlag && kk == null);   // Flag nur, wenn Kegel offen bleiben
+    blk.erkannt.push(erkanntVon);
     // Sind mit diesem Wurf alle Teilsätze voll (alle Soll-Würfe des Satzes erfasst), wird der
     // Satz automatisch beendet — kein manuelles Abschließen mehr nötig. Da die Würfe die
     // Teilsätze der Reihe nach füllen, ist das genau erreicht, wenn wuerfeProSatz voll ist.
@@ -1180,6 +1654,7 @@ export function spielLaufendView() {
     blk.wuerfe.pop();
     blk.kegel.pop();
     if (Array.isArray(blk.koenig)) blk.koenig.pop();
+    if (Array.isArray(blk.erkannt)) blk.erkannt.pop();
     persist(); render();
     if (reopened) toast(`Satz ${state.aktiverSatz + 1} wieder geöffnet`);
   }
@@ -1191,6 +1666,7 @@ export function spielLaufendView() {
     blk.wuerfe.splice(editIdx, 1);
     blk.kegel.splice(editIdx, 1);
     if (Array.isArray(blk.koenig)) blk.koenig.splice(editIdx, 1);
+    if (Array.isArray(blk.erkannt)) blk.erkannt.splice(editIdx, 1);
     editIdx = null; persist(); render();
     toast('Wurf gelöscht');
   }
@@ -1563,6 +2039,7 @@ export function spielLaufendView() {
       ${settingsOpen ? settingsPanel() : ''}
       ${laneSettingsOpen ? laneSettingsPanel() : ''}
       ${pinPick ? pinPickPanel() : ''}
+      ${erkBild ? erkBildPanel() : ''}
       ${statsOpen ? statsPanel() : ''}`;
   }
 
@@ -1838,6 +2315,7 @@ export function spielLaufendView() {
               <button type="button" class="erf-btn ${allDone ? 'is-on' : 'danger'}" data-act="end-game">${allDone ? '↺ Spiel wieder öffnen' : '⏹ Spiel beenden (nur dieser Spieler)'}</button>
               ${linked && canEdit(sp) ? `<button type="button" class="erf-btn" data-act="release">🔓 Bahn freigeben (anderes Gerät)</button>` : ''}`}
             </div>
+            ${erkLanePanel(laneOf(sp, st))}
           </div>
         </div>
       </div>`;
@@ -1927,6 +2405,10 @@ export function spielLaufendView() {
       tabs.push(`<button type="button" role="tab" aria-selected="${sp === state.aktiverSpieler}" class="erf-ptab is-${status}${sp === state.aktiverSpieler ? ' is-active' : ''}" data-player="${sp}">
         <span class="ept-top">
           <span class="ept-bahn">B${bahn}</span>
+          ${erkHinweiseFuer(bahn).length
+            ? `<span class="ept-erk is-warn" title="Erkennung: Hinweise in der Bahneinstellung (⚙)">⚠</span>`
+            : (erkModus(bahn) === MODUS.AUTOMATIK
+              ? `<span class="ept-erk" title="Erkennung läuft — Würfe kommen von der Kamera">👁</span>` : '')}
           ${s.waiting ? `<span class="ept-warten" title="wartet auf Bahnwechsel">⏳</span>` : ''}
           ${fremdAktiv(sp) ? `<span class="ept-lock" title="wird auf anderem Gerät erfasst">🔒</span>` : ''}
           <span class="ept-total" title="Gesamtergebnis">${total}</span>
@@ -2526,8 +3008,11 @@ export function spielLaufendView() {
           const kranzHit = scan ? !!scan.kranzAt[k] : (r.modus === 'volle' && volleKranz(blk, k));
           // Neuner = Maximalwurf im Bild (alle 9 auf einmal): dauerhaftes ⭐-Abzeichen am Chip.
           const neuner = blk.wuerfe[k] === 9;
-          chips.push(`<button type="button" class="erf-chip${editIdx === k ? ' is-edit' : ''}${err ? ' is-error' : ''}${kranzHit ? ' is-koenig' : ''}${neuner ? ' is-neuner' : ''}" data-chip="${k}"${err ? ` title="${esc(err)}"` : kranzHit ? ' title="Kranz — nur der König (5) steht"' : neuner ? ' title="Alle Neune!"' : ''}>
-            <span class="ec-nr">${k + 1}${kranzHit ? ' ♔' : neuner ? ' ☆' : ''}</span><span class="ec-pins">${blk.wuerfe[k]}${err ? '⚠' : ''}</span></button>`);
+          // Von der Kamera erfasst? Das Zeichen sitzt IM Chip (kein eigenes Bedienelement
+          // je Wurf — der Beleg hängt am Bearbeiten, siehe unten).
+          const vonKamera = Array.isArray(blk.erkannt) && blk.erkannt[k] != null;
+          chips.push(`<button type="button" class="erf-chip${editIdx === k ? ' is-edit' : ''}${err ? ' is-error' : ''}${kranzHit ? ' is-koenig' : ''}${neuner ? ' is-neuner' : ''}${vonKamera ? ' is-erkannt' : ''}" data-chip="${k}"${err ? ` title="${esc(err)}"` : kranzHit ? ' title="Kranz — nur der König (5) steht"' : neuner ? ' title="Alle Neune!"' : vonKamera ? ' title="Von der Kamera erfasst — antippen, dann Tafelbild"' : ''}>
+            <span class="ec-nr">${k + 1}${kranzHit ? ' ♔' : neuner ? ' ☆' : ''}</span><span class="ec-pins">${blk.wuerfe[k]}${err ? '⚠' : ''}</span>${vonKamera ? '<span class="ec-erk">👁</span>' : ''}</button>`);
         } else {
           chips.push(`<span class="erf-chip is-empty" data-slot="${k}"><span class="ec-nr">${k + 1}</span><span class="ec-pins">·</span></span>`);
         }
@@ -2538,6 +3023,16 @@ export function spielLaufendView() {
         <span class="ecr-val">${t.val}${t.mark ? ' ⚠' : ''}${t.manual ? ' ✎' : ''}</span>
         <span class="ecr-count">${t.count}/${t.soll}</span>
       </span>`;
+      // Wird in DIESER Zeile gerade ein Wurf bearbeitet, der von der Kamera kam? Dann hier
+      // der Beleg. Genau in diesem Moment will man ihn sehen — man ist im Begriff, den Wert
+      // zu ändern — und so braucht kein Chip ein zweites Bedienelement.
+      let erkNote = '';
+      if (editIdx != null && editIdx >= r.start && editIdx < r.end
+          && Array.isArray(blk.erkannt) && blk.erkannt[editIdx] != null) {
+        erkNote = `<div class="erf-chip-erk"><button type="button" class="erf-btn"
+          data-act="erk-bild" data-wurf="${blk.erkannt[editIdx]}">🖼 Tafelbild zu Wurf
+          ${editIdx + 1}</button></div>`;
+      }
       // Fehlerhinweis unter der Wurfzeile (auf dem Handy ohne Tooltip sichtbar).
       let errNote = '';
       if (errors) {
@@ -2552,6 +3047,7 @@ export function spielLaufendView() {
           ${result}
         </div>
         ${errNote}
+        ${erkNote}
       </div>`;
     }).join('');
     return `<div class="erf-chips">${rows}</div>`;
@@ -2664,6 +3160,24 @@ export function spielLaufendView() {
     act('lane-settings', () => { laneSettingsOpen = true; render(); });
     act('sw-info', () => toast(swMsg)); // Status-Punkt antippen -> Klartext als Toast
     act('end-satz', toggleDone);
+    // Wurferkennung. Der Modus-Schalter steckt je Bahn in der Bahneinstellung, deshalb
+    // querySelectorAll und nicht `act`: es sind zwei Knöpfe mit derselben Aufgabe.
+    root.querySelectorAll('[data-erkmodus]').forEach((b) =>
+      b.addEventListener('click', () =>
+        erkSetzeModus(parseInt(b.dataset.erkbahn, 10), b.dataset.erkmodus)));
+    act('erk-verwerfen', erkVerwerfeSatz);
+    act('erk-hinweise-weg', () =>
+      erkHinweiseLoeschen(laneOf(state.aktiverSpieler, state.aktiverSatz)));
+    const erkBildBtn = root.querySelector('[data-act="erk-bild"]');
+    if (erkBildBtn) {
+      erkBildBtn.addEventListener('click', () =>
+        erkZeigeBild(parseInt(erkBildBtn.dataset.wurf, 10)));
+    }
+    root.querySelectorAll('[data-act="erk-bild-close"]').forEach((b) =>
+      b.addEventListener('click', (ev) => {
+        if (b.classList.contains('erf-settings-backdrop') && ev.target !== b) return;
+        erkBild = null; render();
+      }));
     act('end-game', endPlayerGame);
     act('toggle-vorschlaege', toggleVorschlaege);
     act('toggle-bahnfolge', toggleBahnfolge);
@@ -3050,6 +3564,9 @@ export function spielLaufendView() {
     // Einstellungs-Sheets: nur Schließen per Esc.
     if (settingsOpen) { if (key === 'Escape') { settingsOpen = false; render(); e.preventDefault(); } return; }
     if (laneSettingsOpen) { if (key === 'Escape') { laneSettingsOpen = false; render(); e.preventDefault(); } return; }
+    // Tafelbild: nur Schließen per Esc. Es wird aus der Wurfzeile geoeffnet, also nie
+    // gleichzeitig mit einem der Sheets darüber — die Reihenfolge hier ist unkritisch.
+    if (erkBild) { if (key === 'Escape') { erkBild = null; render(); e.preventDefault(); } return; }
     // Schnellauswahl-Pop-up: Ziffer = Bild an dieser Position wählen, Enter/Esc = schließen.
     if (pinPick) {
       if (key === 'Escape' || key === 'Enter') { pinPick = null; render(); e.preventDefault(); return; }
@@ -3095,6 +3612,10 @@ export function spielLaufendView() {
   render();
   initSync();
   initZuschauerPoll();
+  // Nach initSync: die Erkennung braucht die Besitzverhältnisse (wer darf schreiben) und
+  // die Spieler-ids für den Verweis auf die Satz-Zeile. initSync setzt beides; läuft es
+  // noch, ist der erste Durchgang eben etwas dünn und der nächste Wurf holt es nach.
+  initErkennung();
   if (!zuschauer && swActive()) {
     pollBrueckeStatus();
     bstatusTimer = setInterval(pollBrueckeStatus, 3000);

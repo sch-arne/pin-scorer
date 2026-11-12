@@ -1,6 +1,6 @@
 # Plan: automatische Wurfbild-Erkennung an die App andocken
 
-Stand: 11.11.2026 · Status: Erkenner angebunden, Zuordnungslogik gebaut, Oberfläche offen
+Stand: 12.11.2026 · Status: vollständig gebaut und gegen die Test-Datenbank gefahren
 
 > ## Was seit dem 01.09. daraus geworden ist
 >
@@ -41,9 +41,37 @@ Stand: 11.11.2026 · Status: Erkenner angebunden, Zuordnungslogik gebaut, Oberfl
 > leeren Satzes immer nur vorgeschlagen wird (Einspielwürfe), stapelten sich sonst am
 > Satzanfang beliebig viele Vorschläge für denselben Wurf.
 >
-> Offen: der Transport (`js/backend/erkennung.js` — Realtime oder Polling auf
-> `erkannter_wurf`) und die Oberfläche (Abschnitt 3, Phase 3) samt Umschalter für den
-> Betriebsmodus. Letztere bewusst zurückgestellt.
+> **4. Die Oberfläche ist anders ausgefallen als Abschnitt 3 sie plante: es gibt KEINE
+> Vorschlagsliste.** Die Entscheidung fiel am 12.11.2026 — ein erkannter Wurf geht direkt
+> in den Satz, korrigiert wird er wie jeder getippte. Damit trägt der Automatik-Betrieb
+> auch das ein, was die Zuordnung nur „vorschlagen" wollte; der Grund wird zum HINWEIS an
+> der Bahn statt zur Rückfrage. Nur ein Wurf, den die Erfassung selbst ablehnt („mehr
+> Holz als Kegel standen"), bleibt draußen — und wird sofort aufgegeben, statt die Bahn
+> 15 Minuten lang zu sperren: Eine Fehlerkennung darf nicht den Rest des Satzes stilllegen.
+>
+> Sichtbar wird die Erkennung an genau drei Stellen: ein Zeichen im Bahn-Tab (👁 läuft,
+> ⚠ Hinweise), ein 👁 im Wurf-Chip (dieser Wurf kam von der Kamera, beim Bearbeiten mit
+> Knopf zum Tafelbild), und der Abschnitt „Erkennung" in der Bahneinstellung (Schalter
+> Aus/Automatik je Bahn, „erkannte Würfe dieses Satzes verwerfen", Hinweisliste).
+>
+> Gegen die Einspielwürfe — die für die Kamera aussehen wie Würfe — steht ein
+> **Stichtag je Bahn**: Nur was NACH dem Einschalten aufgezeichnet wurde, zählt. Wer beim
+> Anspiel einschaltet, hat das Problem nicht; das Verwerfen ist das Netz darunter.
+>
+> **5. Was der erste Durchlauf in der Oberfläche zutage förderte** — vier Dinge, die
+> keine Unit- und keine E2E-Prüfung gefunden hätte:
+>
+> | Fund | Wo | Warum es niemandem auffiel |
+> |---|---|---|
+> | Die Policies prüften `status = 'laufend'` | `supabase/policies.sql` | Ein geteiltes Spiel steht in der Datenbank auf `setup` — der lokale Status springt beim ersten Wurf (store.js), der entfernte wird erst beim Beenden geschrieben. In der Test-DB: 47 Spiele auf `setup`, **kein einziges** auf `laufend`. |
+> | `erkannt` überlebte kein Neuladen | `normalizeErfassung` | Die Funktion baut jeden Block aus FESTEN Feldern neu auf. In der Datenbank stand die Herkunft noch, lokal war sie weg. Gleiches galt für Schalterstellung, Stichtag und Hinweise. |
+> | Das Teilen startete die Erkennung nicht | `shareGame` | `initErkennung` lief nur beim Öffnen des Spiels — wer während des Spiels teilte, bekam sie bis zum nächsten Öffnen nicht. |
+> | Verworfene Würfe behielten ihren Verweis | `verwerfen` | Es schützt mit `satz_block_id is null` davor, Zugeordnetes zu überschreiben — beim Verwerfen ist aber genau das gewollt. Dafür gibt es jetzt `freigeben`. |
+>
+> Gefahren wurde der Durchlauf gegen die Test-Datenbank, mit echten Zeilen des Erkenners
+> über HTTP: vier Würfe automatisch im Satz, Reihenfolge richtig, widersprüchliches
+> Kegelbild verworfen, Verweise (`satz_block_id` + `wurf_index`) gesetzt, Tafelbild
+> angezeigt, Schalter und Stichtag geprüft, danach restlos aufgeräumt.
 
 Ausgangslage: Eine externe Erkennung (Kamera/Sensorik an der Bahn) liefert **nur erkannte
 Wurfbilder plus die Bahn**. Sie kennt weder Spieler noch Satz, Teilsatz oder Teilsatzmodus.

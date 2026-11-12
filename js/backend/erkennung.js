@@ -78,6 +78,31 @@ export function abonniereWuerfe({ erkennerIds, onNeu }) {
   return () => { supabase.removeChannel(kanal); };
 }
 
+// Die id der Satz-Zeile, an die ein Wurf gebunden wird.
+//
+// WARUM EINE EIGENE ABFRAGE: Die App kennt ihre Blöcke als `bloecke[sp][st]` — eine
+// Position im Array, keine Datenbank-id. Geschrieben werden sie mit einem `upsert` auf
+// (spieler_id, satz), das nichts zurückgibt. Für `erkannter_wurf.satz_block_id` braucht es
+// aber genau diese id: sie ist der Verweis vom erkannten Wurf auf den Wurf im Satz, und
+// damit der ganze Zweck der Anbindung.
+//
+// Der Aufrufer merkt sich das Ergebnis je (Spieler, Satz) — es ändert sich nicht mehr,
+// sobald die Zeile einmal existiert. Gibt es sie noch nicht (der erste Wurf ist gerade
+// hochgeschrieben worden, die Antwort steht noch aus), kommt `null` zurück; dann wird der
+// Wurf eben beim nächsten Mal gebunden. Dass der Wurf im Satz steht, hängt nicht daran.
+export async function satzBlockId({ spielId, spielerId, satz }) {
+  if (!spielId || !spielerId || satz == null) return null;
+  const { data, error } = await supabase
+    .from('satz_block')
+    .select('id')
+    .eq('spiel_id', spielId)
+    .eq('spieler_id', spielerId)
+    .eq('satz', satz)
+    .maybeSingle();
+  if (error) throw error;
+  return (data && data.id) || null;
+}
+
 // Einen erkannten Wurf an seine Stelle im Satz binden. Rückgabe false = die Datenbank hat
 // es verweigert (fremde Bahn, fremdes Spiel) oder jemand war schneller. Das ist kein
 // Fehlerfall, sondern die normale Antwort auf „die Zeile gehört dir nicht" — deshalb eine
@@ -107,6 +132,32 @@ export async function verwerfen(wurfId, grund) {
     .update({ verworfen_grund: String(grund || 'verworfen').slice(0, 300) })
     .eq('id', wurfId)
     .is('satz_block_id', null)
+    .select('id');
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+}
+
+// Einen Wurf, der SCHON zugeordnet war, wieder freigeben und als verworfen vermerken.
+//
+// Der Weg dafür ist „Erkannte Würfe dieses Satzes verwerfen": Die Kamera lief schon beim
+// Einspielen, ihre Würfe stehen im Satz, und sie sollen alle wieder heraus. `verwerfen`
+// kann das nicht — es lässt eine zugeordnete Zeile bewusst in Ruhe, damit niemand einen
+// fremden Verweis überschreibt. Hier ist das Gegenteil gewollt: Der Verweis MUSS weg, sonst
+// zeigt er auf einen Wurf, den es im Satz nicht mehr gibt.
+//
+// `wurf_index` und `uebernommen_am` werden mitgeräumt — eine Zeile, die auf nichts mehr
+// zeigt, soll auch nicht behaupten, sie sei um 19:42 übernommen worden.
+export async function freigeben(wurfId, grund) {
+  const { data, error } = await supabase
+    .from('erkannter_wurf')
+    .update({
+      spiel_id: null,
+      satz_block_id: null,
+      wurf_index: null,
+      uebernommen_am: null,
+      verworfen_grund: String(grund || 'verworfen').slice(0, 300),
+    })
+    .eq('id', wurfId)
     .select('id');
   if (error) throw error;
   return Array.isArray(data) && data.length > 0;

@@ -3282,3 +3282,71 @@ body.overlay-mode #app { max-width: 100%; margin: 0; padding: 0; background: tra
 .wdi-msg.is-warn { color: var(--accent-2, #f5a623); }
 .wdi-msg.is-err { color: #e89a9a; }
 .wdi-msg.is-none { color: var(--text-dim); }
+
+/* ── Wurferkennung (Kamera an der Bahn) ─────────────────────────────────────────
+   Drei Orte, an denen die Erkennung sichtbar wird, und bewusst nicht mehr:
+     1. ein Zeichen im Bahn-Tab  (läuft / hat Hinweise)
+     2. ein 👁 im Wurf-Chip      (dieser Wurf kam von der Kamera)
+     3. der Abschnitt in der Bahneinstellung (Schalter, Verwerfen, Hinweise)
+   Eine Vorschlagsliste gibt es nicht — erkannte Würfe stehen im Satz. */
+
+/* 1. Bahn-Tab */
+.ept-erk { font-size: 0.8rem; line-height: 1; opacity: 0.75; }
+.ept-erk.is-warn { color: #e0603a; opacity: 1; }
+
+/* 2. Wurf-Chip: das Zeichen trägt keine eigene Farbe, der Wurf ist ja nicht besonders —
+      er ist nur anders entstanden. Beim Bearbeiten (goldener Chip) mitfärben. */
+.erf-chip.is-erkannt .ec-erk { font-size: 0.55rem; line-height: 1; opacity: 0.6; margin-top: 1px; }
+.erf-chip.is-edit.is-erkannt .ec-erk { opacity: 0.8; }
+/* Der Beleg-Knopf unter der Wurfzeile, nur während ein erkannter Wurf bearbeitet wird. */
+.erf-chip-erk { margin-top: 4px; }
+.erf-chip-erk .erf-btn { font-size: 0.78rem; padding: 5px 10px; }
+
+/* 3. Bahneinstellung */
+.erf-erk {
+  margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.erf-erk-head { display: flex; align-items: baseline; gap: 8px; }
+.erf-erk-title { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+.erf-erk-name { font-size: 0.82rem; color: var(--text-dim); }
+.erf-erk-switch { display: flex; gap: 8px; }
+.erf-erk-switch .erf-btn { flex: 1; }
+.erf-erk .erf-lane-sub { margin: 0; }
+
+/* Hinweise: was NICHT eingetragen wurde. Sie sind der Ersatz für die Vorschlagsliste —
+   deshalb dürfen sie auffallen, aber den Satz nicht überdecken. */
+.erf-erk-hint {
+  background: var(--surface-2);
+  border: 1px solid rgba(224, 96, 58, 0.4);
+  border-radius: 10px; padding: 8px 10px;
+}
+.erf-erk-hint-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 0.85rem; font-weight: 700; color: #e0603a;
+}
+.erf-erk-hint-list { margin: 6px 0 0; padding-left: 0; list-style: none; }
+.erf-erk-hint-list li {
+  font-size: 0.8rem; color: var(--text); line-height: 1.4;
+  padding: 3px 0; border-top: 1px solid var(--border);
+}
+.erf-erk-hint-list li:first-child { border-top: 0; }
+.eeh-zeit { color: var(--text-dim); font-variant-numeric: tabular-nums; margin-right: 6px; }
+
+/* Das Tafelbild: der Beleg. Zwei Bilder nebeneinander (vorher/nachher), auf dem Handy
+   untereinander — sie sind breiter als hoch, und nebeneinander wäre jedes zu klein. */
+.erf-erkbild { display: flex; flex-direction: column; gap: 12px; margin-bottom: 14px; }
+.erf-erkbild-fig { margin: 0; }
+.erf-erkbild-fig img {
+  display: block; width: 100%; height: auto;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: #000;
+}
+.erf-erkbild-fig figcaption {
+  font-size: 0.78rem; color: var(--text-dim); margin-top: 4px; text-align: center;
+}
+@media (min-width: 560px) {
+  .erf-erkbild { flex-direction: row; }
+  .erf-erkbild-fig { flex: 1; min-width: 0; }
+}
