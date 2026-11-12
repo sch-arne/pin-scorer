@@ -19,6 +19,12 @@
 // Vorschlagsmodus stuft jedes `setzen` zu `vorschlag` herab — das ist Sache des Aufrufers.
 // Ebenso die Entdopplung: eine Zeile zweimal zu verarbeiten verhindert die id, nicht diese
 // Datei.
+//
+// Und umgekehrt: Im AUTOMATIK-Betrieb trägt der Aufrufer auch ein `vorschlag` ein (die App
+// hat keine Vorschlagsliste — erkannte Würfe landen direkt im Satz, Korrektur wie bei jedem
+// getippten Wurf). `grund` wird dann zum HINWEIS am Wurf, nicht zur Rückfrage. Damit das
+// möglich ist, muss jedes `vorschlag` einen Platz (`ziel`) tragen, wo einer feststeht, und
+// sagen, ob dem Kegelbild zu glauben ist — dafür `bildStrittig`.
 
 import { computeBahnState, laneOf } from './bahnwechsel.js';
 import { teilsatzRanges } from './teilsaetze.js';
@@ -53,6 +59,28 @@ export function bahnFuerLane(erkenner, lane) {
   return lane;
 }
 
+// Die Umkehrung von `bahnFuerLane`: Welcher Erkenner liest BAHN n?
+//
+// Gebraucht wird sie für die Oberfläche — an einer Bahn ohne Kamera gibt es keinen Schalter
+// zu zeigen. Die Umkehrung ist nicht eindeutig, deshalb steht sie hier und nicht in der
+// Ansicht: Ein Erkenner ohne gekoppelte Bahn und ohne Zuordnung meldet die Bahnnummer so,
+// wie die Tafel sie zeigt — er KÖNNTE also jede Bahn der Anlage liefern. Die drei Fälle in
+// derselben Reihenfolge wie dort:
+//   1) an genau diese Bahn gekoppelt  -> eindeutig er
+//   2) seine Zuordnung nennt die Bahn -> eindeutig er
+//   3) weder noch                     -> er kommt in Frage (letzte Wahl)
+// Gibt es mehrere, gewinnt der eindeutigere; unter Gleichen der erste.
+export function erkennerFuerBahn(liste, bahn) {
+  const alle = Array.isArray(liste) ? liste : [];
+  const gekoppelt = alle.find((e) => e && e.bahn_nummer === bahn);
+  if (gekoppelt) return gekoppelt;
+  const zugeordnet = alle.find((e) => e && e.bahn_nummer == null
+    && Object.values(e.bahn_zuordnung || {}).some((n) => Number(n) === bahn));
+  if (zugeordnet) return zugeordnet;
+  return alle.find((e) => e && e.bahn_nummer == null
+    && !Object.keys(e.bahn_zuordnung || {}).length) || null;
+}
+
 // Die Bahn-Belegung des Spiels: je Spieler { pos, lane, waiting, fertig }.
 // Genau dieselbe Rechnung wie in der Erfassung (views/spiel-laufend.js) — eine Wahrheit.
 export function bahnBelegung(config, bloecke) {
@@ -71,6 +99,15 @@ const ergebnis = (aktion, grund, extra = {}) => ({
   // andere Gerät ist derselbe Wurf richtig, und ein dort hingeschriebenes „verworfen" nähme
   // ihm den Wurf weg.
   merken: true,
+  // Woran lag es? Bisher nur fuer einen Fall gebraucht, aber als FELD und nicht als
+  // Textvergleich: Wer den Grund am Wortlaut erkennen muesste, haette beim naechsten
+  // Umformulieren stillschweigend etwas anderes.
+  art: null,
+  // Widerspricht das Kegelbild sich selbst oder dem Abräum-Lauf? Dann ist die Holzzahl die
+  // gemessene Größe und das Bild fällt weg. Wer im Automatik-Betrieb eintraegt, darf dieses
+  // Bild NICHT übernehmen — sonst stünde im Satz ein Bild, von dem schon hier bekannt ist,
+  // dass es nicht stimmen kann.
+  bildStrittig: false,
   ...extra,
 });
 
@@ -197,14 +234,17 @@ export function ordneEvent(zeile, ctx) {
       if (lagen.length) {
         return ergebnis(AKTION.VORSCHLAG,
           `Kegel ${lagen.join(', ')} ${lagen.length === 1 ? 'stand' : 'standen'} nicht mehr`,
-          daten);
+          { ...daten, bildStrittig: true });
       }
     }
   }
 
   // 7) Ein unbrauchbares Kegelbild macht den Wurf nicht unbrauchbar — die Holzzahl bleibt die
   //    gemessene Größe. Aber eintragen soll das ein Mensch.
-  if (bild.befund) return ergebnis(AKTION.VORSCHLAG, `Wurf ${idx + 1}: ${bild.befund}`, daten);
+  if (bild.befund) {
+    return ergebnis(AKTION.VORSCHLAG, `Wurf ${idx + 1}: ${bild.befund}`,
+                    { ...daten, bildStrittig: true });
+  }
 
   // 8) Der erste Wurf eines noch leeren Satzes wird nur vorgeschlagen. Grund: Einspielwürfe.
   //    Sie finden auf derselben Bahn statt, sehen genauso aus und würden sonst stillschweigend
@@ -213,7 +253,8 @@ export function ordneEvent(zeile, ctx) {
   //    nicht zuverlässig, ein Mensch mit einem Blick auf die Bahn schon.
   if (idx === 0) {
     return ergebnis(AKTION.VORSCHLAG,
-      `Erster Wurf in Satz ${st + 1} von Spieler ${sp + 1} — Einspielwürfe?`, daten);
+      `Erster Wurf in Satz ${st + 1} von Spieler ${sp + 1} — Einspielwürfe?`,
+      { ...daten, art: 'satzanfang' });
   }
 
   return ergebnis(AKTION.SETZEN, null, daten);

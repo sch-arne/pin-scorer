@@ -364,3 +364,63 @@ function replay() {
   }
   return { zeilen, c, ranges, bl, zaehler, markiert };
 }
+
+// ── bildStrittig: darf der Automatik-Betrieb dem Kegelbild glauben? ──────────
+//
+// Die Frage entsteht nur, weil es keine Vorschlagsliste gibt: Was die Zuordnung früher einem
+// Menschen vorlegte, trägt die App jetzt selbst ein. Dann muss sie wissen, ob sie das BILD
+// mitnehmen darf — die Holzzahl ist gemessen, das Bild kann ihr widersprechen.
+
+test('Ein Bild, dessen Anzahl nicht zur Holzzahl passt, ist strittig', () => {
+  const e = ordne(wurf(1, 4, [1, 2, 3]), bloecke(blk([9])));
+
+  assert.equal(e.aktion, AKTION.VORSCHLAG);
+  assert.equal(e.bildStrittig, true);
+  assert.equal(e.kegel, null, 'das unbrauchbare Bild wird gar nicht erst weitergegeben');
+  assert.equal(e.holz, 4, 'die gemessene Zahl bleibt');
+});
+
+test('Ein Bild mit Kegeln, die schon lagen, ist strittig', () => {
+  // Abräumen: Wurf 3 nahm 1-2-3-4, es stehen noch 5-6-7-8-9. Meldet Wurf 4 den Kegel 2,
+  // kann das nicht sein.
+  const vorher = blk([9, 9, 4], [null, null, [1, 2, 3, 4]]);
+  const e = ordne(wurf(1, 2, [2, 5]), bloecke(vorher));
+
+  assert.equal(e.aktion, AKTION.VORSCHLAG);
+  assert.equal(e.bildStrittig, true);
+  assert.match(e.grund, /Kegel 2 stand nicht mehr/);
+  assert.deepEqual(e.kegel, [2, 5], 'das Bild wird mitgeliefert — verwerfen darf der Aufrufer');
+});
+
+test('Mehr Holz als Kegel standen ist KEIN Bildstreit — da zweifelt die Zahl', () => {
+  // Hier hilft das Verwerfen des Bildes nichts: nicht das Bild ist strittig, sondern der
+  // ganze Wurf. Die Erfassung lehnt ihn ab, und das soll sie auch.
+  const vorher = blk([9, 9, 4], [null, null, [1, 2, 3, 4]]);
+  const e = ordne(wurf(1, 7), bloecke(vorher));
+
+  assert.equal(e.aktion, AKTION.VORSCHLAG);
+  assert.equal(e.bildStrittig, false);
+  assert.match(e.grund, /standen nur 5/);
+});
+
+test('Ein sauberer Wurf ist in keiner Hinsicht strittig', () => {
+  const e = ordne(wurf(1, 8, [1, 2, 3, 4, 5, 6, 7, 8]), bloecke(blk([9])));
+
+  assert.equal(e.aktion, AKTION.SETZEN);
+  assert.equal(e.bildStrittig, false);
+  assert.equal(e.grund, null);
+});
+
+test('Der Satzanfang nennt seine Art — der Hinweis daran hängt an einem Feld, nicht am Wortlaut', () => {
+  // Die Ansicht laesst den Satzanfang-Hinweis ab Satz 2 weg (eingespielt wird vor dem
+  // Spiel, nicht nach jedem Bahnwechsel). Sie erkennt ihn an `art`, nicht am Text —
+  // dieser Test haelt fest, dass das Feld gesetzt ist, und nur hier.
+  const anfang = ordne(wurf(1, 9), bloecke());
+  assert.equal(anfang.art, 'satzanfang');
+
+  const spaeter = ordne(wurf(1, 4, [1, 2, 3]), bloecke(blk([9])));
+  assert.equal(spaeter.art, null, 'ein anderer Befund traegt die Art nicht');
+
+  const sauber = ordne(wurf(1, 8, [1, 2, 3, 4, 5, 6, 7, 8]), bloecke(blk([9])));
+  assert.equal(sauber.art, null);
+});
