@@ -14,6 +14,16 @@ sich die Oberflaeche zeigen.
     # erst ansehen, nichts schicken:
     python tools/erkennung-aufzeichnung-abspielen.py . --bahn 4=3 --nur 3 --trocken
 
+ZU DEN WURFNUMMERN: Die Aufzeichnung vom 08.09. enthaelt KEINE Tafelnummern -- damals
+wurden sie nicht mitgeschrieben. Dieses Werkzeug zaehlt sie deshalb selbst mit, je Bahn ab
+1, und schickt sie als `displayed_throw_number`. Das ist eine SAUBERE Tafel: Sie zeigt die
+Nummer, die der Wurf wirklich hatte. Genau damit laesst sich pruefen, ob die App den Platz
+aus der Nummer nimmt -- denn wenn sie es tut, steht am Ende jeder Wurf unter seiner eigenen
+Nummer, auch wenn zwischendurch welche abgelehnt wurden.
+Mit `--ohne-nummer N` bleibt jede N-te Nummer weg (so verhaelt sich eine Tafel, die mal
+nicht lesbar ist). Diese Wuerfe muessen trotzdem eingetragen werden, am naechsten freien
+Platz -- das ist die Zusicherung dahinter.
+
 ZUR UMRECHNUNG: Die Aufzeichnung notiert in `bildVor`/`bildNach` die STEHENDEN Kegel.
 Unsere Tabelle `erkannter_wurf` fuehrt in `pins` die GEFALLENEN. Gefallen ist also
 bildVor ohne bildNach -- und `pins_count` deren Anzahl. Wer das verwechselt, bekommt
@@ -52,10 +62,13 @@ def lies_bahnplan(angaben) -> dict:
     return plan
 
 
-def wuerfe_aus(datei: Path, plan: dict, nur) -> list:
+def wuerfe_aus(datei: Path, plan: dict, nur, ohne_nummer: int = 0) -> list:
     roh = json.loads(datei.read_text(encoding="utf-8"))
     ereignisse = roh.get("ereignisse") or []
     raus = []
+    # Je BAHN DES SPIELS gezaehlt, nicht je Bahn der Aufzeichnung: Legt man zwei Bahnen
+    # auf eine, teilen sie sich den Satz und damit die Wurfnummern.
+    zaehler = {}
     for e in ereignisse:
         if e.get("art") != "wurf":
             continue
@@ -68,7 +81,12 @@ def wuerfe_aus(datei: Path, plan: dict, nur) -> list:
         steht_vor = set(e.get("bildVor") or [])
         steht_nach = set(e.get("bildNach") or [])
         gefallen = sorted(steht_vor - steht_nach)
+        zaehler[bahn] = zaehler.get(bahn, 0) + 1
+        nummer = zaehler[bahn]
+        if ohne_nummer and nummer % ohne_nummer == 0:
+            nummer = None
         raus.append({
+            "nummer": nummer,
             "seq": e.get("seq"),
             "zeit": datetime.fromisoformat(e["ts"]),
             "bahn": bahn,
@@ -84,7 +102,8 @@ def wuerfe_aus(datei: Path, plan: dict, nur) -> list:
 def beschreibe(w: dict, plan: dict) -> str:
     herkunft = (f"B{w['quelle_bahn']}->B{w['bahn']}"
                 if w["quelle_bahn"] in plan else f"B{w['bahn']}")
-    text = (f"  #{w['seq']:>3} {w['zeit'].strftime('%H:%M:%S')} {herkunft} "
+    nr = f"Wurf {w['nummer']:>2}" if w["nummer"] is not None else "Wurf  ?"
+    text = (f"  #{w['seq']:>3} {w['zeit'].strftime('%H:%M:%S')} {herkunft} {nr} "
             f"{w['holz']} Holz")
     if w["kegel"]:
         text += " (Kegel " + ",".join(str(k) for k in w["kegel"]) + ")"
@@ -109,6 +128,8 @@ def main() -> int:
     p.add_argument("--anzahl", type=int, help="nach so vielen Wuerfen aufhoeren")
     p.add_argument("--hoechstpause", type=float, default=8.0,
                    help="laengste Pause in Sekunden, damit Spielerwechsel nicht langweilen")
+    p.add_argument("--ohne-nummer", type=int, default=0, metavar="N",
+                   help="jede N-te Wurfnummer weglassen (0 = alle mitschicken)")
     p.add_argument("--trocken", action="store_true", help="nur zeigen, nichts schicken")
     p.add_argument("--aufraeumen", action="store_true",
                    help="alle Zeilen dieser Werkzeuge wieder loeschen")
@@ -127,7 +148,7 @@ def main() -> int:
 
     plan = lies_bahnplan(a.bahn)
     nur = set(a.nur or [])
-    wuerfe = wuerfe_aus(datei, plan, nur)
+    wuerfe = wuerfe_aus(datei, plan, nur, a.ohne_nummer)
     if a.anzahl:
         wuerfe = wuerfe[:a.anzahl]
     if not wuerfe:
@@ -138,6 +159,10 @@ def main() -> int:
     schwach = [w for w in wuerfe if (w["konfidenz"] or 1.0) < 0.8]
     if schwach:
         print(f"davon {len(schwach)} mit schwacher Konfidenz -- die sind der eigentliche Test.")
+    ohne = [w for w in wuerfe if w["nummer"] is None]
+    if ohne:
+        print(f"{len(ohne)} ohne Tafelnummer -- die muessen trotzdem rein, "
+              "am naechsten freien Platz.")
 
     if a.trocken:
         for w in wuerfe:
@@ -152,7 +177,8 @@ def main() -> int:
         if vorher is not None and a.tempo > 0:
             warte = (w["zeit"] - vorher).total_seconds() / a.tempo
             time.sleep(max(0.0, min(warte, a.hoechstpause)))
-        versand.schicke(versand.zeile(w["bahn"], w["holz"], kegel=w["kegel"]))
+        versand.schicke(versand.zeile(w["bahn"], w["holz"], kegel=w["kegel"],
+                                      nummer=w["nummer"]))
         print(beschreibe(w, plan))
         vorher = w["zeit"]
     print(f"\n{len(wuerfe)} Wuerfe abgespielt.")

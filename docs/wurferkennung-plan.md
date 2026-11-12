@@ -1,6 +1,6 @@
 # Plan: automatische Wurfbild-Erkennung an die App andocken
 
-Stand: 12.11.2026 · Status: vollständig gebaut und gegen die Test-Datenbank gefahren
+Stand: 12.11.2026 · Status: vollständig gebaut und gegen die Test-Datenbank gefahren; die Wurfnummer der Tafel bestimmt den Platz
 
 > ## Was seit dem 01.09. daraus geworden ist
 >
@@ -260,3 +260,48 @@ Aufräumen: `python tools/erkennung-wuerfe-senden.py . --aufraeumen` (löschen d
 Verwalter, nicht der Erkenner — das geht deshalb über `supabase/.db-test.env`). Was die App
 schon übernommen hat, steht danach weiter im Satz; dafür gibt es in der Bahneinstellung
 „erkannte Würfe dieses Satzes verwerfen".
+
+## 8. Die Wurfnummer der Tafel bestimmt den Platz (12.11.2026)
+
+**Das ist eine Kehrtwende gegenüber Abschnitt 0 und 4.** Dort stand, die von der Tafel
+gelesene Wurfnummer werde bewusst NICHT benutzt — im Ursprungsprojekt der Erkennung hatte
+sie 28 % der Würfe gelöscht. Der Grund dafür bleibt richtig; die Schlussfolgerung war zu
+weit. Die Nummer darf jetzt mitreden, aber sie darf **nie einen Wurf kosten**:
+
+| Lage | Was passiert |
+| --- | --- |
+| keine Nummer gelesen | nächster freier Platz — wie vorher |
+| Nummer passt zum Platz | nichts Besonderes, kein Hinweis |
+| Nummer liegt auf einem belegten Platz | der Wurf dort wird **ersetzt**, mit Hinweis |
+| Nummer liegt weiter vorn (bis `MAX_LUECKE` = 5) | die Plätze dazwischen bleiben als **offene Würfe** stehen (`? ✎`, 0 Holz) |
+| Nummer liegt weiter als 5 Plätze vorn | Nummer gilt als verlesen → ans Ende, mit Hinweis |
+| Nummer außerhalb 1…Würfe-pro-Satz | dito |
+
+**Wozu das gut ist:** Lehnt die Erfassung einen Wurf ab — und sie gibt ihn sofort auf,
+siehe Abweichung 4 —, sitzt ohne die Nummer **jeder folgende Wurf einen Platz zu früh**,
+bis zum Satzende. Gemessen am Mitschnitt vom 08.09.: Nach vier abgelehnten Würfen landete
+der nächste auf Platz 19 statt auf 23. Mit der Nummer sitzt er auf 23, und die vier
+offenen Plätze stehen sichtbar als `? ✎` da.
+
+**Warum 0 Holz für einen offenen Platz:** Die Wurfliste ist ein dichtes Array; `null` darin
+hätte 149 Fundstellen in 22 Dateien zu tragen gehabt (Summen, Statistik, CSV, Sportwinner,
+Overlay). 0 Holz hält die Satzsumme richtig (0 addiert nichts) und heißt beim Abräumen
+„nichts fiel" — die harmloseste Annahme. Das eigene Feld `blk.luecke` je Wurf unterscheidet
+den offenen Platz vom gewollten Fehlwurf; ohne es wären beide dieselbe 0.
+
+**Warum `MAX_LUECKE`:** Eine verlesene Ziffer ist der häufigste Fehler der Tafelerkennung —
+aus „7" wird „17". Ohne Deckel stünden zehn erfundene Fehlwürfe im Satz, bei 30 Würfen je
+Satz womöglich bis zum automatischen Satzende. Vier bis fünf verpasste Würfe am Stück sind
+dagegen real: genau das ist beim Abspielen passiert.
+
+**Was der Durchlauf hier fand:** Der Ablehnungsgrund in der Datenbank war falsch. In
+`erkUebernehmen` setzte `melde` den Grund nur, wenn noch keiner dastand (`e.grund || txt`) —
+stand dort schon der Hinweis zur Platzierung, landete DER als `verworfen_grund`. In der
+Datenbank stand dann „Tafel zeigte Wurf 20, hier war erst Platz 19", obwohl die Erfassung
+den Wurf wegen „8 Holz, aber es stand nur 1 Kegel" nicht annahm. Eine Ablehnung schlägt
+jetzt jeden Hinweis.
+
+Nachgewiesen gegen die Test-Datenbank mit dem Mitschnitt vom 08.09. (23 Würfe, jede 7.
+Tafelnummer absichtlich weggelassen): **17 von 17 gelesenen Nummern sitzen auf ihrem
+eigenen Platz**, die drei ohne Nummer am nächsten freien, vier von der Erfassung abgelehnt
+(mit dem richtigen Grund), vier offene Plätze als `? ✎` — und sie überleben das Neuladen.

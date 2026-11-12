@@ -108,8 +108,39 @@ const ergebnis = (aktion, grund, extra = {}) => ({
   // Bild NICHT übernehmen — sonst stünde im Satz ein Bild, von dem schon hier bekannt ist,
   // dass es nicht stimmen kann.
   bildStrittig: false,
+  // Was die Tafel als Wurfnummer zeigte (1-basiert), und was daraus folgte:
+  //   nummer   = die gelesene Nummer, oder null (keine gelesen / unbrauchbar)
+  //   ersetzt  = der Platz war belegt, der dortige Wurf wird ueberschrieben
+  //   luecke   = so viele Plaetze davor sind leer und werden als Fehlwurf vorbelegt
+  nummer: null,
+  ersetzt: false,
+  luecke: 0,
   ...extra,
 });
+
+// Wie viele leere Plaetze die Tafelnummer hoechstens aufreissen darf.
+//
+// Eine verlesene Ziffer ist der haeufigste Fehler der Tafelerkennung -- aus "7" wird "17",
+// und schon staenden zehn erfundene Fehlwuerfe im Satz, die bei 30 Wuerfen je Satz auch
+// noch das automatische Satzende ausloesen koennten. Vier bis fuenf verpasste Wuerfe
+// hintereinander sind dagegen real: Genau das ist am 12.11.2026 beim Abspielen der
+// Aufzeichnung passiert, als die Erfassung vier Wuerfe in Folge ablehnte.
+// Darueber hinaus gilt die Nummer als verlesen; der Wurf kommt ans Ende und sagt es.
+export const MAX_LUECKE = 5;
+
+// Die Wurfnummer der Tafel in einen Index uebersetzen -- oder null, wenn sie nichts taugt.
+//
+// Sie zaehlt die Wuerfe INNERHALB des Satzes, so wie `blk.wuerfe`. Alles ausserhalb
+// 1..wuerfeProSatz ist ein Lesefehler und wird verworfen, nicht geraten: Eine Nummer, die
+// es im Satz gar nicht gibt, sagt nichts darueber aus, wohin der Wurf gehoert.
+function nummerAusZeile(zeile, config) {
+  const n = zeile.displayed_throw_number;
+  if (n == null) return { idx: null, befund: null };
+  if (!Number.isInteger(n) || n < 1 || n > config.wuerfeProSatz) {
+    return { idx: null, befund: `Tafel zeigte Wurf ${n} — das gibt es im Satz nicht` };
+  }
+  return { idx: n - 1, befund: null };
+}
 
 // Ein Kegelbild aus dem Erkenner prüfen. Rückgabe { kegel, befund }:
 //   kegel  = sortierte Liste der gefallenen Kegel, oder null (unbrauchbar -> Holz zählt)
@@ -135,9 +166,11 @@ function pruefeBild(pins, holz) {
 
 // Einen erkannten Wurf einordnen.
 //
-// `zeile`  — eine Zeile aus `erkannter_wurf`: { lane, pins_count, pins }. Weitere Spalten
-//            (recorded_at, video_time_s, displayed_*, board_jpeg) spielen hier keine Rolle:
-//            sie sind Beleg, nicht Eingabe.
+// `zeile`  — eine Zeile aus `erkannter_wurf`: { lane, pins_count, pins,
+//            displayed_throw_number }. Die Wurfnummer der Tafel bestimmt den PLATZ im Satz
+//            (siehe 5b) und ist damit seit dem 12.11.2026 Eingabe, nicht mehr nur Beleg.
+//            Die uebrigen Spalten (recorded_at, video_time_s, die anderen displayed_*,
+//            board_jpeg) spielen hier keine Rolle.
 // `ctx`    — { config, bloecke, erkenner?, darfSchreiben?, ranges? }
 //            config/bloecke wie in der Erfassung; `erkenner` nur, wenn die Bahn noch
 //            übersetzt werden muss; `darfSchreiben(sp)` = hält DIESES Gerät den Spieler
@@ -204,7 +237,29 @@ export function ordneEvent(zeile, ctx) {
                     { bahn, ziel: { sp, st, idx: blk.wuerfe.length } });
   }
 
-  const idx = blk.wuerfe.length;
+  // 5b) WOHIN im Satz? Bis zum 12.11.2026 immer ans Ende; seitdem bestimmt die Wurfnummer
+  //     der Tafel den Platz, wo sie gelesen wurde. Drei Faelle, und keiner wirft den Wurf weg:
+  //       Nummer fehlt        -> naechster freier Platz, wie bisher
+  //       Nummer ist belegt   -> der Wurf ersetzt den dortigen, mit Hinweis
+  //       Nummer liegt weiter -> die Plaetze dazwischen bleiben als Fehlwurf offen
+  //     Das heilt den Bruch, der sonst JEDEN folgenden Wurf verschiebt: Lehnt die Erfassung
+  //     einen Wurf ab (und sie gibt ihn sofort auf, siehe erkennung-strom.js), sitzt ohne die
+  //     Nummer alles Weitere einen Platz zu frueh -- und bleibt es bis zum Satzende.
+  const belegt = blk.wuerfe.length;
+  const ausTafel = nummerAusZeile(zeile, config);
+  let idx = belegt;
+  let ersetzt = false;
+  let luecke = 0;
+  let nummerBefund = ausTafel.befund;
+  if (ausTafel.idx != null) {
+    if (ausTafel.idx < belegt) { idx = ausTafel.idx; ersetzt = true; }
+    else if (ausTafel.idx - belegt <= MAX_LUECKE) { idx = ausTafel.idx; luecke = idx - belegt; }
+    else {
+      nummerBefund = `Tafel zeigte Wurf ${ausTafel.idx + 1}, hier ist erst Platz `
+        + `${belegt + 1} — Nummer verworfen`;
+    }
+  }
+
   const range = rangeOfThrow(ranges, idx);
   if (!range) {
     return ergebnis(AKTION.PUFFERN, `Wurf ${idx + 1} liegt in keinem Teilsatz`,
@@ -212,7 +267,8 @@ export function ordneEvent(zeile, ctx) {
   }
 
   const ziel = { sp, st, idx };
-  const daten = { bahn, ziel, holz, kegel: bild.kegel, koenigFlag: false };
+  const daten = { bahn, ziel, holz, kegel: bild.kegel, koenigFlag: false,
+                  nummer: ausTafel.idx != null ? ausTafel.idx + 1 : null, ersetzt, luecke };
 
   // 6) Beim Abräumen trifft jeder Wurf nur die zuvor stehengebliebenen Kegel. Das ist der
   //    wichtigste Sicherheitsmechanismus der ganzen Anbindung: Fällt ein Kegel, der schon lag,
@@ -222,7 +278,9 @@ export function ordneEvent(zeile, ctx) {
   //    von einem echten Wurf zu unterscheiden.
   //    Der Erkenner liefert kein Bild des Vorzustands, mit dem sich das direkt vergleichen
   //    ließe; diese Kette ist der Ersatz dafür.
-  if (isAbraeumMode(range.modus)) {
+  //    Mit einer LUECKE davor ist die Kette nicht aussagekraeftig: Was auf den offenen
+  //    Plaetzen fiel, weiss niemand. Dann wird nicht geprueft, sondern die Luecke gemeldet.
+  if (isAbraeumMode(range.modus) && !luecke) {
     const vor = abraeumStateBefore(blk, range, idx);
     if (holz > vor.count) {
       return ergebnis(AKTION.VORSCHLAG,
@@ -251,6 +309,24 @@ export function ordneEvent(zeile, ctx) {
   //    als Wurf 1 gezählt. In der Aufzeichnung vom 29.08. standen auf einer Bahn 20
   //    Probewürfe vor dem ersten Satz, einmal ohne eigene Spalte — die Erkennung trennt das
   //    nicht zuverlässig, ein Mensch mit einem Blick auf die Bahn schon.
+  // 7b) Was die Nummer bewirkt hat, wird gesagt -- aber nicht zur Rueckfrage: Im Automatik-
+  //     Betrieb traegt der Aufrufer auch ein `vorschlag` ein, und genau das ist hier gewollt.
+  //     Der Hinweis steht danach an der Bahn, der Wurf steht im Satz.
+  if (nummerBefund) {
+    return ergebnis(AKTION.VORSCHLAG, nummerBefund, { ...daten, art: 'nummer-unbrauchbar' });
+  }
+  if (ersetzt) {
+    return ergebnis(AKTION.VORSCHLAG,
+      `Tafel zeigte Wurf ${idx + 1} — der dort stehende Wurf wurde ersetzt`,
+      { ...daten, art: 'nummer-ersetzt' });
+  }
+  if (luecke) {
+    return ergebnis(AKTION.VORSCHLAG,
+      `Tafel zeigte Wurf ${idx + 1}, hier war erst Platz ${belegt + 1} — `
+      + `${luecke} ${luecke === 1 ? 'Wurf' : 'Würfe'} nachzutragen`,
+      { ...daten, art: 'nummer-luecke' });
+  }
+
   if (idx === 0) {
     return ergebnis(AKTION.VORSCHLAG,
       `Erster Wurf in Satz ${st + 1} von Spieler ${sp + 1} — Einspielwürfe?`,

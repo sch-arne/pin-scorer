@@ -86,14 +86,20 @@ test('Realtime-Zeilen kommen ohne Tafelbild in die App', () => {
     spiel_id: null, satz_block_id: null, wurf_index: null, uebernommen_am: null,
     verworfen_grund: null,
     board_jpeg: 'x'.repeat(5000), board_before_jpeg: 'y'.repeat(5000),
-    displayed_total: 123, displayed_pin_count: 9,
+    displayed_total: 123, displayed_pin_count: 9, displayed_throw_number: 7,
   };
 
   const gesiebt = nurGemessenes(zeile);
 
   assert.ok(!('board_jpeg' in gesiebt));
   assert.ok(!('board_before_jpeg' in gesiebt));
-  assert.ok(!('displayed_total' in gesiebt), 'Ablesungen sind Beleg, nicht Eingabe');
+  assert.ok(!('displayed_total' in gesiebt), 'Gesamtholz ist Beleg, nicht Eingabe');
+  assert.ok(!('displayed_pin_count' in gesiebt), 'die Kegelzahl der Tafel ebenso');
+  // Die Wurfnummer ist die EINZIGE Tafel-Ablesung, die durchkommt: Seit dem 12.11.2026
+  // bestimmt sie den Platz im Satz (ordneEvent), ist also Eingabe. Faellt sie hier
+  // heraus, sitzt wieder jeder Wurf am Ende -- und niemand merkt es, weil ohne Nummer
+  // alles genauso aussieht wie vorher.
+  assert.equal(gesiebt.displayed_throw_number, 7, 'die Wurfnummer ist Eingabe');
   assert.equal(gesiebt.pins_count, 9);
   assert.deepEqual(gesiebt.pins, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
   assert.equal(gesiebt.lane, 3);

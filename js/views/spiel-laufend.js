@@ -146,6 +146,10 @@ function initErfassung(c) {
         kegel: [], // je Wurf ein Array der gefallenen Kegel-Nummern (1-9)
         koenig: [], // je Wurf: König (5) steht danach noch? (nur Kranz-Abräumen, per Langdruck)
         erkannt: [], // je Wurf: id der Zeile in `erkannter_wurf` (Kamera) oder null (getippt)
+        // je Wurf: Platz, den die Tafelnummer aufgerissen hat und den noch niemand
+        // gefuellt hat. Steht als 0 Holz im Satz (das faelscht die Summe nicht) und ist
+        // als offen gekennzeichnet, damit es niemand fuer einen echten Fehlwurf haelt.
+        luecke: [],
         overrides: c.teilsaetze.map(() => null),
         done: false,
       }))),
@@ -192,6 +196,10 @@ function normalizeErfassung(e, c) {
         const id = Array.isArray(old.erkannt) ? old.erkannt[k] : null;
         return id != null ? id : null;
       }),
+      // Offene Plaetze aus der Tafelnummer -- aus demselben Grund mitgefuehrt wie `erkannt`:
+      // Ohne das saehe ein nachzutragender Platz nach dem naechsten Oeffnen wie ein
+      // gewollter Fehlwurf aus, und niemand wuesste mehr, dass dort etwas fehlt.
+      luecke: wuerfe.map((_, k) => !!(Array.isArray(old.luecke) && old.luecke[k])),
       overrides: c.teilsaetze.map((_, i) => (old.overrides && old.overrides[i] != null ? old.overrides[i] : null)),
       // Satz-Ergebnis ohne Teilsatz-Aufteilung (Web-Import) mitnehmen — sonst waere das Holz
       // eines importierten Spiels beim ersten Oeffnen weg.
@@ -680,8 +688,17 @@ export function spielLaufendView() {
       // „keine Kegel" — deshalb undefined und nicht null an addWurfAn.
       kegel: e.kegel == null ? undefined : e.kegel,
       koenigFlag: e.koenigFlag,
+      // Der Platz aus der Zuordnung, nicht "ans Ende": Bei fehlender Tafelnummer ist das
+      // ohnehin derselbe, bei vorhandener ist es der Unterschied, um den es geht.
+      anIndex: e.ziel.idx,
       erkanntVon: zeile && zeile.id != null ? zeile.id : null,
-      melde: (txt) => { e.grund = e.grund || txt; },
+      // Eine ABLEHNUNG schlaegt jeden Hinweis. Stand in `grund` schon ein Hinweis zur
+      // Platzierung ("Tafel zeigte Wurf 20, hier war erst Platz 19"), wuerde er sonst als
+      // Ablehnungsgrund in die Datenbank geschrieben -- und dort staende, der Wurf sei
+      // wegen der Tafelnummer draussen geblieben, obwohl die Erfassung ihn aus einem ganz
+      // anderen Grund nicht annahm ("8 Holz, aber es stand nur 1 Kegel"). Genau so ist es
+      // am 12.11.2026 beim Abspielen der Aufzeichnung passiert.
+      melde: (txt) => { e.grund = txt || e.grund; },
     });
     return ok;
   }
@@ -861,6 +878,7 @@ export function spielLaufendView() {
       blk.kegel.splice(k, 1);
       if (Array.isArray(blk.koenig)) blk.koenig.splice(k, 1);
       blk.erkannt.splice(k, 1);
+      if (Array.isArray(blk.luecke)) blk.luecke.splice(k, 1);
     }
     if (!weg.length) { toast('In diesem Satz steht kein erkannter Wurf'); return; }
     if (blk.wuerfe.length < c.wuerfeProSatz) blk.done = false;
@@ -1377,15 +1395,27 @@ export function spielLaufendView() {
   // im Block (`blk.erkannt`), weil sie zwei Dinge trägt, die sonst verloren gingen — das
   // 👁 an der Wurfzeile samt Tafelbild, und den Riegel gegen Doppel-Einträge nach einem
   // Neuladen (siehe `schonImSatz` in logic/erkennung-strom.js).
+  // `anIndex` ist der PLATZ im Satz (0-basiert) oder null fuer "ans Ende". Gesetzt wird er
+  // nur aus der Erkennung, wenn die Tafel eine Wurfnummer lieferte. Drei Faelle:
+  //   Platz ist frei und der naechste -> wie bisher anhaengen
+  //   Platz ist belegt                -> der dortige Wurf wird ERSETZT
+  //   Platz liegt weiter hinten       -> die Plaetze dazwischen werden als offene
+  //                                      Fehlwuerfe (0 Holz, `luecke`) vorbelegt
+  // Dass eine Luecke 0 Holz ist, ist Absicht: Die Satzsumme bleibt dadurch richtig, und beim
+  // Abraeumen heisst 0 "nichts fiel" -- die harmloseste Annahme. Falsch waere, sie als
+  // etwas anderes zu raten.
   function addWurfAn({ sp, st, pins, kegel = undefined, koenigFlag = false,
-                       melde = toast, erkanntVon = null }) {
+                       melde = toast, erkanntVon = null, anIndex = null }) {
     if (!guardEdit(sp)) return false;
     const satzArr = state.bloecke[sp];
     const blk = satzArr && satzArr[st];
     if (!blk) return false;
     if (!Array.isArray(blk.koenig)) blk.koenig = blk.wuerfe.map(() => false);
+    if (!Array.isArray(blk.erkannt)) blk.erkannt = blk.wuerfe.map(() => null);
+    if (!Array.isArray(blk.luecke)) blk.luecke = blk.wuerfe.map(() => false);
     if (blk.done) { melde('Satz ist fertig'); return false; }
-    if (blk.wuerfe.length >= c.wuerfeProSatz) { melde('Satz voll — alle Würfe erfasst'); return false; }
+    const platz = anIndex == null ? blk.wuerfe.length : anIndex;
+    if (platz < 0 || platz >= c.wuerfeProSatz) { melde('Satz voll — alle Würfe erfasst'); return false; }
     // In einen späteren Satz eintragen ist gesperrt, solange ein früherer noch offen ist.
     const front = frontSatz(sp);
     if (st > front) { melde(`Erst Satz ${front + 1} abschließen`); return false; }
@@ -1395,16 +1425,38 @@ export function spielLaufendView() {
     if (st > computeBahnState()[sp].pos) {
       melde('Erst Bahnwechsel abwarten'); return false;
     }
-    const idx = blk.wuerfe.length;
+    // Die Plaetze VOR dem Ziel offen halten, falls die Tafel weiter ist als wir. Erst
+    // danach darf geprueft werden, wie viele Kegel stehen: Die offenen Plaetze gehoeren zum
+    // Lauf und veraendern beim Abraeumen den Vorzustand (mit 0 Holz: gar nicht).
+    while (blk.wuerfe.length < platz) {
+      const l = blk.wuerfe.length;
+      blk.wuerfe.push(0);
+      blk.kegel.push(defaultKegelFor(blk, l, 0));
+      blk.koenig.push(false);
+      blk.erkannt.push(null);
+      blk.luecke.push(true);
+    }
+    const idx = platz;
     const ctx = throwContext(blk, idx);
     const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
-    if (ctx.abraeum && pins > cap) { melde(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
+    if (ctx.abraeum && pins > cap) { melde(`Es ${cap === 1 ? 'steht' : 'stehen'} nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
     const kk = koenigFlag ? koenigKegelFor(ctx) : null;
-    if (!Array.isArray(blk.erkannt)) blk.erkannt = blk.wuerfe.map(() => null);
-    blk.wuerfe.push(pins);
-    blk.kegel.push(koenigFlag ? kk : (kegel !== undefined ? kegel : defaultKegelFor(blk, idx, pins)));
-    blk.koenig.push(koenigFlag && kk == null);   // Flag nur, wenn Kegel offen bleiben
-    blk.erkannt.push(erkanntVon);
+    const wert = koenigFlag ? kk : (kegel !== undefined ? kegel : defaultKegelFor(blk, idx, pins));
+    if (idx < blk.wuerfe.length) {
+      // Der Platz war belegt: ersetzen statt anhaengen. Genau das soll die Tafelnummer
+      // koennen -- sie ist die Nummer, unter der dieser Wurf gefallen ist.
+      blk.wuerfe[idx] = pins;
+      blk.kegel[idx] = wert;
+      blk.koenig[idx] = koenigFlag && kk == null;
+      blk.erkannt[idx] = erkanntVon;
+      blk.luecke[idx] = false;
+    } else {
+      blk.wuerfe.push(pins);
+      blk.kegel.push(wert);
+      blk.koenig.push(koenigFlag && kk == null);   // Flag nur, wenn Kegel offen bleiben
+      blk.erkannt.push(erkanntVon);
+      blk.luecke.push(false);
+    }
     // Sind mit diesem Wurf alle Teilsätze voll (alle Soll-Würfe des Satzes erfasst), wird der
     // Satz automatisch beendet — kein manuelles Abschließen mehr nötig. Da die Würfe die
     // Teilsätze der Reihe nach füllen, ist das genau erreicht, wenn wuerfeProSatz voll ist.
@@ -1427,11 +1479,13 @@ export function spielLaufendView() {
       if (editIdx < blk.wuerfe.length) {
         const ctx = throwContext(blk, editIdx);
         const cap = koenigFlag ? ctx.maxPins - 1 : ctx.maxPins;
-        if (ctx.abraeum && pins > cap) { toast(`Es stehen nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
+        if (ctx.abraeum && pins > cap) { toast(`Es ${cap === 1 ? 'steht' : 'stehen'} nur ${cap} ${koenigFlag ? 'Kranz-' : ''}Kegel`); return false; }
         const kk = koenigFlag ? koenigKegelFor(ctx) : null;
         blk.wuerfe[editIdx] = pins;
         blk.kegel[editIdx] = koenigFlag ? kk : defaultKegelFor(blk, editIdx, pins);
         blk.koenig[editIdx] = koenigFlag && kk == null;   // Flag nur, wenn Kegel offen bleiben
+        // Nachgetragen ist nachgetragen: Der Platz ist nicht mehr offen.
+        if (Array.isArray(blk.luecke)) blk.luecke[editIdx] = false;
       }
       const idx = editIdx;
       editIdx = null; flashTs = Date.now(); persist(); render();
@@ -1655,6 +1709,7 @@ export function spielLaufendView() {
     blk.kegel.pop();
     if (Array.isArray(blk.koenig)) blk.koenig.pop();
     if (Array.isArray(blk.erkannt)) blk.erkannt.pop();
+    if (Array.isArray(blk.luecke)) blk.luecke.pop();
     persist(); render();
     if (reopened) toast(`Satz ${state.aktiverSatz + 1} wieder geöffnet`);
   }
@@ -1667,6 +1722,7 @@ export function spielLaufendView() {
     blk.kegel.splice(editIdx, 1);
     if (Array.isArray(blk.koenig)) blk.koenig.splice(editIdx, 1);
     if (Array.isArray(blk.erkannt)) blk.erkannt.splice(editIdx, 1);
+    if (Array.isArray(blk.luecke)) blk.luecke.splice(editIdx, 1);
     editIdx = null; persist(); render();
     toast('Wurf gelöscht');
   }
@@ -3011,8 +3067,12 @@ export function spielLaufendView() {
           // Von der Kamera erfasst? Das Zeichen sitzt IM Chip (kein eigenes Bedienelement
           // je Wurf — der Beleg hängt am Bearbeiten, siehe unten).
           const vonKamera = Array.isArray(blk.erkannt) && blk.erkannt[k] != null;
-          chips.push(`<button type="button" class="erf-chip${editIdx === k ? ' is-edit' : ''}${err ? ' is-error' : ''}${kranzHit ? ' is-koenig' : ''}${neuner ? ' is-neuner' : ''}${vonKamera ? ' is-erkannt' : ''}" data-chip="${k}"${err ? ` title="${esc(err)}"` : kranzHit ? ' title="Kranz — nur der König (5) steht"' : neuner ? ' title="Alle Neune!"' : vonKamera ? ' title="Von der Kamera erfasst — antippen, dann Tafelbild"' : ''}>
-            <span class="ec-nr">${k + 1}${kranzHit ? ' ♔' : neuner ? ' ☆' : ''}</span><span class="ec-pins">${blk.wuerfe[k]}${err ? '⚠' : ''}</span>${vonKamera ? '<span class="ec-erk">👁</span>' : ''}</button>`);
+          // Ein Platz, den die Tafelnummer aufgerissen hat und den noch niemand gefuellt
+          // hat. Er steht als 0 im Satz -- ohne eigenes Zeichen waere er von einem
+          // gewollten Fehlwurf nicht zu unterscheiden, und genau darauf kommt es an.
+          const offen = Array.isArray(blk.luecke) && !!blk.luecke[k];
+          chips.push(`<button type="button" class="erf-chip${editIdx === k ? ' is-edit' : ''}${err ? ' is-error' : ''}${kranzHit ? ' is-koenig' : ''}${neuner ? ' is-neuner' : ''}${vonKamera ? ' is-erkannt' : ''}${offen ? ' is-luecke' : ''}" data-chip="${k}"${err ? ` title="${esc(err)}"` : offen ? ' title="Von der Tafelnummer offen gelassen — bitte nachtragen"' : kranzHit ? ' title="Kranz — nur der König (5) steht"' : neuner ? ' title="Alle Neune!"' : vonKamera ? ' title="Von der Kamera erfasst — antippen, dann Tafelbild"' : ''}>
+            <span class="ec-nr">${k + 1}${kranzHit ? ' ♔' : neuner ? ' ☆' : ''}</span><span class="ec-pins">${offen ? '?' : blk.wuerfe[k]}${err ? '⚠' : ''}</span>${offen ? '<span class="ec-erk">✎</span>' : vonKamera ? '<span class="ec-erk">👁</span>' : ''}</button>`);
         } else {
           chips.push(`<span class="erf-chip is-empty" data-slot="${k}"><span class="ec-nr">${k + 1}</span><span class="ec-pins">·</span></span>`);
         }

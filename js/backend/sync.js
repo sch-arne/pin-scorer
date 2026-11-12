@@ -46,6 +46,7 @@ function emptyBlock(config) {
     kegel: [],
     koenig: [],
     erkannt: [],   // je Wurf: id der Zeile in `erkannter_wurf` (Kamera) oder null
+    luecke: [],    // je Wurf: Platz aus einer Tafelnummer, den noch niemand gefuellt hat
     overrides: (config.teilsaetze || []).map(() => null),
     done: false,
   };

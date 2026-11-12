@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ordneEvent, bahnFuerLane, bahnBelegung, AKTION } from '../js/logic/erkennung-zuordnung.js';
+import { ordneEvent, bahnFuerLane, bahnBelegung, AKTION, MAX_LUECKE } from '../js/logic/erkennung-zuordnung.js';
 import { teilsatzRanges } from '../js/logic/teilsaetze.js';
 import { volleKranz, abraeumScan, isAbraeumMode } from '../js/logic/abraeumen.js';
 import { readFileSync } from 'node:fs';
@@ -423,4 +423,105 @@ test('Der Satzanfang nennt seine Art — der Hinweis daran hängt an einem Feld,
 
   const sauber = ordne(wurf(1, 8, [1, 2, 3, 4, 5, 6, 7, 8]), bloecke(blk([9])));
   assert.equal(sauber.art, null);
+});
+
+// ── Die Wurfnummer von der Tafel ─────────────────────────────────────────────
+//
+// Bis zum 12.11.2026 landete jeder erkannte Wurf am ENDE der Liste. Das hat einen Bruch:
+// Wird ein Wurf nicht eingetragen -- weil die Erfassung ihn ablehnt und sofort aufgibt --,
+// sitzt alles Folgende einen Platz zu frueh, und zwar bis zum Satzende. Die Wurfnummer, die
+// auf der Tafel steht, loest das: Sie sagt, der WIEVIELTE Wurf das war.
+//
+// Die Regel, auf Ansage: Die Nummer bekommt den Platz. Keine Nummer -> naechster freier
+// Platz. Nummer belegt -> der Wurf dort wird ersetzt, mit Hinweis.
+
+const mitNr = (lane, pins_count, nr, pins = null) =>
+  ({ lane, pins_count, pins, displayed_throw_number: nr });
+
+test('Tafelnummer: ohne Nummer bleibt alles wie bisher — naechster freier Platz', () => {
+  const bl = bloecke(blk([9]));
+  const r = ordne(wurf(1, 8), bl);
+  assert.equal(r.ziel.idx, 1);
+  assert.equal(r.nummer, null);
+  assert.equal(r.ersetzt, false);
+  assert.equal(r.luecke, 0);
+});
+
+test('Tafelnummer: die passende Nummer bestaetigt nur — kein Hinweis', () => {
+  const bl = bloecke(blk([9]));
+  const r = ordne(mitNr(1, 8, 2), bl);           // ein Wurf drin, Tafel sagt Wurf 2
+  assert.equal(r.aktion, AKTION.SETZEN);
+  assert.equal(r.ziel.idx, 1);
+  assert.equal(r.nummer, 2);
+  assert.equal(r.grund, null);
+});
+
+test('Tafelnummer: ein belegter Platz wird ERSETZT, nicht angehaengt', () => {
+  // Genau der Fall, fuer den die Nummer da ist: Die Tafel sagt, das ist Wurf 1 -- obwohl
+  // schon zwei Wuerfe dastehen. Dann stand dort etwas Falsches.
+  const bl = bloecke(blk([9, 8]));
+  const r = ordne(mitNr(1, 5, 1), bl);
+  assert.equal(r.ziel.idx, 0);
+  assert.equal(r.ersetzt, true);
+  assert.equal(r.aktion, AKTION.VORSCHLAG);      // eintragen ja, aber nicht stillschweigend
+  assert.equal(r.art, 'nummer-ersetzt');
+  assert.match(r.grund, /ersetzt/);
+});
+
+test('Tafelnummer: eine Luecke bleibt offen, statt alles zu verschieben', () => {
+  // Zwei Wuerfe stehen, die Tafel ist bei Wurf 4: Platz 3 wurde verpasst. Er bleibt offen,
+  // der neue Wurf sitzt auf Platz 4 -- und nicht auf 3, wo er bisher gelandet waere.
+  const bl = bloecke(blk([9, 8]));
+  const r = ordne(mitNr(1, 7, 4), bl);
+  assert.equal(r.ziel.idx, 3);
+  assert.equal(r.luecke, 1);
+  assert.equal(r.art, 'nummer-luecke');
+  assert.match(r.grund, /nachzutragen/);
+});
+
+test('Tafelnummer: eine verlesene Ziffer reisst keinen Satz auf', () => {
+  // Aus "4" wird "14": Die Nummer liegt mehr als MAX_LUECKE Plaetze weiter. Sie wird
+  // verworfen, der Wurf kommt ans Ende -- und sagt, dass die Tafel nicht passte.
+  const weit = { ...config, wuerfeProSatz: 20,
+                 teilsaetze: [{ modus: 'volle', wuerfe: 20 }] };
+  const r = ordneEvent(mitNr(1, 7, 2 + MAX_LUECKE + 2),
+                       { config: weit, bloecke: bloecke(blk([9, 8])),
+                         ranges: teilsatzRanges(weit) });
+  assert.equal(r.ziel.idx, 2);                   // ans Ende, nicht auf Platz 9
+  assert.equal(r.luecke, 0);
+  assert.equal(r.art, 'nummer-unbrauchbar');
+  assert.match(r.grund, /verworfen/);
+});
+
+test('Tafelnummer: eine Nummer, die es im Satz nicht gibt, wird nicht geraten', () => {
+  // 4 Wuerfe je Satz -- "7" kann nicht stimmen. Der Wurf geht trotzdem rein (ans Ende):
+  // Eine unlesbare Tafel darf keinen Wurf kosten.
+  const bl = bloecke(blk([9]));
+  const r = ordne(mitNr(1, 8, 7), bl);
+  assert.equal(r.ziel.idx, 1);
+  assert.equal(r.nummer, null);
+  assert.equal(r.art, 'nummer-unbrauchbar');
+  assert.match(r.grund, /gibt es im Satz nicht/);
+});
+
+test('Tafelnummer: 0 und Unsinn werden wie "keine Nummer" behandelt', () => {
+  const bl = bloecke(blk([9]));
+  for (const n of [0, -1, 2.5, 'zwei']) {
+    const r = ordne(mitNr(1, 8, n), bl);
+    assert.equal(r.ziel.idx, 1, `Nummer ${n}`);
+    assert.equal(r.nummer, null, `Nummer ${n}`);
+  }
+});
+
+test('Tafelnummer: mit Luecke wird die Abraeum-Kette NICHT geprueft', () => {
+  // Beim Abraeumen prueft die Zuordnung sonst, ob mehr Holz gemeldet wird als Kegel standen.
+  // Steht davor eine Luecke, weiss niemand, was dort fiel -- die Pruefung wuerde dann einen
+  // richtigen Wurf ablehnen. Platz 3 und 4 sind Abraeumen (Teilsatz 2).
+  const bl = bloecke(blk([9, 9]));               // Volle voll, Abraeumen beginnt bei idx 2
+  const ohne = ordne(wurf(1, 9), bl);            // ohne Nummer: Platz 2, volle Kegel -> ok
+  assert.equal(ohne.ziel.idx, 2);
+  const mit = ordne(mitNr(1, 9, 4), bl);         // Tafel sagt Platz 4, Platz 3 bleibt offen
+  assert.equal(mit.ziel.idx, 3);
+  assert.equal(mit.luecke, 1);
+  assert.equal(mit.art, 'nummer-luecke');        // und NICHT "es standen nur N Kegel"
 });

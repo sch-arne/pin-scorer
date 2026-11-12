@@ -10,11 +10,17 @@
 // Bewusst OHNE `board_jpeg`/`board_before_jpeg`. Das Tafelbild ist ein Base64-JPEG von rund
 // 5 KB je Wurf; bei 2000 Würfen am Spieltag wären das 9 MB, nur um eine Liste zu zeigen.
 // Es wird einzeln geholt, für den einen Wurf, den jemand ansieht.
-// Auch ohne die vier Tafel-Ablesungen (`displayed_*`): Sie sind Beleg, keine Eingabe für
-// die Zuordnung, und gehören zum Bild.
+// Von den vier Tafel-Ablesungen (`displayed_*`) ist GENAU EINE dabei: die Wurfnummer.
+// Sie war bis zum 12.11.2026 ebenfalls draußen, mit der Begründung "Beleg, keine Eingabe".
+// Seitdem bestimmt sie den PLATZ des Wurfs in der Wurfliste (siehe `ordneEvent`), ist also
+// Eingabe und muss mitkommen. Die anderen drei (Gesamtholz, Fehlwürfe, Spielername) bleiben
+// draußen: Sie gehören zum Bild und kosten Leitung, ohne etwas zu entscheiden.
+// Eine Zahl je Wurf wiegt nichts -- anders als das Tafelbild, um das es in der Warnung oben
+// geht.
 export const WURF_SPALTEN = [
   'id', 'erkenner_id', 'lane', 'pins_count', 'pins', 'recorded_at', 'video_time_s',
   'video_id', 'spiel_id', 'satz_block_id', 'wurf_index', 'uebernommen_am', 'verworfen_grund',
+  'displayed_throw_number',
 ];
 
 export const WURF_SELECT = WURF_SPALTEN.join(', ');

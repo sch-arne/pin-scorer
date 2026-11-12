@@ -85,12 +85,20 @@ class Versand:
             raise SystemExit(
                 f"Anmeldung als Erkenner fehlgeschlagen (HTTP {exc.code}): {text}")
 
-    def zeile(self, bahn: int, holz: int, kegel=None, mit_bild: bool = False) -> dict:
-        """Eine Zeile bauen. `kegel` sind die GEFALLENEN Kegel."""
+    def zeile(self, bahn: int, holz: int, kegel=None, mit_bild: bool = False,
+              nummer=None) -> dict:
+        """Eine Zeile bauen.
+
+        `kegel` sind die GEFALLENEN Kegel. `nummer` ist die Wurfnummer von der Tafel --
+        seit dem 12.11.2026 bestimmt sie in der App den Platz im Satz. None heisst
+        "nichts gelesen"; der Wurf geht dann an den naechsten freien Platz.
+        """
         reihe = {"erkenner_id": self.erkenner, "lane": int(bahn),
                  "pins_count": int(holz), "video_id": MARKE}
         if kegel:
             reihe["pins"] = sorted({int(k) for k in kegel})
+        if nummer is not None:
+            reihe["displayed_throw_number"] = int(nummer)
         if mit_bild:
             reihe["board_jpeg"] = MINI_JPEG
             reihe["board_before_jpeg"] = MINI_JPEG
